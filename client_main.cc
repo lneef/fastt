@@ -63,6 +63,7 @@ int run(netconfig &conf) {
   while (true) {
     auto *msg = allocator->alloc_message(dataSize);
     cif.send_message(con, msg, msg->len());
+    cif.flush();
     msg = nullptr;
     do {
       msg = cif.recv_message(con);

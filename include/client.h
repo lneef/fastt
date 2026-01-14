@@ -28,6 +28,8 @@ public:
   message *recv_message(connection *con);
   connection *open_connection(const con_config &target, rte_ether_addr &dmac);
 
+  void flush() {manager.flush(); }
+
 private:
   con_config scon_config;
   connection_manager manager;
