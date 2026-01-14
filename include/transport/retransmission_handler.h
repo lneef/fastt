@@ -79,6 +79,16 @@ public:
     return burst_rtt;
   }
 
+  bool record_control_pkt(message* msg){
+    if (unacked_packets.full() || budget == 0)
+      return false;
+    msg->inc_refcnt();
+    *msg->get_ts() = 0;
+    auto *entry = unacked_packets.enqueue(msg, seq, false);
+    timeouts.emplace_back(rto, entry, seq++);
+    return true;
+  }
+
   bool record_pkt(message *msg,
                   std::invocable<message *, uint64_t> auto &&ctor) {
     if (unacked_packets.full() || budget == 0)

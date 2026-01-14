@@ -2,6 +2,7 @@
 #include "log.h"
 #include "protocol.h"
 #include "message.h"
+#include "util.h"
 
 #include <cstdint>
 #include <rte_ethdev.h>
@@ -23,6 +24,10 @@ uint16_t connection::receive_message(message** msgs, uint16_t cnt){
     return transport_impl->receive_messages(msgs, cnt);
 }
 
+void connection::accept(const con_config& target){
+    transport_impl->open_connection(target);
+}
+
 bool connection::send_message(message *pkt, uint16_t len) {
   pkt->set_size(len);
   FASTT_LOG_DEBUG("Sent pkt of len %u\n", len);
@@ -30,6 +35,10 @@ bool connection::send_message(message *pkt, uint16_t len) {
 }
 
 void connection::acknowledge_all() { transport_impl->send_acks(peer_con_config); }
+
+void connection::open_connection(const con_config& target){
+    transport_impl->open_connection(target);
+}
 
 bool connection::has_ready_message() const {
   return transport_impl->poll();

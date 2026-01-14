@@ -38,9 +38,10 @@ public:
   void process_pkt(rte_mbuf *pkt);
   bool send_message(message *msg, uint16_t len);
   void acknowledge_all();
-  void accept();
+  void accept(const con_config& target);
   uint16_t receive_message(message **msgs, uint16_t cnt);
   bool has_ready_message() const;
+  void open_connection(const con_config& target);
   bool poll() const { return has_ready_message(); }
 
 private:
@@ -94,6 +95,7 @@ public:
                                                       target, source.port));
     if (!inserted)
       return nullptr;
+    it->second->open_connection(target);
     return it->second.get();
   }
 
@@ -124,18 +126,18 @@ public:
 
   connection *accept_connection() {
     auto [pkt, ft] = connection_requests.front();
-    auto *con = add_connection(ft, rte_be_to_cpu_16(ft.sport));
+    auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.sport));
     con->process_pkt(pkt);
-    con->acknowledge_all();
-    rte_pktmbuf_free(pkt);
+    if(inserted)
+        con->accept({ft.sip, ft.sport});
     return con;
   }
-  connection *add_connection(const flow_tuple &tuple, uint16_t port) {
-    auto [it, _] = cons.emplace(
+  std::pair<connection *, bool> add_connection(const flow_tuple &tuple, uint16_t port) {
+    auto [it, inserted] = cons.emplace(
         tuple, std::make_unique<connection>(
                    allocator.get(), &pkt_if,
                    con_config{tuple.dip, rte_cpu_to_be_16(tuple.dport)}, port));
-    return it->second.get();
+    return {it->second.get(), inserted};
   }
 
   void flush() { scheduler.flush(); }

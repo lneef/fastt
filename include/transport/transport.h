@@ -16,6 +16,7 @@
 #include <rte_ip4.h>
 #include <rte_lcore.h>
 
+#include <rte_mbuf.h>
 #include <rte_mempool.h>
 #include <rte_ring.h>
 #include <rte_ring_core.h>
@@ -64,28 +65,33 @@ struct window {
            (seq <= least_in_window + mask && wd[index(seq)]);
   }
 
-  bool has_ready_messages(){ return wd[least_in_window]; }
+  bool has_ready_messages(){ return !output.empty(); }
 
   bool beyond_window(uint64_t seq) { return seq > least_in_window + mask; }
 
-  uint16_t advance(std::invocable<uint64_t, message *> auto &&f, uint16_t bs) {
+  uint64_t advance() {
     assert(mask + 1 == wd.size());
-    uint16_t advanced = 0;
-    while (wd[front] && advanced < bs) {
+    while (wd[front]) {
       if ((least_in_window & mask) == 0) {
         last_round = round;
         round = rte_get_timer_cycles();
         did_resize_in_round = false;
         estimate_rtt();
       }
-
-      f(least_in_window, messages[front]);
-      front = (front + 1) & mask;
       wd[front] = false;
+      output.push_back(messages[front]);
+      front = (front + 1) & mask;
       ++least_in_window;
-      ++advanced;
     }
-    return advanced;
+    return least_in_window - 1;
+  }
+
+  uint16_t consume_messages(std::invocable<message *> auto &&f, uint16_t bs){
+      uint16_t rcvd = 0;
+      while(!output.empty() && rcvd < bs){
+          f(output.front());
+      }
+      return rcvd;
   }
 
   bool inside(uint64_t seq) {
@@ -113,6 +119,7 @@ struct window {
 
   std::array<bool, kMaxOustandingPackets> wd{};
   std::array<message *, kMaxOustandingPackets> messages{};
+  std::deque<message*> output;
   std::size_t front, mask;
   uint64_t least_in_window;
   uint64_t max_acked = 0;
@@ -213,8 +220,8 @@ struct transport {
             rt_stats.rtt};
   }
 
-  bool send_acks(const con_config &target) {
-    auto acked = recv_wd.get_last_acked_packet();
+  bool send_acks(const con_config &target) {  
+    auto acked = recv_wd.advance();
     if (!scheduler.ack_pending(acked))
       return false;
     auto *msg = protocol::prepare_ack_pkt(acked, allocator, recv_wd.capacity());
@@ -232,7 +239,7 @@ struct transport {
       if (nhdr->ack)
         rt_handler.acknowledge(nhdr->ack, nhdr->wnd);
       ack_ctx.process_seq(nhdr->seq);
-      if (!recv_wd.is_set(nhdr->seq)) {
+      if (recv_wd.is_set(nhdr->seq)) {   
         rte_pktmbuf_free(pkt);
         return false;
       } else
@@ -246,15 +253,19 @@ struct transport {
       break;
     }
     case protocol::pkt_type::FT_INIT: {
-      auto *ihdr = static_cast<protocol::init_header *>(hdr);
-      recv_wd.set(ihdr->seq, pkt);
-      recv_wd.advance(
-          [](uint64_t seq, message *msg) {
-            (void)seq;
-            rte_pktmbuf_free(msg);
-          },
-          1);
+      auto *ihdr = static_cast<protocol::init_header*>(hdr) ; 
+      if(recv_wd.is_set(ihdr->seq)){
+          rte_pktmbuf_free(pkt);                                    
+          return false;
+      }else
+          recv_wd.set(ihdr->seq, pkt);
       break;
+    }
+    case protocol::pkt_type::FT_INIT_ACK:{
+        auto *aihdr = static_cast<protocol::init_ack_header*>(hdr);
+        rt_handler.acknowledge(aihdr->seq, aihdr->wnd);
+        rte_pktmbuf_free(pkt);
+        break;
     }
     default:
       rte_pktmbuf_free(pkt);
@@ -263,15 +274,30 @@ struct transport {
     return true;
   }
 
+  void open_connection(const con_config& target){
+      auto *msg = protocol::prepare_init_header(allocator, min_seq);
+      bool retval = rt_handler.record_control_pkt(msg); 
+      assert(retval);
+      pkt_if->consume_pkt(msg, sport, target);
+  }
+
+  void accept_connection(const con_config& target){
+      recv_wd.advance();
+      recv_wd.consume_messages([](message* msg){ rte_pktmbuf_free(msg); }, 1);
+      auto *msg = protocol::prepare_init_ack_header(allocator, min_seq, recv_wd.capacity());
+      bool retval = rt_handler.record_control_pkt(msg);
+      assert(retval);
+      pkt_if->consume_pkt(msg, sport, target);
+  }
+
   bool poll(){
       return recv_wd.has_ready_messages();
   }
 
   uint16_t receive_messages(message **messages, uint16_t bs) {
     probe_timeout();
-    return recv_wd.advance(
-        [messages, i = 0](uint64_t seq, message *msg) mutable {
-          (void)seq;
+    return recv_wd.consume_messages(
+        [messages, i = 0](message *msg) mutable {
           messages[i++] = msg;
         },
         bs);
