@@ -23,6 +23,7 @@
 #include <tuple>
 #include <type_traits>
 
+#include "log.h"
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
@@ -176,7 +177,7 @@ struct ack_context {
 
 struct transport {
   window recv_wd;
-  retransmission_handler rt_handler;
+  retransmission_handler<> rt_handler;
   ack_scheduler scheduler;
   ack_context<ack_scheduler> ack_ctx;
   message_allocator *allocator;
@@ -225,6 +226,7 @@ struct transport {
     if (!scheduler.ack_pending(acked))
       return false;
     auto *msg = protocol::prepare_ack_pkt(acked, allocator, recv_wd.capacity());
+    FASTT_LOG_DEBUG("Return %u capacity to peer\n", recv_wd.capacity());
     pkt_if->consume_pkt(msg, sport, target);
     scheduler.ack_callback(acked);
     return true;

@@ -43,6 +43,7 @@ struct sender_entry {
   }
 };
 
+template<auto adaptive_rto = false>
 class retransmission_handler {
   static constexpr uint16_t kQueuedPackets = 64;
 
@@ -51,9 +52,9 @@ public:
     uint64_t acked, retransmitted, rtt;
     statistics() : acked(0), retransmitted(0) {}
   };
-  retransmission_handler()
+  retransmission_handler(uint64_t rto = rte_get_timer_cycles())
       : unacked_packets(kQueuedPackets), budget(1), seq(min_seq), rtt(),
-        rtt_dv(), rto(rte_get_timer_hz()) {}
+        rtt_dv(), rto(rto) {}
 
   uint64_t cleanup_acked_pkts(uint64_t seq, uint64_t now) {
     uint64_t burst_rtt = 0;
@@ -69,7 +70,8 @@ public:
           burst_rtt = tsc_d;
         else
           burst_rtt = (burst_rtt * 7 + tsc_d) / 8;
-        rto = 8 * (rtt + 4 * rtt_dv); // always include one backoff
+        if constexpr(adaptive_rto)
+            rto = 8 * (rtt + 4 * rtt_dv); // always include one backoff
         stats.rtt = rtt;
       }
       assert(desc->packet);

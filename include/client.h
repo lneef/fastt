@@ -18,7 +18,7 @@ public:
 
   template <bool flush = false>
   bool send_message(connection *con, message *message, uint16_t len) {
-    FASTT_LOG_DEBUG("Sending new message with len\n", len);  
+    FASTT_LOG_DEBUG("Sending new message with len %u\n", len);  
     *message->get_con_ptr() = con;
     bool sent = con->send_message(message, len);
     if constexpr (flush)

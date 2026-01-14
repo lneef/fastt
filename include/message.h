@@ -5,6 +5,7 @@
 #include <rte_ether.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
+#include <rte_memory.h>
 #include <rte_mempool.h>
 
 class connection;
@@ -15,7 +16,7 @@ struct message : public rte_mbuf {
   static int init();
   uint64_t *get_ts() { return RTE_MBUF_DYNFIELD(this, timestamp, uint64_t *); }
 
-  void inc_refcnt(){ return rte_pktmbuf_refcnt_update(this, 1); }
+  void inc_refcnt() { return rte_pktmbuf_refcnt_update(this, 1); }
 
   connection **get_con_ptr() {
     return RTE_MBUF_DYNFIELD(this, timestamp, connection **);
@@ -24,28 +25,31 @@ struct message : public rte_mbuf {
   void *data() { return rte_pktmbuf_mtod(this, void *); }
   uint16_t len() { return data_len; }
 
-  void set_size(uint16_t len){
-      pkt_len = len;
+  void set_size(uint16_t len) { pkt_len = len; }
+
+  template <typename T> T *move_headroom() {
+    rte_pktmbuf_prepend(this, sizeof(T));
+    return rte_pktmbuf_mtod(this, T *);
   }
 
-  template<typename T>
-      T* move_headroom(){
-         rte_pktmbuf_prepend(this, sizeof(T));
-         return rte_pktmbuf_mtod(this, T*);
-      }
-
-  void shrink_headroom(uint16_t len){
-      rte_pktmbuf_adj(this, len);
-  }
+  void shrink_headroom(uint16_t len) { rte_pktmbuf_adj(this, len); }
 };
 
 static_assert(sizeof(message) == sizeof(rte_mbuf), "");
 
 class message_allocator {
   static constexpr uint16_t kRequiredHeadRoom = 128;
+  static constexpr std::size_t kMempoolCacheSize = 256;
+  static constexpr std::size_t kMemBufPrivSize = 0;
+  static constexpr std::size_t kMemBufDataRoomSize = RTE_MBUF_DEFAULT_BUF_SIZE;
+
 public:
-  message_allocator(std::size_t payload_size, rte_mempool* pool)
-      : payload_size(payload_size), pool(pool) {
+  message_allocator(const char *name, std::size_t payload_size,
+                    std::size_t elems)
+      : payload_size(payload_size),
+        pool(rte_pktmbuf_pool_create(name, elems, kMempoolCacheSize,
+                                     kMemBufPrivSize, kMemBufDataRoomSize,
+                                     SOCKET_ID_ANY)) {
     payload_size = rte_pktmbuf_data_room_size(pool);
   }
 
@@ -57,11 +61,9 @@ public:
     return prepare(mbuf, data_size);
   }
 
-  static void deallocate(message *msg){
-      rte_pktmbuf_free(msg);
-  }
+  static void deallocate(message *msg) { rte_pktmbuf_free(msg); }
 
-  ~message_allocator(){ rte_mempool_free(pool); }
+  ~message_allocator() { rte_mempool_free(pool); }
 
 private:
   message *prepare(rte_mbuf *mbuf, uint16_t data_size) {
@@ -73,5 +75,5 @@ private:
     return msg;
   }
   std::size_t payload_size;
-  rte_mempool* pool;
+  rte_mempool *pool;
 };

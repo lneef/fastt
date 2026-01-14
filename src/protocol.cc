@@ -26,7 +26,7 @@ message* protocol::prepare_ack_pkt(uint64_t ack, message_allocator *pool, uint16
 }
 
 
-message* prepare_init_header(message_allocator* allocator, uint64_t seq){
+message* protocol::prepare_init_header(message_allocator* allocator, uint64_t seq){
     auto* msg = allocator->alloc_message(sizeof(protocol::init_header));
     if(!msg)
         return nullptr;
@@ -38,7 +38,7 @@ message* prepare_init_header(message_allocator* allocator, uint64_t seq){
 }
 
 
-message* prepare_init_ack_header(message_allocator* pool, uint64_t ack, uint16_t wnd){
+message* protocol::prepare_init_ack_header(message_allocator* pool, uint64_t ack, uint16_t wnd){
     auto* msg = pool->alloc_message(sizeof(protocol::init_ack_header));
     if(!msg)
         return nullptr;

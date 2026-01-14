@@ -57,19 +57,17 @@ int run(netconfig &conf) {
     return -1;
   auto [port, txq, rxq, pool] = ifc->get_slice(0);
   std::shared_ptr<message_allocator> allocator =
-      std::make_shared<message_allocator>(
-          0, rte_pktmbuf_pool_create("pool", 8095, 256, 0,
-                                     RTE_MBUF_DEFAULT_BUF_SIZE, SOCKET_ID_ANY));
+      std::make_shared<message_allocator>("pool", 0, 8095);
   server_iface server(port, txq, rxq, con_config{conf.sip, conf.sport},
                       allocator);
   poll_state<32> ps;
   while (true) {
     auto events = server.poll(ps);
     for (uint16_t i = 0; i < events; ++i) {
-      message *msg;  
+      message *msg;
       auto *con = ps.events[i];
-      con->receive_message(&msg, 1);
-      con->send_message(msg, msg->len());
+      if (con->receive_message(&msg, 1))
+        con->send_message(msg, msg->len());
     }
     server.accept();
     server.flush();
