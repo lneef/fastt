@@ -175,6 +175,10 @@ struct ack_context {
   ack_context(O *&&...observers) : observers((observers)...) {}
 };
 
+enum class connection_state{
+    ESTABLISHING, ESTABLISHED, DISCONNECTING
+};
+
 struct transport {
   window recv_wd;
   retransmission_handler<> rt_handler;
@@ -183,6 +187,7 @@ struct transport {
   message_allocator *allocator;
   packet_if *pkt_if;
   uint16_t sport;
+  connection_state cstate = connection_state::ESTABLISHING;
   struct {
     uint64_t sent = 0;
     uint64_t with_ecn = 0;
@@ -251,6 +256,8 @@ struct transport {
     case protocol::pkt_type::FT_ACK: {
       auto *ahdr = static_cast<protocol::ft_header *>(hdr);
       rt_handler.acknowledge(ahdr->ack, ahdr->wnd);
+      if(cstate == connection_state::ESTABLISHING)
+          cstate = connection_state::ESTABLISHED;
       rte_pktmbuf_free(pkt);
       break;
     }
@@ -266,6 +273,7 @@ struct transport {
     case protocol::pkt_type::FT_INIT_ACK:{
         auto *aihdr = static_cast<protocol::init_ack_header*>(hdr);
         rt_handler.acknowledge(aihdr->seq, aihdr->wnd);
+        cstate = connection_state::ESTABLISHED;
         rte_pktmbuf_free(pkt);
         break;
     }
@@ -295,6 +303,8 @@ struct transport {
   bool poll(){
       return recv_wd.has_ready_messages();
   }
+
+  bool active(){ return connection_state::ESTABLISHED == cstate; }
 
   uint16_t receive_messages(message **messages, uint16_t bs) {
     probe_timeout();

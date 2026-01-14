@@ -43,6 +43,7 @@ public:
   bool has_ready_message() const;
   void open_connection(const con_config& target);
   bool poll() const { return has_ready_message(); }
+  bool active() { return transport_impl->active(); }
 
 private:
   con_config peer_con_config;

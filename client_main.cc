@@ -60,6 +60,8 @@ int run(netconfig &conf) {
   auto *con = cif.open_connection({conf.dip, conf.dport}, conf.dmac);
   if (!con)
     return -1;
+  while(!con->active())
+      ;
   while (true) {
     auto *msg = allocator->alloc_message(dataSize);
     cif.send_message(con, msg, msg->len());
