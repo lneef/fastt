@@ -57,7 +57,7 @@ int run(netconfig &conf) {
     return -1;
   auto [port, txq, rxq, pool] = ifc->get_slice(0);
   std::shared_ptr<message_allocator> allocator =
-      std::make_shared<message_allocator>("pool", 0, 8095);
+      std::make_shared<message_allocator>("pool", 8095);
   client_iface cif{port, txq, rxq, allocator, con_config{conf.sip, conf.sport}};
   auto *con = cif.open_connection({conf.dip, conf.dport}, conf.dmac);
   if (!con)

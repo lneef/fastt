@@ -45,14 +45,12 @@ class message_allocator {
   static constexpr std::size_t kMemBufDataRoomSize = RTE_MBUF_DEFAULT_BUF_SIZE;
 
 public:
-  message_allocator(const char *name, std::size_t payload_size,
-                    std::size_t elems)
-      : payload_size(payload_size),
-        pool(rte_pktmbuf_pool_create(name, elems, kMempoolCacheSize,
+  message_allocator(const char *name, std::size_t elems)
+      : pool(rte_pktmbuf_pool_create(name, elems, kMempoolCacheSize,
                                      kMemBufPrivSize, kMemBufDataRoomSize,
                                      SOCKET_ID_ANY)) {
     assert(pool && "allocation failed");        
-    payload_size = rte_pktmbuf_data_room_size(pool);
+    payload_size = RTE_MBUF_DEFAULT_DATAROOM;
     assert(payload_size > 0);
     FASTT_LOG_DEBUG("Payload Size: %lu\n", payload_size);
   }
@@ -72,7 +70,8 @@ public:
 
 private:
   message *prepare(rte_mbuf *mbuf, uint16_t data_size) {
-    rte_pktmbuf_adj(mbuf, kRequiredHeadRoom);
+    if constexpr(RTE_PKTMBUF_HEADROOM < kRequiredHeadRoom)  
+        rte_pktmbuf_adj(mbuf, kRequiredHeadRoom - RTE_PKTMBUF_HEADROOM);
     auto *msg = static_cast<message *>(mbuf);
     auto **con = msg->get_con_ptr();
     *con = nullptr;

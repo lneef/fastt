@@ -59,7 +59,7 @@ int run(netconfig &conf) {
     return -1;
   auto [port, txq, rxq, pool] = ifc->get_slice(0);
   std::shared_ptr<message_allocator> allocator =
-      std::make_shared<message_allocator>("pool", 0, 8095);
+      std::make_shared<message_allocator>("pool", 8095);
   server_iface server(port, txq, rxq, con_config{conf.sip, conf.sport},
                       allocator);
   poll_state<32> ps;
