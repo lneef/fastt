@@ -10,7 +10,7 @@ inline void dump_pkt(message *msg, uint16_t len);
 
 #ifdef DEBUG
 #define FASTT_LOG_DEBUG(...)                                                   \
-  rte_log(RTE_LOG_DEBUG, RTE_LOGTYPE_USER1, __VA_ARGS__)
+  printf(__VA_ARGS__)
 #define FASTT_DUMP_PKT(msg, len) dump_pkt(msg, len)
 #else
 #define FASTT_LOG_DEBUG(...)

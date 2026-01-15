@@ -50,13 +50,16 @@ public:
         pool(rte_pktmbuf_pool_create(name, elems, kMempoolCacheSize,
                                      kMemBufPrivSize, kMemBufDataRoomSize,
                                      SOCKET_ID_ANY)) {
+    assert(pool && "allocation failed");        
     payload_size = rte_pktmbuf_data_room_size(pool);
+    assert(payload_size > 0);
   }
 
   message *alloc_message(uint16_t data_size) {
+      
+    assert(data_size < payload_size);
     if (data_size >= payload_size - kRequiredHeadRoom)
       return nullptr;
-    assert(data_size < payload_size);
     auto *mbuf = rte_pktmbuf_alloc(pool);
     return prepare(mbuf, data_size);
   }
