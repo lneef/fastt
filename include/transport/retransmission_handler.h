@@ -6,6 +6,7 @@
 #include <rte_cycles.h>
 #include <tuple>
 
+#include "log.h"
 #include "message.h"
 #include "transport/indexable_queue.h"
 
@@ -116,6 +117,7 @@ public:
     msg->inc_refcnt();
     *msg->get_ts() = 0;
     auto *entry = unacked_packets.enqueue(msg, min_seq, false);
+    FASTT_LOG_DEBUG("Enqueued ctrl packet: %lu\n", min_seq);
     intrusive_push_front(head_sentinel, entry);
     entry->next = head_sentinel.next;
     entry->prev = &head_sentinel;
@@ -144,6 +146,7 @@ public:
         break;
       entry->retransmitted = true;
       cb(msg);
+      FASTT_LOG_DEBUG("Retransmitting packet: %lu\n", entry->seq);
       ++stats.retransmitted;
       msg->inc_refcnt();
       *msg->get_ts() = 0;
