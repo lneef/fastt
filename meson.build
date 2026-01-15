@@ -15,5 +15,5 @@ fastt_lib = static_library('fastt', sources, include_directories: include_direct
   dependencies: [dpdk_dep, absl_dep], link_args: ['-lcap', '-Wl,--allow-multiple-definition', '-Wl,--whole-archive'])
 
 
-executable('client', 'client_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep, absl_dep], link_with: fastt_lib)
-executable('server', 'server_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep, absl_dep], link_with: fastt_lib)
+executable('client', 'client_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep, absl_dep], link_with: fastt_lib, link_args: ['-lcap'])
+executable('server', 'server_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep, absl_dep], link_with: fastt_lib, link_args: ['-lcap'])
