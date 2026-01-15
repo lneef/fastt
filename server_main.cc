@@ -9,6 +9,7 @@
 #include <getopt.h>
 #include <memory>
 #include <rte_ether.h>
+#include <rte_log.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
@@ -50,6 +51,7 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 }
 
 int run(netconfig &conf) {
+  rte_log_set_global_level(RTE_LOG_DEBUG);
   if (fastt::init())
     return -1;
   auto ifc = iface::configure_port(0, 1, 1);

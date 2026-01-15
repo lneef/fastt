@@ -126,11 +126,14 @@ public:
   }
 
   connection *accept_connection() {
+    if(connection_requests.empty())
+        return nullptr;
     auto [pkt, ft] = connection_requests.front();
     auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.sport));
     con->process_pkt(pkt);
     if(inserted)
         con->accept({ft.sip, ft.sport});
+    FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);
     return con;
   }
   std::pair<connection *, bool> add_connection(const flow_tuple &tuple, uint16_t port) {

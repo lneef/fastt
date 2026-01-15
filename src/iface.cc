@@ -1,5 +1,6 @@
 #include "iface.h"
 #include "message.h"
+#include "log.h"
 #include <cstdint>
 #include <rte_ethdev.h>
 #include <rte_lcore.h>
@@ -8,6 +9,7 @@
 #include <tuple>
 
 int fastt::init(){
+    FASTT_LOG_DEBUG("init fasst\n");
     return message::init();
 }
 
