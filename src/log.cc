@@ -1,5 +1,5 @@
 #include "log.h"
-
+#include "message.h"
 inline void dump_pkt(message *msg, uint16_t len) {
   static constexpr size_t bytes_per_line = 16;
   auto *data = static_cast<char *>(msg->data());
