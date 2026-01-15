@@ -1,6 +1,5 @@
 #include "connection.h"
 #include "log.h"
-#include "protocol.h"
 #include "message.h"
 #include "util.h"
 
@@ -15,8 +14,6 @@ void connection::process_pkt(rte_mbuf *pkt) {
   auto *msg = static_cast<message*>(pkt);  
   if (!transport_impl->process_pkt(msg))
     return;
-  pkt->pkt_len -= protocol::defs::kuserDataOffset;
-  pkt->data_len -= protocol::defs::kuserDataOffset;
   *msg->get_con_ptr() = this;
 } 
 

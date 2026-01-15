@@ -76,6 +76,7 @@ private:
     auto **con = msg->get_con_ptr();
     *con = nullptr;
     msg->data_len = data_size;
+    msg->pkt_len = data_size;
     return msg;
   }
   std::size_t payload_size;

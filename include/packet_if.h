@@ -29,8 +29,6 @@ public:
     udp->dgram_cksum = 0;
     udp->dgram_len = msg->pkt_len;
     msg->l4_len = sizeof(rte_udp_hdr);
-    msg->pkt_len += msg->l4_len;
-    msg->data_len += msg->l4_len;
     return udp;
   }
 
@@ -48,8 +46,6 @@ public:
     ipv4->type_of_service = 0;
     ipv4->packet_id = 0;
     msg->l3_len = sizeof(rte_ipv4_hdr);
-    msg->pkt_len += msg->l3_len;
-    msg->data_len += msg->l3_len;
 
     msg->ol_flags = 0;
     msg->ol_flags |=
@@ -63,6 +59,7 @@ public:
     rte_ether_addr_copy(&dmac, &eth->dst_addr);
     rte_ether_addr_copy(&smac, &eth->src_addr);
     eth->ether_type = RTE_ETHER_TYPE_IPV4;
+    msg->l2_len = sizeof(rte_ether_hdr);
   }
 
   void consume_pkt(message *msg, uint16_t sport, const con_config &tcon_config) {  
