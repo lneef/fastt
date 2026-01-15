@@ -1,4 +1,5 @@
 #pragma once
+#include "log.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -53,6 +54,7 @@ public:
     assert(pool && "allocation failed");        
     payload_size = rte_pktmbuf_data_room_size(pool);
     assert(payload_size > 0);
+    FASTT_LOG_DEBUG("Payload Size: %lu\n", payload_size);
   }
 
   message *alloc_message(uint16_t data_size) {
