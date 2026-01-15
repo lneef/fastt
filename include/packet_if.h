@@ -27,7 +27,7 @@ public:
     udp->src_port = rte_cpu_to_be_16(sport);
     udp->dst_port = rte_cpu_to_be_16(dport);
     udp->dgram_cksum = 0;
-    udp->dgram_len = msg->pkt_len;
+    udp->dgram_len = rte_cpu_to_be_16(msg->pkt_len);
     msg->l4_len = sizeof(rte_udp_hdr);
     return udp;
   }
@@ -40,7 +40,7 @@ public:
     ipv4->fragment_offset = 0;
     ipv4->next_proto_id = IPPROTO_UDP;
     ipv4->time_to_live = kdefaultTTL;
-    ipv4->total_length = rte_cpu_to_be_16(msg->pkt_len + sizeof(*ipv4));
+    ipv4->total_length = rte_cpu_to_be_16(msg->pkt_len);
     ipv4->hdr_checksum = 0;
     ipv4->version_ihl = RTE_IPV4_VHL_DEF;
     ipv4->type_of_service = 0;
