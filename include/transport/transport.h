@@ -238,41 +238,36 @@ struct transport {
   }
 
   bool process_pkt(message *pkt) {
-    auto *hdr = rte_pktmbuf_mtod_offset(pkt, protocol::header_base *,
-                                        protocol::defs::kdataOffset);
+    auto *hdr = rte_pktmbuf_mtod(pkt, protocol::ft_header*);
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
-      auto *nhdr = static_cast<protocol::ft_header *>(hdr);
-      if (nhdr->ack)
-        rt_handler.acknowledge(nhdr->ack, nhdr->wnd);
-      ack_ctx.process_seq(nhdr->seq);
-      if (recv_wd.is_set(nhdr->seq)) {   
+      if (hdr->ack)
+        rt_handler.acknowledge(hdr->ack, hdr->wnd);
+      ack_ctx.process_seq(hdr->seq);
+      if (recv_wd.is_set(hdr->seq)) {   
         rte_pktmbuf_free(pkt);
         return false;
       } else
-        recv_wd.set(nhdr->seq, pkt);
+        recv_wd.set(hdr->seq, pkt);
       break;
     }
     case protocol::pkt_type::FT_ACK: {
-      auto *ahdr = static_cast<protocol::ft_header *>(hdr);
-      rt_handler.acknowledge(ahdr->ack, ahdr->wnd);
+      rt_handler.acknowledge(hdr->ack, hdr->wnd);
       if(cstate == connection_state::ESTABLISHING)
           cstate = connection_state::ESTABLISHED;
       rte_pktmbuf_free(pkt);
       break;
     }
     case protocol::pkt_type::FT_INIT: {
-      auto *ihdr = static_cast<protocol::init_header*>(hdr) ; 
-      if(recv_wd.is_set(ihdr->seq)){
+      if(recv_wd.is_set(hdr->seq)){
           rte_pktmbuf_free(pkt);                                    
           return false;
       }else
-          recv_wd.set(ihdr->seq, pkt);
+          recv_wd.set(hdr->seq, pkt);
       break;
     }
     case protocol::pkt_type::FT_INIT_ACK:{
-        auto *aihdr = static_cast<protocol::init_ack_header*>(hdr);
-        rt_handler.acknowledge(aihdr->seq, aihdr->wnd);
+        rt_handler.acknowledge(hdr->seq, hdr->wnd);
         cstate = connection_state::ESTABLISHED;
         rte_pktmbuf_free(pkt);
         break;

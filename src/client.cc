@@ -5,7 +5,7 @@
 
 message* client_iface::recv_message(connection* con){
     message* msg;
-    if(!con->has_ready_message()){
+    if(!con->poll()){
         manager.fetch_from_device();
         con->acknowledge_all();
     } 

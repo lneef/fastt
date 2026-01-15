@@ -27,10 +27,10 @@ message* protocol::prepare_ack_pkt(uint64_t ack, message_allocator *pool, uint16
 
 
 message* protocol::prepare_init_header(message_allocator* allocator, uint64_t seq){
-    auto* msg = allocator->alloc_message(sizeof(protocol::init_header));
+    auto* msg = allocator->alloc_message(sizeof(protocol::ft_header));
     if(!msg)
         return nullptr;
-    auto *ft = rte_pktmbuf_mtod(msg, protocol::init_header*);
+    auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header*);
     ft->seq = seq;
     ft->msg_id = 0;
     ft->type = protocol::pkt_type::FT_INIT;
@@ -39,10 +39,10 @@ message* protocol::prepare_init_header(message_allocator* allocator, uint64_t se
 
 
 message* protocol::prepare_init_ack_header(message_allocator* pool, uint64_t ack, uint16_t wnd){
-    auto* msg = pool->alloc_message(sizeof(protocol::init_ack_header));
+    auto* msg = pool->alloc_message(sizeof(protocol::ft_header));
     if(!msg)
         return nullptr;
-    auto *ft = rte_pktmbuf_mtod(msg, protocol::init_ack_header*);
+    auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header*);
     ft->ack = ack;
     ft->wnd = wnd;
     ft->type = protocol::pkt_type::FT_INIT_ACK;

@@ -40,12 +40,12 @@ public:
   void acknowledge_all();
   void accept(const con_config& target);
   uint16_t receive_message(message **msgs, uint16_t cnt);
-  bool has_ready_message() const;
   void open_connection(const con_config& target);
   bool poll() const { return has_ready_message(); }
   bool active() { return transport_impl->active(); }
 
 private:
+  bool has_ready_message() const;
   con_config peer_con_config;
   message_allocator *allocator;
   std::unique_ptr<transport> transport_impl;
@@ -63,7 +63,7 @@ public:
   void handle_pkt(rte_mbuf *pkt, flow_tuple &ft) {
     FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n",
             ft.sip, rte_be_to_cpu_16(ft.sport));
-    auto *header = rte_pktmbuf_mtod(pkt, protocol::header_base *);
+    auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
     if (header->type == protocol::FT_INIT)
       register_request(pkt, ft);
     else {

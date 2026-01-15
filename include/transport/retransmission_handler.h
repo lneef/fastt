@@ -1,7 +1,7 @@
 #pragma once
+#include <absl/strings/internal/str_format/extension.h>
 #include <concepts>
 #include <cstdint>
-#include <deque>
 #include <message.h>
 #include <rte_cycles.h>
 #include <tuple>
@@ -10,6 +10,27 @@
 #include "transport/indexable_queue.h"
 
 static constexpr uint64_t min_seq = 1;
+
+template<typename T>
+void intrusive_push_front(T& sentinel, T* elem){
+    elem->next = sentinel.next;
+    elem->prev = &sentinel;
+    sentinel.next = elem;
+}
+
+template<typename T>
+T* intrusive_pop_back(T& sentinel){
+    auto *tail = sentinel.prev;
+    sentinel.prev = tail->prev;
+    tail->prev->next = &sentinel;
+    return tail;
+}
+
+template<typename T>
+void intrusive_remove(T* elem){
+    elem->prev->next = elem->next;
+    elem->next->prev = elem->prev;
+}
 
 static __inline std::pair<uint64_t, uint64_t>
 estimate_timeout(uint64_t rtt, uint64_t rtt_dv, uint64_t measured) {
@@ -21,6 +42,8 @@ estimate_timeout(uint64_t rtt, uint64_t rtt_dv, uint64_t measured) {
 }
 
 struct sender_entry {
+  sender_entry* next;
+  sender_entry* prev;
   message *packet;
   uint64_t seq;
   bool retransmitted;
@@ -54,7 +77,12 @@ public:
   };
   retransmission_handler(uint64_t rto = rte_get_timer_cycles())
       : unacked_packets(kQueuedPackets), budget(1), seq(min_seq), rtt(),
-        rtt_dv(), rto(rto) {}
+        rtt_dv(), rto(rto) {
+            head_sentinel.next = &tail_sentinel;
+            head_sentinel.prev = nullptr;
+            tail_sentinel.prev = &head_sentinel;
+            tail_sentinel.next = nullptr;
+        }
 
   uint64_t cleanup_acked_pkts(uint64_t seq, uint64_t now) {
     uint64_t burst_rtt = 0;
@@ -76,6 +104,7 @@ public:
       }
       assert(desc->packet);
       rte_pktmbuf_free(desc->packet);
+      intrusive_remove(desc);
       unacked_packets.pop_front();
     }
     return burst_rtt;
@@ -86,8 +115,10 @@ public:
       return false;
     msg->inc_refcnt();
     *msg->get_ts() = 0;
-    auto *entry = unacked_packets.enqueue(msg, seq, false);
-    timeouts.emplace_back(rto, entry, seq++);
+    auto *entry = unacked_packets.enqueue(msg, min_seq, false);
+    intrusive_push_front(head_sentinel, entry);
+    entry->next = head_sentinel.next;
+    entry->prev = &head_sentinel;
     return true;
   }
 
@@ -99,29 +130,25 @@ public:
     ctor(msg, seq);
     msg->inc_refcnt();
     *msg->get_ts() = 0;
-    auto *entry = unacked_packets.enqueue(msg, seq, false);
-    timeouts.emplace_back(rto, entry, seq++);
+    auto *entry = unacked_packets.enqueue(msg, seq++, false);
+    intrusive_push_front(head_sentinel, entry);
     return true;
   }
 
   void probe_retransmit(std::invocable<message *> auto &&cb) {
     uint64_t now = rte_get_timer_cycles();
-    while (!timeouts.empty()) {
-      auto [mrto, entry, seq] = timeouts.front();
-      if (seq < least_unacked_pkt) {
-        timeouts.pop_front();
-        continue;
-      }
+    auto *entry = head_sentinel.next;
+    while (entry != &tail_sentinel) {
       auto *msg = entry->packet;
-      if (*msg->get_ts() == 0 || !entry->requires_retry(now, mrto))
+      if (*msg->get_ts() == 0 || !entry->requires_retry(now, rto))
         break;
       entry->retransmitted = true;
       cb(msg);
       ++stats.retransmitted;
       msg->inc_refcnt();
       *msg->get_ts() = 0;
-      timeouts.pop_front();
-      timeouts.emplace_back(rto, entry, seq);
+      intrusive_pop_back(tail_sentinel);
+      intrusive_push_front(head_sentinel, entry);
     }
   }
 
@@ -157,7 +184,7 @@ private:
   };
   statistics stats;
   indexable_queue<sender_entry> unacked_packets;
-  std::deque<timeout> timeouts;
+  sender_entry head_sentinel, tail_sentinel;
   uint32_t budget;
   uint64_t seq;
   uint64_t least_unacked_pkt = min_seq;

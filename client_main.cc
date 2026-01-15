@@ -10,6 +10,7 @@
 #include <rte_ether.h>
 #include <rte_mempool.h>
 
+
 struct netconfig {
   rte_ether_addr dmac;
   uint32_t sip, dip;
@@ -18,6 +19,7 @@ struct netconfig {
 
 static netconfig parse_cmdline(int argc, char *argv[]) {
   int opt, option_index;
+ 
   netconfig conf;
   static const struct option long_options[] = {
       {"dip", required_argument, 0, 0},   {"sip", required_argument, 0, 0},
