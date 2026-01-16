@@ -45,8 +45,7 @@ public:
     ipv4->version_ihl = RTE_IPV4_VHL_DEF;
     ipv4->type_of_service = 0;
     ipv4->packet_id = 0;
-    msg->l3_len = sizeof(rte_ipv4_hdr);
-
+    msg->l3_len = sizeof(rte_ipv4_hdr); 
     msg->ol_flags = 0;
     msg->ol_flags |=
         RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_UDP_CKSUM | RTE_MBUF_F_TX_IPV4;

@@ -11,7 +11,7 @@ static const struct rte_mbuf_dynfield tsc_dynfield_desc = {
 
 static const struct rte_mbuf_dynfield con_dynfield_desc = {
     .name = "con",
-    .size = sizeof(connection*),
+    .size = sizeof(slot*),
     .align = alignof(void*),
     .flags = 0};
 

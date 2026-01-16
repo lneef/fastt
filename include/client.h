@@ -1,6 +1,8 @@
 #pragma once
 
-#include "connection.h"
+#include "transport/slot.h"
+#include "transport/session.h"
+#include "session_manager.h"
 #include "log.h"
 #include "message.h"
 #include "util.h"
@@ -17,20 +19,21 @@ public:
       : scon_config(scon_config), manager(port, txq, rxq, scon_config.ip, pool) {}
 
   template <bool flush = false>
-  bool send_message(connection *con, message *message, uint16_t len) {
+  bool send_message(client_slot *con, message *message, uint16_t len) {
     FASTT_LOG_DEBUG("Sending new message with len %u\n", len);  
     *message->get_con_ptr() = con;
-    bool sent = con->send_message(message, len);
+    con->send_message(message, len);
     if constexpr (flush)
       manager.flush();
-    return sent;
+    return true;
   }
-  message *recv_message(connection *con);
-  connection *open_connection(const con_config &target, rte_ether_addr &dmac);
+
+  message *recv_message(client_slot *con);
+  client_session *open_session(const con_config &target, rte_ether_addr &dmac);
 
   void flush() { manager.flush(); }
 
 private:
   con_config scon_config;
-  connection_manager manager;
+  session_manager<client_session> manager;
 };

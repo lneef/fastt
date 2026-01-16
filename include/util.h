@@ -5,6 +5,29 @@
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 
+template <typename T> struct intrusive_list {
+  T *next;
+  T *prev;
+
+  void remove() {
+    prev->next = next;
+    next->prev = prev;
+  }
+
+  void intrusive_push_front(T *elem) {
+    elem->next = next;
+    elem->prev = static_cast<T*>(this);
+    next = elem;
+  }
+
+  T *intrusive_pop_back() {
+    auto *tail = prev;
+    prev = tail->prev;
+    tail->prev->next = static_cast<T*>(this);
+    return tail;
+  }
+};
+
 struct con_config {
   uint32_t ip;
   uint16_t port;

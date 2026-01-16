@@ -59,19 +59,21 @@ int run(netconfig &conf) {
   std::shared_ptr<message_allocator> allocator =
       std::make_shared<message_allocator>("pool", 8095);
   client_iface cif{port, txq, rxq, allocator, con_config{conf.sip, conf.sport}};
-  auto *con = cif.open_connection({conf.dip, conf.dport}, conf.dmac);
+  auto *con = cif.open_session({conf.dip, conf.dport}, conf.dmac);
   if (!con)
     return -1;
-  while(!con->active())
-      ;
+  con->wait_session_active();
   while (true) {
     auto *msg = allocator->alloc_message(dataSize);
-    cif.send_message(con, msg, msg->len());
+    auto* slot = con->reserve_slot();
+    slot->send_message(msg, 0);
     cif.flush();
     msg = nullptr;
     do {
-      msg = cif.recv_message(con);
+      slot->receive_msg(&msg);
+      con->check_timeouts();
     } while (!msg);
+    con->free_slot(slot);
     allocator->deallocate(msg);
   }
   return 0;

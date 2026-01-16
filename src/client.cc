@@ -1,20 +1,21 @@
 #include "client.h"
-#include "connection.h"
+#include "transport/session.h"
+#include "transport/slot.h"
 #include "message.h"
 #include "util.h"
 
-message* client_iface::recv_message(connection* con){
+message* client_iface::recv_message(client_slot* con){
     message* msg;
     if(!con->poll()){
         manager.fetch_from_device();
-        con->acknowledge_all();
+        con->acknowledge();
     } 
-    if(con->receive_message(&msg, 1))
+    if(con->receive_msg(&msg))
         return msg;
     return nullptr;
 }
 
-connection* client_iface::open_connection(const con_config& target, rte_ether_addr& dmac){
+client_session* client_iface::open_session(const con_config& target, rte_ether_addr& dmac){
     manager.add_mac(target.ip, dmac);
-    return manager.open_connection(scon_config, target);
+    return manager.open_session(scon_config, target);
 }

@@ -1,4 +1,4 @@
-#include "connection.h"
+#include "session_manager.h"
 #include "iface.h"
 #include "message.h"
 #include "server.h"
@@ -62,14 +62,14 @@ int run(netconfig &conf) {
       std::make_shared<message_allocator>("pool", 8095);
   server_iface server(port, txq, rxq, con_config{conf.sip, conf.sport},
                       allocator);
-  poll_state<32> ps;
+  poll_state<32, server_slot> ps;
   while (true) {
     auto events = server.poll(ps);
     for (uint16_t i = 0; i < events; ++i) {
       message *msg;
       auto *con = ps.events[i];
-      if (con->receive_message(&msg, 1))
-        con->send_message(msg, msg->len());
+      if (con->receive_msg(&msg))
+        con->send_message(msg, 0);
     }
     server.accept();
     server.flush();

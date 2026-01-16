@@ -9,7 +9,7 @@
 #include <rte_memory.h>
 #include <rte_mempool.h>
 
-class connection;
+class slot;
 
 struct message : public rte_mbuf {
   static int timestamp;
@@ -19,11 +19,12 @@ struct message : public rte_mbuf {
 
   void inc_refcnt() { return rte_pktmbuf_refcnt_update(this, 1); }
 
-  connection **get_con_ptr() {
-    return RTE_MBUF_DYNFIELD(this, timestamp, connection **);
+  slot **get_con_ptr() {
+    return RTE_MBUF_DYNFIELD(this, timestamp, slot **);
   }
 
-  void *data() { return rte_pktmbuf_mtod(this, void *); }
+  template<typename T = void>
+  T *data() { return rte_pktmbuf_mtod(this, T*); }
   uint16_t len() { return data_len; }
 
   void set_size(uint16_t len) { pkt_len = len; }
