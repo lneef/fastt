@@ -81,9 +81,10 @@ public:
   }
 
   connection *lookUp(const flow_tuple &tuple) {
-    if (cons.contains(tuple))
+    auto it = cons.find(tuple);  
+    if (it == cons.end())
       return nullptr;
-    return cons[tuple].get();
+    return it->second.get();
   }
 
   connection *open_connection(const con_config &source,
@@ -134,9 +135,10 @@ public:
     auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.dport));
     connection_requests.pop_front();
     con->process_pkt(pkt);
-    if(inserted)
+    if(inserted){
         con->accept();
-    FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);
+        FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);
+    }
     return con;
   }
   std::pair<connection *, bool> add_connection(const flow_tuple &tuple, uint16_t port) {
