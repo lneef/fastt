@@ -310,7 +310,10 @@ struct transport {
     pkt_if->consume_pkt(msg, sport, target);
   }
 
-  bool poll() { return recv_wd.has_ready_messages(); }
+  bool poll() { 
+      recv_wd.advance();
+      return recv_wd.has_ready_messages(); 
+  }
 
   bool active() { return connection_state::ESTABLISHED == cstate; }
 
