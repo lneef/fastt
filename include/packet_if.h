@@ -92,7 +92,7 @@ public:
   }
 
   bool check_udp_cksum(rte_mbuf *mbuf) {
-    return !(mbuf->ol_flags & RTE_MBUF_F_RX_IP_CKSUM_GOOD);
+    return !(mbuf->ol_flags & RTE_MBUF_F_RX_IP_CKSUM_BAD);
   }
 
   bool check_ether(rte_mbuf *mbuf) {
