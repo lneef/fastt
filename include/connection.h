@@ -32,21 +32,20 @@ class connection {
 public:
   connection(message_allocator *allocator, packet_if *pkt_if,
              const con_config &target, uint16_t sport)
-      : peer_con_config(target), allocator(allocator),
-        transport_impl(std::make_unique<transport>(allocator, pkt_if, sport)) {}
+      : allocator(allocator),
+        transport_impl(std::make_unique<transport>(allocator, pkt_if, sport, target)) {}
 
   void process_pkt(rte_mbuf *pkt);
   bool send_message(message *msg, uint16_t len);
   void acknowledge_all();
-  void accept(const con_config& target);
+  void accept();
   uint16_t receive_message(message **msgs, uint16_t cnt);
-  void open_connection(const con_config& target);
+  void open_connection();
   bool poll() const { return has_ready_message(); }
   bool active() { return transport_impl->active(); }
 
 private:
   bool has_ready_message() const;
-  con_config peer_con_config;
   message_allocator *allocator;
   std::unique_ptr<transport> transport_impl;
 };
@@ -60,7 +59,7 @@ public:
       : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
         pkt_if(&scheduler, sip, port) {}
 
-  void handle_pkt(rte_mbuf *pkt, flow_tuple &ft) {
+  void handle_pkt(message *pkt, flow_tuple &ft) {
     FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n",
             ft.sip, rte_be_to_cpu_16(ft.sport));
     auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
@@ -96,7 +95,7 @@ public:
                                                       target, source.port));
     if (!inserted)
       return nullptr;
-    it->second->open_connection(target);
+    it->second->open_connection();
     return it->second.get();
   }
 
@@ -111,7 +110,7 @@ public:
   }
 
   void fetch_from_device() {
-    dev.rx_burst([this](rte_mbuf *pkt) {
+    dev.rx_burst([this](message *pkt) {
       flow_tuple ft;
       auto *msg = pkt_if.consume_pkt(pkt, ft);
       if (!msg)
@@ -120,7 +119,7 @@ public:
     });
   }
 
-  void register_request(rte_mbuf *pkt, flow_tuple &ft) {
+  void register_request(message *pkt, flow_tuple &ft) {
     FASTT_LOG_DEBUG("Registering new request");
     connection_requests.emplace_back(pkt, ft);
   }
@@ -132,7 +131,7 @@ public:
     auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.sport));
     con->process_pkt(pkt);
     if(inserted)
-        con->accept({ft.sip, ft.sport});
+        con->accept();
     FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);
     return con;
   }
@@ -147,7 +146,7 @@ public:
   void flush() { scheduler.flush(); }
 
 private:
-  std::deque<std::pair<rte_mbuf *, flow_tuple>> connection_requests;
+  std::deque<std::pair<message *, flow_tuple>> connection_requests;
   absl::flat_hash_map<flow_tuple, std::unique_ptr<connection>> cons;
   std::shared_ptr<message_allocator> allocator;
   netdev dev;

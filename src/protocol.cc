@@ -38,13 +38,14 @@ message* protocol::prepare_init_header(message_allocator* allocator, uint64_t se
 }
 
 
-message* protocol::prepare_init_ack_header(message_allocator* pool, uint64_t ack, uint16_t wnd){
+message* protocol::prepare_init_ack_header(message_allocator* pool, uint64_t seq, uint64_t ack, uint16_t wnd){
     auto* msg = pool->alloc_message(sizeof(protocol::ft_header));
     if(!msg)
         return nullptr;
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header*);
     ft->ack = ack;
     ft->wnd = wnd;
+    ft->seq = seq;
     ft->type = protocol::pkt_type::FT_INIT_ACK;
     return msg;
 }
