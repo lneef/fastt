@@ -17,6 +17,7 @@
 #include <rte_lcore.h>
 
 #include <rte_mbuf.h>
+#include <rte_mbuf_core.h>
 #include <rte_mempool.h>
 #include <rte_ring.h>
 #include <rte_ring_core.h>
@@ -292,6 +293,8 @@ struct transport {
             protocol::prepare_init_header(msg, seq);
             });
     assert(retval);
+    auto* hdr = rte_pktmbuf_mtod(msg, protocol::ft_header*);
+    assert(hdr->type == protocol::FT_INIT);
     FASTT_LOG_DEBUG("Sent init header to peer %u %u\n", target.ip, target.port);
     pkt_if->consume_pkt(msg, sport, target);
   }

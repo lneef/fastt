@@ -69,8 +69,10 @@ public:
       auto *connection = lookUp(ft);
       if (connection)
         connection->process_pkt(pkt);
-      else
+      else{
+        dump_pkt(pkt, pkt->len());  
         rte_pktmbuf_free(pkt);
+      }
     }
   }
 
