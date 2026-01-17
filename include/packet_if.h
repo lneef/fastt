@@ -92,12 +92,12 @@ public:
   }
 
   bool check_udp_cksum(rte_mbuf *mbuf) {
-    return !(mbuf->ol_flags & RTE_MBUF_F_RX_IP_CKSUM_BAD);
+    return !(mbuf->ol_flags & RTE_MBUF_F_RX_L4_CKSUM_BAD);
   }
 
   bool check_ether(rte_mbuf *mbuf) {
     auto *eth = rte_pktmbuf_mtod(mbuf, rte_ether_hdr *);
-    return eth->ether_type == RTE_ETHER_TYPE_IPV4;
+    return eth->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
   }
 
   void strip_ether(rte_mbuf *mbuf) {
