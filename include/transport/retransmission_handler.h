@@ -67,7 +67,7 @@ struct sender_entry {
   }
 };
 
-template<auto adaptive_rto = false>
+template<auto adaptive_rto = true>
 class retransmission_handler {
   static constexpr uint16_t kQueuedPackets = 64;
 
@@ -159,7 +159,8 @@ public:
   bool all_acked() const { return least_unacked_pkt == seq; }
 
   void update_budget(uint16_t budget, uint64_t ack) {
-    budget = (budget - (seq - ack));
+    budget = (budget - (seq - ack - 1));
+    FASTT_LOG_DEBUG("Got new capacity %u\n", budget);
   }
 
   const statistics &get_stats() const { return stats; }
