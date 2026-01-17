@@ -21,7 +21,7 @@ struct flow_tuple {
   uint32_t sip, dip;
   uint16_t sport, dport;
   template <typename H> friend H AbslHashValue(H h, const flow_tuple &c) {
-    return H::combine(std::move(h), c.sip, c.sip, c.sport, c.dport);
+    return H::combine(std::move(h), c.sip, c.dip, c.sport, c.dport);
   }
 
   friend bool operator==(const flow_tuple &lhs, const flow_tuple &rhs);
