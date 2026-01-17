@@ -20,7 +20,8 @@ public:
     auto sent = rte_eth_tx_burst(port, txq, pkts, cnt);
     for(uint16_t i = 0; i < sent; ++i)
         *static_cast<message*>(pkts[i])->get_ts() = now;
-    FASTT_LOG_DEBUG("Sent %u pkt in total\n", sent);
+    if(sent)
+        FASTT_LOG_DEBUG("Sent %u pkt in total\n", sent);
     return sent;
   }
 
