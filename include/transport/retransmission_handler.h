@@ -87,7 +87,7 @@ public:
 
   uint64_t cleanup_acked_pkts(uint64_t seq, uint64_t now) {
     uint64_t burst_rtt = 0;
-    while (!unacked_packets.empty() && unacked_packets.front()->seq < seq) {
+    while (!unacked_packets.empty() && unacked_packets.front()->seq <= seq) {
       auto *desc = unacked_packets.front();
       if (!desc->retransmitted) {
         auto tsc_d = now - *desc->packet->get_ts();
@@ -158,8 +158,8 @@ public:
 
   bool all_acked() const { return least_unacked_pkt == seq; }
 
-  void update_budget(uint16_t budget, uint64_t ack) {
-    budget = (budget - (seq - ack - 1));
+  void update_budget(uint16_t granted, uint64_t ack) {
+    budget = (granted - (seq - ack - 1));
     FASTT_LOG_DEBUG("Got new capacity %u\n", budget);
   }
 
