@@ -93,6 +93,7 @@ struct window {
     while (!output.empty() && rcvd < bs) {
       f(output.front());
       output.pop_front();
+      ++rcvd;
     }
     return rcvd;
   }
@@ -194,9 +195,11 @@ struct transport {
     uint64_t with_ecn = 0;
   } stats;
 
-  transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport, const con_config& target)
-      : recv_wd(min_seq), target(target), rt_handler(), scheduler(), ack_ctx(&scheduler),
-        allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
+  transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
+            const con_config &target)
+      : recv_wd(min_seq), target(target), rt_handler(), scheduler(),
+        ack_ctx(&scheduler), allocator(allocator), pkt_if(pkt_sink),
+        sport(sport) {}
 
   void probe_timeout() {
     rt_handler.probe_retransmit(
@@ -204,7 +207,7 @@ struct transport {
   }
 
   bool send_pkt(message *pkt) {
-    assert(cstate == connection_state::ESTABLISHED);  
+    assert(cstate == connection_state::ESTABLISHED);
     probe_timeout();
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
@@ -289,38 +292,44 @@ struct transport {
   }
 
   void open_connection() {
-    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));  
-    bool retval = rt_handler.record_pkt(msg, [](message* msg, uint64_t seq){
-            protocol::prepare_init_header(msg, seq);
-            });
+    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
+    bool retval = rt_handler.record_pkt(msg, [](message *msg, uint64_t seq) {
+      protocol::prepare_init_header(msg, seq);
+    });
     assert(retval);
-    auto* hdr = rte_pktmbuf_mtod(msg, protocol::ft_header*);
+    auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     assert(hdr->type == protocol::FT_INIT);
     FASTT_LOG_DEBUG("Sent init header to peer %u %u\n", target.ip, target.port);
     pkt_if->consume_pkt(msg, sport, target);
   }
 
   void accept_connection() {
-    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));  
-    bool retval = rt_handler.record_pkt(msg, [budget = recv_wd.capacity()](message* msg, uint64_t seq){
-            protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
-            }); 
+    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
+    bool retval = rt_handler.record_pkt(
+        msg, [budget = recv_wd.capacity()](message *msg, uint64_t seq) {
+          protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
+        });
     FASTT_LOG_DEBUG("Sent ack for init");
     assert(retval);
     pkt_if->consume_pkt(msg, sport, target);
   }
 
-  bool poll() { 
-      recv_wd.advance();
-      return recv_wd.has_ready_messages(); 
+  bool poll() {
+    recv_wd.advance();
+    return recv_wd.has_ready_messages();
   }
 
   bool active() { return connection_state::ESTABLISHED == cstate; }
 
   uint16_t receive_messages(message **messages, uint16_t bs) {
     probe_timeout();
+    recv_wd.advance();
     return recv_wd.consume_messages(
-        [messages, i = 0](message *msg) mutable { messages[i++] = msg; }, bs);
+        [messages, i = 0](message *msg) mutable {
+          msg->shrink_headroom(sizeof(protocol::ft_header));
+          messages[i++] = msg;
+        },
+        bs);
   }
 
   void setup_after_init() {
