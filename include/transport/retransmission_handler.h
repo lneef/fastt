@@ -71,13 +71,13 @@ struct sender_entry {
 template<auto adaptive_rto = true>
 class retransmission_handler {
   static constexpr uint16_t kQueuedPackets = 64;
-
+  static constexpr uint64_t kMSecDiv = 1e3;
 public:
   struct statistics {
     uint64_t acked, retransmitted, rtt;
     statistics() : acked(0), retransmitted(0) {}
   };
-  retransmission_handler(uint64_t rto = rte_get_timer_cycles())
+  retransmission_handler(uint64_t rto = rte_get_timer_hz() / kMSecDiv)
       : unacked_packets(kQueuedPackets), budget(1), seq(min_seq), rtt(),
         rtt_dv(), rto(rto) {
             head_sentinel.next = &tail_sentinel;

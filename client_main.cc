@@ -72,6 +72,7 @@ int run(netconfig &conf) {
     msg = nullptr;
     do {
       msg = cif.recv_message(con);
+      cif.flush();
     } while (!msg);
     allocator->deallocate(msg);
   }
