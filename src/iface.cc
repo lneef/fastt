@@ -1,17 +1,23 @@
 #include "iface.h"
-#include "message.h"
 #include "log.h"
+#include "message.h"
 #include <cstdint>
 #include <rte_ethdev.h>
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
+#include <rte_mempool.h>
 #include <tuple>
 
-int fastt::init(){
-    FASTT_LOG_DEBUG("init fasst\n");
-    return message::init();
+int fastt::init() {
+  FASTT_LOG_DEBUG("init fasst\n");
+  return message::init();
 }
+
+static constexpr auto deleter = [](rte_mempool *pool) {
+  if (pool)
+    rte_mempool_free(pool);
+};
 
 std::optional<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
                                            uint16_t nrx) {
@@ -58,9 +64,11 @@ std::optional<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
   uint16_t setup_tx = 0;
   uint16_t setup_rx = 0;
   RTE_LCORE_FOREACH(lcore_id) {
-    ifc.pools.emplace_back(rte_pktmbuf_pool_create(
-        std::to_string(lcore_id).data(), 2 * nb_rxd, 256, 0,
-        RTE_MBUF_DEFAULT_BUF_SIZE, rte_lcore_to_socket_id(lcore_id)));
+    ifc.pools.emplace_back(
+        rte_pktmbuf_pool_create(std::to_string(lcore_id).data(), 2 * nb_rxd,
+                                256, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
+                                rte_lcore_to_socket_id(lcore_id)),
+        deleter);
     if (rte_eth_rx_queue_setup(ifc.port, setup_rx++, nb_rxd,
                                rte_lcore_to_socket_id(lcore_id), &rxconf,
                                ifc.pools.back().get()))

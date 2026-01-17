@@ -5,6 +5,8 @@
 #include <bits/getopt_core.h>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <generic/rte_cycles.h>
 #include <getopt.h>
 #include <rte_eal.h>
 #include <rte_ether.h>
@@ -64,9 +66,15 @@ int run(netconfig &conf) {
     return -1;
   while(!cif.probe_connection_setup_done(con))
       ;
+  double total = 0;
+  uint64_t pkts = 0;
+  uint64_t sentt = 0;
   con->acknowledge_all();
-  while (true) {
+  while (pkts < 10000) {
     auto *msg = allocator->alloc_message(dataSize);
+    auto *data = static_cast<char*>(msg->data());
+    uint64_t now = rte_get_timer_cycles();
+    memcpy(data, &now, sizeof(now));
     cif.send_message(con, msg, msg->len());
     cif.flush();
     msg = nullptr;
@@ -74,8 +82,15 @@ int run(netconfig &conf) {
       msg = cif.recv_message(con);
       cif.flush();
     } while (!msg);
+    now = rte_get_timer_cycles();
+    memcpy(&sentt, msg->data(), sizeof(sentt));
+    total += sentt;
+    ++pkts;
     allocator->deallocate(msg);
   }
+  auto us = static_cast<double>(rte_get_timer_cycles()) / 1e6;
+  double avg = static_cast<double>(total) / pkts;
+  std::cout << avg / us << std::endl;
   return 0;
 }
 
