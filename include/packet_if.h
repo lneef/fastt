@@ -102,8 +102,6 @@ public:
 
   void strip_ether(rte_mbuf *mbuf) {
     rte_pktmbuf_adj(mbuf, sizeof(rte_ether_hdr));
-    mbuf->pkt_len -= sizeof(rte_ether_hdr);
-    mbuf->data_len -= sizeof(rte_ether_hdr);
   }
 
   void strip_ip(rte_mbuf *mbuf, flow_tuple &ft) {
@@ -111,16 +109,14 @@ public:
     ft.sip = ip->src_addr;
     ft.dip = ip->dst_addr;
     rte_pktmbuf_adj(mbuf, sizeof(rte_ipv4_hdr));
-    mbuf->pkt_len -= sizeof(rte_ipv4_hdr);
-    mbuf->data_len -= sizeof(rte_ipv4_hdr);
+
   }
 
   void strip_udp(rte_mbuf *mbuf, flow_tuple &ft) {
     auto *udp = rte_pktmbuf_mtod(mbuf, rte_udp_hdr *);
     ft.sport = udp->src_port;
     ft.dport = udp->dst_port;
-    mbuf->pkt_len -= sizeof(rte_udp_hdr);
-    mbuf->data_len -= sizeof(rte_udp_hdr);
+    rte_pktmbuf_adj(mbuf, sizeof(rte_udp_hdr));
   }
 
   message *consume_pkt(rte_mbuf *mbuf, flow_tuple &ft) {
