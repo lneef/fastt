@@ -287,16 +287,21 @@ struct transport {
   }
 
   void open_connection() {
-    auto *msg = protocol::prepare_init_header(allocator, min_seq);
-    bool retval = rt_handler.record_control_pkt(msg);
+    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));  
+    bool retval = rt_handler.record_pkt(msg, [](message* msg, uint64_t seq){
+            protocol::prepare_init_header(msg, seq);
+            });
     assert(retval);
+    FASTT_LOG_DEBUG("Sent init header to peer %u %u", target.ip, target.ip);
     pkt_if->consume_pkt(msg, sport, target);
   }
 
   void accept_connection() {
-    auto *msg = protocol::prepare_init_ack_header(allocator, min_seq, min_seq,
-                                                  recv_wd.capacity());
-    bool retval = rt_handler.record_control_pkt(msg);
+    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));  
+    bool retval = rt_handler.record_pkt(msg, [budget = recv_wd.capacity()](message* msg, uint64_t seq){
+            protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
+            }); 
+    FASTT_LOG_DEBUG("Sent ack for init");
     assert(retval);
     pkt_if->consume_pkt(msg, sport, target);
   }

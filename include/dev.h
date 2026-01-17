@@ -1,5 +1,6 @@
 #pragma once
 
+#include "log.h"
 #include "message.h"
 #include <cstdint>
 #include <generic/rte_cycles.h>
@@ -19,6 +20,7 @@ public:
     auto sent = rte_eth_tx_burst(port, txq, pkts, cnt);
     for(uint16_t i = 0; i < sent; ++i)
         *static_cast<message*>(pkts[i])->get_ts() = now;
+    FASTT_LOG_DEBUG("Sent %u pkt in total\n", sent);
     return sent;
   }
 

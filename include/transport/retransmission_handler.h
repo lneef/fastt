@@ -111,19 +111,6 @@ public:
     return burst_rtt;
   }
 
-  bool record_control_pkt(message* msg){
-    if (unacked_packets.full() || budget == 0)
-      return false;
-    msg->inc_refcnt();
-    *msg->get_ts() = 0;
-    auto *entry = unacked_packets.enqueue(msg, min_seq, false);
-    FASTT_LOG_DEBUG("Enqueued ctrl packet: %lu\n", min_seq);
-    intrusive_push_front(head_sentinel, entry);
-    entry->next = head_sentinel.next;
-    entry->prev = &head_sentinel;
-    return true;
-  }
-
   bool record_pkt(message *msg,
                   std::invocable<message *, uint64_t> auto &&ctor) {
     if (unacked_packets.full() || budget == 0)
@@ -134,6 +121,7 @@ public:
     *msg->get_ts() = 0;
     auto *entry = unacked_packets.enqueue(msg, seq++, false);
     intrusive_push_front(head_sentinel, entry);
+    FASTT_LOG_DEBUG("Enqueue pkt with %lu new budget %u\n", seq - 1, budget);
     return true;
   }
 
