@@ -96,6 +96,7 @@ public:
     if (!inserted)
       return nullptr;
     it->second->open_connection();
+    flush();
     return it->second.get();
   }
 
