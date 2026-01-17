@@ -84,11 +84,11 @@ int run(netconfig &conf) {
     } while (!msg);
     now = rte_get_timer_cycles();
     memcpy(&sentt, msg->data(), sizeof(sentt));
-    total += sentt;
+    total += (now - sentt);
     ++pkts;
     allocator->deallocate(msg);
   }
-  auto us = static_cast<double>(rte_get_timer_cycles()) / 1e6;
+  auto us = static_cast<double>(rte_get_timer_hz()) / 1e6;
   double avg = static_cast<double>(total) / pkts;
   std::cout << avg / us << std::endl;
   return 0;

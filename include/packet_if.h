@@ -67,7 +67,7 @@ public:
     ip_header(msg, udp, sip, tcon_config.ip);
     assert(arp.contains(tcon_config.ip));
     eth_header(msg, smac, arp[tcon_config.ip]);
-    dump_pkt(msg, msg->len());
+    FASTT_DUMP_PKT(msg, msg->len());
     scheduler->add_pkt(static_cast<rte_mbuf *>(msg));
   }
 
