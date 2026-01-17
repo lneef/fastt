@@ -131,7 +131,7 @@ public:
     if(connection_requests.empty())
         return nullptr;
     auto [pkt, ft] = connection_requests.front();
-    auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.sport));
+    auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.dport));
     con->process_pkt(pkt);
     if(inserted)
         con->accept();
@@ -142,7 +142,7 @@ public:
     auto [it, inserted] = cons.emplace(
         tuple, std::make_unique<connection>(
                    allocator.get(), &pkt_if,
-                   con_config{tuple.dip, rte_cpu_to_be_16(tuple.dport)}, port));
+                   con_config{tuple.sip, rte_cpu_to_be_16(tuple.sport)}, port));
     return {it->second.get(), inserted};
   }
 
