@@ -63,7 +63,7 @@ int run(netconfig &conf) {
   if (!con)
     return -1;
   while(!con->active())
-      ;
+      cif.recv_message(con);
   con->acknowledge_all();
   while (true) {
     auto *msg = allocator->alloc_message(dataSize);
