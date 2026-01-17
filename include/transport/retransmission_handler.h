@@ -159,7 +159,7 @@ public:
   bool all_acked() const { return least_unacked_pkt == seq; }
 
   void update_budget(uint16_t budget, uint64_t ack) {
-    budget += (budget - (seq - ack));
+    budget = (budget - (seq - ack));
   }
 
   const statistics &get_stats() const { return stats; }
