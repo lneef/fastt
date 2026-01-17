@@ -132,6 +132,7 @@ public:
         return nullptr;
     auto [pkt, ft] = connection_requests.front();
     auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.dport));
+    connection_requests.pop_front();
     con->process_pkt(pkt);
     if(inserted)
         con->accept();
