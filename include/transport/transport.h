@@ -292,7 +292,7 @@ struct transport {
             protocol::prepare_init_header(msg, seq);
             });
     assert(retval);
-    FASTT_LOG_DEBUG("Sent init header to peer %u %u", target.ip, target.ip);
+    FASTT_LOG_DEBUG("Sent init header to peer %u %u\n", target.ip, target.port);
     pkt_if->consume_pkt(msg, sport, target);
   }
 
