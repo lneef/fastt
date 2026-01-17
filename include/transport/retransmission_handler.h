@@ -15,7 +15,7 @@ static constexpr uint64_t min_seq = 1;
 template<typename T>
 void intrusive_push_front(T& sentinel, T* elem){
     elem->next = sentinel.next;
-    sentinel.next.prev = elem;
+    sentinel.next->prev = elem;
     elem->prev = &sentinel;
     sentinel.next = elem;
 }
