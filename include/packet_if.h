@@ -100,16 +100,13 @@ public:
     return eth->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
   }
 
-  void strip_ether(rte_mbuf *mbuf) {
-    rte_pktmbuf_adj(mbuf, sizeof(rte_ether_hdr));
-  }
-
-  void strip_ip(rte_mbuf *mbuf, flow_tuple &ft) {
-    auto *ip = rte_pktmbuf_mtod(mbuf, rte_ipv4_hdr *);
+  void strip_ether_ip(rte_mbuf *mbuf, flow_tuple& ft) {
+    auto *eth = rte_pktmbuf_mtod(mbuf, rte_ether_hdr*);
+    auto *ip = rte_pktmbuf_mtod_offset(mbuf, rte_ipv4_hdr *, sizeof(rte_ether_hdr));
+    add_mapping(ip->src_addr, eth->src_addr);
     ft.sip = ip->src_addr;
     ft.dip = ip->dst_addr;
-    rte_pktmbuf_adj(mbuf, sizeof(rte_ipv4_hdr));
-
+    rte_pktmbuf_adj(mbuf, sizeof(rte_ether_hdr) + sizeof(rte_ipv4_hdr));
   }
 
   void strip_udp(rte_mbuf *mbuf, flow_tuple &ft) {
@@ -120,14 +117,12 @@ public:
   }
 
   message *consume_pkt(rte_mbuf *mbuf, flow_tuple &ft) {
-    if (check_ether(mbuf))
-      strip_ether(mbuf);
-    else {
+    if (!check_ether(mbuf)){
       broken_packet(mbuf);
       return nullptr;
     }
     if (check_ip_cksum(mbuf))
-      strip_ip(mbuf, ft);
+      strip_ether_ip(mbuf, ft);
     else {
       broken_packet(mbuf);
       return nullptr;
