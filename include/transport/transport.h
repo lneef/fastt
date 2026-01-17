@@ -92,6 +92,7 @@ struct window {
     uint16_t rcvd = 0;
     while (!output.empty() && rcvd < bs) {
       f(output.front());
+      output.pop_front();
     }
     return rcvd;
   }
