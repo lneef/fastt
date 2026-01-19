@@ -6,10 +6,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <generic/rte_cycles.h>
 #include <getopt.h>
 #include <rte_eal.h>
 #include <rte_ether.h>
+#include <rte_mbuf.h>
 #include <rte_mempool.h>
 
 
@@ -86,7 +88,7 @@ int run(netconfig &conf) {
     memcpy(&sentt, msg->data(), sizeof(sentt));
     total += (now - sentt);
     ++pkts;
-    allocator->deallocate(msg);
+    rte_pktmbuf_free(msg);
   }
   auto us = static_cast<double>(rte_get_timer_hz()) / 1e6;
   double avg = static_cast<double>(total) / pkts;

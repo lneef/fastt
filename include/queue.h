@@ -3,9 +3,12 @@
 #include <memory>
 #include <vector>
 
-template <typename T> class indexable_queue {
+template<typename T>
+using Identity = T;
+
+template <typename T, template <typename> typename P = Identity> class queue_base {
 public:
-  indexable_queue(std::size_t size) : storage(size), capacity(size), mask(size - 1) {}
+  queue_base(std::size_t size) : storage(size), capacity(size), mask(size - 1) {}
   T* enqueue(auto&& ...args){
       if(head == ((tail + 1) & mask))
           return nullptr;
@@ -41,9 +44,9 @@ public:
       return (tail + capacity - head) & mask;
   }
 
-private:
+protected:
   std::vector<T> storage;
   std::size_t capacity;
   std::size_t mask;
-  std::size_t head = 0, tail = 0;
+  P<std::size_t> head = 0, tail = 0;
 };

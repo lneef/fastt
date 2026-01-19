@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <rte_ethdev.h>
 #include <rte_ether.h>
 #include <rte_mempool.h>
 #include <vector>
@@ -20,4 +21,7 @@ struct iface {
   uint16_t tx_queues, rx_queues;
   uint16_t port;
   netdev_iface get_slice(uint16_t idx);
+  ~iface() { 
+      rte_eth_dev_stop(port); 
+  }
 };

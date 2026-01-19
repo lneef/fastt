@@ -4,7 +4,6 @@
 #include "message.h"
 #include "packet_scheduler.h"
 #include "util.h"
-#include <absl/container/flat_hash_map.h>
 #include <cstdint>
 #include <rte_byteorder.h>
 #include <rte_ether.h>
@@ -16,9 +15,11 @@
 
 class packet_if {
   static constexpr uint16_t kdefaultTTL = 64;
+  static constexpr uint16_t kdefaultARPTableSize = 1024;
 
 public:
-  packet_if(packet_scheduler *scheduler, uint32_t sip, uint16_t port) : scheduler(scheduler), sip(sip) {
+  packet_if(packet_scheduler *scheduler, uint32_t sip, uint16_t port)
+      : arp_table(kdefaultARPTableSize), scheduler(scheduler), sip(sip) {
     rte_eth_macaddr_get(port, &smac);
   }
 
@@ -62,29 +63,27 @@ public:
     msg->l2_len = sizeof(rte_ether_hdr);
   }
 
-  void consume_pkt(message *msg, uint16_t sport, const con_config &tcon_config) {  
+  void consume_pkt(message *msg, uint16_t sport,
+                   const con_config &tcon_config) {
     auto *udp = udp_header(msg, sport, tcon_config.port);
     ip_header(msg, udp, sip, tcon_config.ip);
-    assert(arp.contains(tcon_config.ip));
-    eth_header(msg, smac, arp[tcon_config.ip]);
+    auto *addr = arp_table.lookup(tcon_config.ip);
+    assert(addr);
+    eth_header(msg, smac, *addr);
     FASTT_DUMP_PKT(msg, msg->len());
     scheduler->add_pkt(static_cast<rte_mbuf *>(msg));
   }
 
-  void consume_for_retransmission(message* msg){
-      scheduler->add_pkt(msg);
-  }
+  void consume_for_retransmission(message *msg) { scheduler->add_pkt(msg); }
 
   void add_mapping(uint32_t ip, rte_ether_addr &addr) {
-    auto [it, inserted] = arp.emplace(ip, rte_ether_addr());
-    if (inserted)
-      rte_ether_addr_copy(&addr, &it->second);
+    arp_table.emplace(ip, addr);
   }
 
-  void broken_packet(rte_mbuf *pkt) { 
-      FASTT_LOG_DEBUG("Got broken packet\n");
-      FASTT_DUMP_PKT(static_cast<message*>(pkt), pkt->data_len);
-      rte_pktmbuf_free(pkt); 
+  void broken_packet(rte_mbuf *pkt) {
+    FASTT_LOG_DEBUG("Got broken packet\n");
+    FASTT_DUMP_PKT(static_cast<message *>(pkt), pkt->data_len);
+    rte_pktmbuf_free(pkt);
   }
 
   bool check_ip_cksum(rte_mbuf *mbuf) {
@@ -100,9 +99,10 @@ public:
     return eth->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
   }
 
-  void strip_ether_ip(rte_mbuf *mbuf, flow_tuple& ft) {
-    auto *eth = rte_pktmbuf_mtod(mbuf, rte_ether_hdr*);
-    auto *ip = rte_pktmbuf_mtod_offset(mbuf, rte_ipv4_hdr *, sizeof(rte_ether_hdr));
+  void strip_ether_ip(rte_mbuf *mbuf, flow_tuple &ft) {
+    auto *eth = rte_pktmbuf_mtod(mbuf, rte_ether_hdr *);
+    auto *ip =
+        rte_pktmbuf_mtod_offset(mbuf, rte_ipv4_hdr *, sizeof(rte_ether_hdr));
     add_mapping(ip->src_addr, eth->src_addr);
     ft.sip = ip->src_addr;
     ft.dip = ip->dst_addr;
@@ -117,7 +117,7 @@ public:
   }
 
   message *consume_pkt(rte_mbuf *mbuf, flow_tuple &ft) {
-    if (!check_ether(mbuf)){
+    if (!check_ether(mbuf)) {
       broken_packet(mbuf);
       return nullptr;
     }
@@ -137,7 +137,7 @@ public:
   }
 
 private:
-  absl::flat_hash_map<uint32_t, rte_ether_addr> arp;
+  fixed_size_hash_table<uint32_t, rte_ether_addr> arp_table;
   rte_ether_addr smac;
   packet_scheduler *scheduler;
   uint32_t sip;

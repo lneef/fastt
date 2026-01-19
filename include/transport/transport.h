@@ -23,6 +23,7 @@
 #include <rte_ring_core.h>
 #include <tuple>
 #include <type_traits>
+#include <deque>
 
 #include "log.h"
 #include "message.h"

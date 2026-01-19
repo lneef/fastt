@@ -11,8 +11,6 @@
 #include <rte_mbuf_core.h>
 #include <rte_udp.h>
 
-#include <absl/container/flat_hash_map.h>
-
 #include "dev.h"
 #include "log.h"
 #include "message.h"
@@ -32,9 +30,8 @@ class connection {
 public:
   connection(message_allocator *allocator, packet_if *pkt_if,
              const con_config &target, uint16_t sport)
-      : allocator(allocator),
-        transport_impl(std::make_unique<transport>(allocator, pkt_if, sport, target)) {}
-
+      : allocator(allocator), transport_impl(std::make_unique<transport>(
+                                  allocator, pkt_if, sport, target)) {}
   void process_pkt(rte_mbuf *pkt);
   bool send_message(message *msg, uint16_t len);
   void acknowledge_all();
@@ -45,32 +42,44 @@ public:
   bool active() { return transport_impl->active(); }
 
 private:
+  friend class connection_manager;
   bool has_ready_message() const;
   message_allocator *allocator;
   std::unique_ptr<transport> transport_impl;
+
+public:
+  connection() = default;
+  connection *next;
+  connection *prev;
 };
 
 class connection_manager {
   static constexpr uint16_t kdefaultBurstSize = 32;
+  static constexpr uint16_t kdefaultFlowTableSize = 512;
 
 public:
   connection_manager(uint16_t port, uint16_t txq, uint16_t rxq, uint32_t sip,
                      std::shared_ptr<message_allocator> allocator)
-      : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
-        pkt_if(&scheduler, sip, port) {}
+      : flows(kdefaultFlowTableSize), allocator(allocator), dev(port, txq, rxq),
+        scheduler(&dev), pkt_if(&scheduler, sip, port) {
+    head.next = &tail;
+    head.prev = nullptr;
+    tail.next = nullptr;
+    tail.prev = &head;
+  }
 
   void handle_pkt(message *pkt, flow_tuple &ft) {
-    FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n",
-            ft.sip, rte_be_to_cpu_16(ft.sport));
+    FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n", ft.sip,
+                    rte_be_to_cpu_16(ft.sport));
     auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
     if (header->type == protocol::FT_INIT)
       register_request(pkt, ft);
     else {
-      auto *connection = lookUp(ft);
+      auto *connection = flows.lookup(ft);
       if (connection)
         connection->process_pkt(pkt);
-      else{
-        dump_pkt(pkt, pkt->len());  
+      else {
+        dump_pkt(pkt, pkt->len());
         rte_pktmbuf_free(pkt);
       }
     }
@@ -80,35 +89,29 @@ public:
     pkt_if.add_mapping(ip, mac);
   }
 
-  connection *lookUp(const flow_tuple &tuple) {
-    auto it = cons.find(tuple);  
-    if (it == cons.end())
-      return nullptr;
-    return it->second.get();
-  }
-
   connection *open_connection(const con_config &source,
                               const con_config &target) {
     flow_tuple ft(target.ip, source.ip, rte_cpu_to_be_16(target.port),
                   rte_cpu_to_be_16(source.port));
-    FASTT_LOG_DEBUG("Opened new connection to %d %d\n",
-            ft.sip, rte_be_to_cpu_16(ft.sport));
+    FASTT_LOG_DEBUG("Opened new connection to %d %d\n", ft.sip,
+                    rte_be_to_cpu_16(ft.sport));
     auto [it, inserted] =
-        cons.emplace(ft, std::make_unique<connection>(allocator.get(), &pkt_if,
-                                                      target, source.port));
+        flows.emplace(ft, allocator.get(), &pkt_if, target, source.port);
     if (!inserted)
       return nullptr;
-    it->second->open_connection();
+    it->open_connection();
+    intrusive_push_front(head, it);
+    assert(head.next == it);
     flush();
-    return it->second.get();
+    return it;
   }
 
   template <int N> uint16_t poll(poll_state<N> &events) {
     fetch_from_device();
     uint16_t i = 0;
-    for (auto it = cons.begin(), end = cons.end(); i < N && it != end; ++it) {
-      if (it->second->poll())
-        events.events[i++] = it->second.get();
+    for (auto it = head.next, end = &tail; i < N && it != end; ++it) {
+      if (it->poll())
+        events.events[i++] = it;
     }
     return i;
   }
@@ -129,33 +132,37 @@ public:
   }
 
   connection *accept_connection() {
-    if(connection_requests.empty())
-        return nullptr;
+    if (connection_requests.empty())
+      return nullptr;
     auto [pkt, ft] = connection_requests.front();
     auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.dport));
     connection_requests.pop_front();
     con->process_pkt(pkt);
-    if(inserted){
-        con->accept();
-        FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);
+    if (inserted) {
+      con->accept();
+      FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);
+      assert(head.next == con);
     }
     return con;
   }
-  std::pair<connection *, bool> add_connection(const flow_tuple &tuple, uint16_t port) {
-    auto [it, inserted] = cons.emplace(
-        tuple, std::make_unique<connection>(
-                   allocator.get(), &pkt_if,
-                   con_config{tuple.sip, rte_cpu_to_be_16(tuple.sport)}, port));
-    return {it->second.get(), inserted};
+  std::pair<connection *, bool> add_connection(const flow_tuple &tuple,
+                                               uint16_t port) {
+    auto [it, inserted] = flows.emplace(
+        tuple, allocator.get(), &pkt_if,
+        con_config{tuple.sip, rte_cpu_to_be_16(tuple.sport)}, port);
+    if (inserted)
+      intrusive_push_front(head, it);
+    return {it, inserted};
   }
 
   void flush() { scheduler.flush(); }
 
 private:
   std::deque<std::pair<message *, flow_tuple>> connection_requests;
-  absl::flat_hash_map<flow_tuple, std::unique_ptr<connection>> cons;
+  fixed_size_hash_table<flow_tuple, connection> flows;
   std::shared_ptr<message_allocator> allocator;
   netdev dev;
   packet_scheduler scheduler;
   packet_if pkt_if;
+  connection head, tail;
 };

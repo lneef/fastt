@@ -1,5 +1,4 @@
 #pragma once
-#include <absl/strings/internal/str_format/extension.h>
 #include <concepts>
 #include <cstdint>
 #include <message.h>
@@ -8,31 +7,10 @@
 
 #include "log.h"
 #include "message.h"
-#include "transport/indexable_queue.h"
+#include "queue.h"
+#include "util.h"
 
 static constexpr uint64_t min_seq = 1;
-
-template<typename T>
-void intrusive_push_front(T& sentinel, T* elem){
-    elem->next = sentinel.next;
-    sentinel.next->prev = elem;
-    elem->prev = &sentinel;
-    sentinel.next = elem;
-}
-
-template<typename T>
-T* intrusive_pop_back(T& sentinel){
-    auto *tail = sentinel.prev;
-    sentinel.prev = tail->prev;
-    tail->prev->next = &sentinel;
-    return tail;
-}
-
-template<typename T>
-void intrusive_remove(T* elem){
-    elem->prev->next = elem->next;
-    elem->next->prev = elem->prev;
-}
 
 static __inline std::pair<uint64_t, uint64_t>
 estimate_timeout(uint64_t rtt, uint64_t rtt_dv, uint64_t measured) {
@@ -70,6 +48,7 @@ struct sender_entry {
 
 template<auto adaptive_rto = true>
 class retransmission_handler {
+  using indexable_queue = queue_base<sender_entry>;  
   static constexpr uint16_t kQueuedPackets = 64;
   static constexpr uint64_t kMSecDiv = 1e3;
 public:
@@ -176,7 +155,7 @@ private:
         : rto(rto), entry(entry), seq(seq) {}
   };
   statistics stats;
-  indexable_queue<sender_entry> unacked_packets;
+  indexable_queue unacked_packets;
   sender_entry head_sentinel, tail_sentinel;
   uint32_t budget;
   uint64_t seq;
