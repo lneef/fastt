@@ -1,5 +1,4 @@
 #pragma once
-#include <absl/strings/internal/str_format/extension.h>
 #include <concepts>
 #include <cstdint>
 #include <message.h>
@@ -8,30 +7,10 @@
 
 #include "log.h"
 #include "message.h"
-#include "transport/indexable_queue.h"
+#include "queue.h"
+#include "util.h"
 
 static constexpr uint64_t min_seq = 1;
-
-template<typename T>
-void intrusive_push_front(T& sentinel, T* elem){
-    elem->next = sentinel.next;
-    elem->prev = &sentinel;
-    sentinel.next = elem;
-}
-
-template<typename T>
-T* intrusive_pop_back(T& sentinel){
-    auto *tail = sentinel.prev;
-    sentinel.prev = tail->prev;
-    tail->prev->next = &sentinel;
-    return tail;
-}
-
-template<typename T>
-void intrusive_remove(T* elem){
-    elem->prev->next = elem->next;
-    elem->next->prev = elem->prev;
-}
 
 static __inline std::pair<uint64_t, uint64_t>
 estimate_timeout(uint64_t rtt, uint64_t rtt_dv, uint64_t measured) {
@@ -67,16 +46,17 @@ struct sender_entry {
   }
 };
 
-template<auto adaptive_rto = false>
+template<auto adaptive_rto = true>
 class retransmission_handler {
+  using indexable_queue = queue_base<sender_entry>;  
   static constexpr uint16_t kQueuedPackets = 64;
-
+  static constexpr uint64_t kMSecDiv = 1e3;
 public:
   struct statistics {
     uint64_t acked, retransmitted, rtt;
     statistics() : acked(0), retransmitted(0) {}
   };
-  retransmission_handler(uint64_t rto = rte_get_timer_cycles())
+  retransmission_handler(uint64_t rto = rte_get_timer_hz() / kMSecDiv)
       : unacked_packets(kQueuedPackets), budget(1), seq(min_seq), rtt(),
         rtt_dv(), rto(rto) {
             head_sentinel.next = &tail_sentinel;
@@ -87,7 +67,7 @@ public:
 
   uint64_t cleanup_acked_pkts(uint64_t seq, uint64_t now) {
     uint64_t burst_rtt = 0;
-    while (!unacked_packets.empty() && unacked_packets.front()->seq < seq) {
+    while (!unacked_packets.empty() && unacked_packets.front()->seq <= seq) {
       auto *desc = unacked_packets.front();
       if (!desc->retransmitted) {
         auto tsc_d = now - *desc->packet->get_ts();
@@ -111,19 +91,6 @@ public:
     return burst_rtt;
   }
 
-  bool record_control_pkt(message* msg){
-    if (unacked_packets.full() || budget == 0)
-      return false;
-    msg->inc_refcnt();
-    *msg->get_ts() = 0;
-    auto *entry = unacked_packets.enqueue(msg, min_seq, false);
-    FASTT_LOG_DEBUG("Enqueued ctrl packet: %lu\n", min_seq);
-    intrusive_push_front(head_sentinel, entry);
-    entry->next = head_sentinel.next;
-    entry->prev = &head_sentinel;
-    return true;
-  }
-
   bool record_pkt(message *msg,
                   std::invocable<message *, uint64_t> auto &&ctor) {
     if (unacked_packets.full() || budget == 0)
@@ -134,6 +101,7 @@ public:
     *msg->get_ts() = 0;
     auto *entry = unacked_packets.enqueue(msg, seq++, false);
     intrusive_push_front(head_sentinel, entry);
+    FASTT_LOG_DEBUG("Enqueue pkt with %lu new budget %u\n", seq - 1, budget);
     return true;
   }
 
@@ -170,8 +138,9 @@ public:
 
   bool all_acked() const { return least_unacked_pkt == seq; }
 
-  void update_budget(uint16_t budget, uint64_t ack) {
-    budget += (budget - (seq - ack));
+  void update_budget(uint16_t granted, uint64_t ack) {
+    budget = (granted - (seq - ack - 1));
+    FASTT_LOG_DEBUG("Got new capacity %u\n", budget);
   }
 
   const statistics &get_stats() const { return stats; }
@@ -186,7 +155,7 @@ private:
         : rto(rto), entry(entry), seq(seq) {}
   };
   statistics stats;
-  indexable_queue<sender_entry> unacked_packets;
+  indexable_queue unacked_packets;
   sender_entry head_sentinel, tail_sentinel;
   uint32_t budget;
   uint64_t seq;

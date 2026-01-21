@@ -13,5 +13,5 @@ void dump_pkt(message *msg, uint16_t len);
 #define FASTT_DUMP_PKT(msg, len) dump_pkt(msg, len)
 #else
 #define FASTT_LOG_DEBUG(...)
-#define FASST_DUMP_PKT(msg, len)
+#define FASTT_DUMP_PKT(msg, len)
 #endif // DEBUG

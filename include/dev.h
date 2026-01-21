@@ -1,5 +1,6 @@
 #pragma once
 
+#include "log.h"
 #include "message.h"
 #include <cstdint>
 #include <generic/rte_cycles.h>
@@ -27,7 +28,7 @@ public:
     auto rcvd =
         rte_eth_rx_burst(port, rxq, pkts.data(), kDefaultInputBurstSize);
     for (uint16_t i = 0; i < rcvd; ++i) {
-      cb(pkts[i]);
+      cb(static_cast<message*>(pkts[i]));
     }
   }
 

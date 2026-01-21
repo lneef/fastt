@@ -17,11 +17,13 @@
 #include <rte_lcore.h>
 
 #include <rte_mbuf.h>
+#include <rte_mbuf_core.h>
 #include <rte_mempool.h>
 #include <rte_ring.h>
 #include <rte_ring_core.h>
 #include <tuple>
 #include <type_traits>
+#include <deque>
 
 #include "log.h"
 #include "message.h"
@@ -66,7 +68,7 @@ struct window {
            (seq <= least_in_window + mask && wd[index(seq)]);
   }
 
-  bool has_ready_messages(){ return !output.empty(); }
+  bool has_ready_messages() { return !output.empty(); }
 
   bool beyond_window(uint64_t seq) { return seq > least_in_window + mask; }
 
@@ -87,12 +89,14 @@ struct window {
     return least_in_window - 1;
   }
 
-  uint16_t consume_messages(std::invocable<message *> auto &&f, uint16_t bs){
-      uint16_t rcvd = 0;
-      while(!output.empty() && rcvd < bs){
-          f(output.front());
-      }
-      return rcvd;
+  uint16_t consume_messages(std::invocable<message *> auto &&f, uint16_t bs) {
+    uint16_t rcvd = 0;
+    while (!output.empty() && rcvd < bs) {
+      f(output.front());
+      output.pop_front();
+      ++rcvd;
+    }
+    return rcvd;
   }
 
   bool inside(uint64_t seq) {
@@ -120,7 +124,7 @@ struct window {
 
   std::array<bool, kMaxOustandingPackets> wd{};
   std::array<message *, kMaxOustandingPackets> messages{};
-  std::deque<message*> output;
+  std::deque<message *> output;
   std::size_t front, mask;
   uint64_t least_in_window;
   uint64_t max_acked = 0;
@@ -175,12 +179,11 @@ struct ack_context {
   ack_context(O *&&...observers) : observers((observers)...) {}
 };
 
-enum class connection_state{
-    ESTABLISHING, ESTABLISHED, DISCONNECTING
-};
+enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
 
 struct transport {
   window recv_wd;
+  con_config target;
   retransmission_handler<> rt_handler;
   ack_scheduler scheduler;
   ack_context<ack_scheduler> ack_ctx;
@@ -193,16 +196,19 @@ struct transport {
     uint64_t with_ecn = 0;
   } stats;
 
-  transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport)
-      : recv_wd(min_seq), rt_handler(), scheduler(), ack_ctx(&scheduler),
-        allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
+  transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
+            const con_config &target)
+      : recv_wd(min_seq), target(target), rt_handler(), scheduler(),
+        ack_ctx(&scheduler), allocator(allocator), pkt_if(pkt_sink),
+        sport(sport) {}
 
   void probe_timeout() {
     rt_handler.probe_retransmit(
         [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
   }
 
-  bool send_pkt(message *pkt, const con_config &target) {
+  bool send_pkt(message *pkt) {
+    assert(cstate == connection_state::ESTABLISHED);
     probe_timeout();
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
@@ -226,7 +232,7 @@ struct transport {
             rt_stats.rtt};
   }
 
-  bool send_acks(const con_config &target) {  
+  bool send_acks() {
     auto acked = recv_wd.advance();
     if (!scheduler.ack_pending(acked))
       return false;
@@ -238,13 +244,13 @@ struct transport {
   }
 
   bool process_pkt(message *pkt) {
-    auto *hdr = rte_pktmbuf_mtod(pkt, protocol::ft_header*);
+    auto *hdr = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
       if (hdr->ack)
         rt_handler.acknowledge(hdr->ack, hdr->wnd);
       ack_ctx.process_seq(hdr->seq);
-      if (recv_wd.is_set(hdr->seq)) {   
+      if (recv_wd.is_set(hdr->seq)) {
         rte_pktmbuf_free(pkt);
         return false;
       } else
@@ -253,24 +259,31 @@ struct transport {
     }
     case protocol::pkt_type::FT_ACK: {
       rt_handler.acknowledge(hdr->ack, hdr->wnd);
-      if(cstate == connection_state::ESTABLISHING)
-          cstate = connection_state::ESTABLISHED;
       rte_pktmbuf_free(pkt);
       break;
     }
     case protocol::pkt_type::FT_INIT: {
-      if(recv_wd.is_set(hdr->seq)){
-          rte_pktmbuf_free(pkt);                                    
-          return false;
-      }else
-          recv_wd.set(hdr->seq, pkt);
+      if (recv_wd.is_set(hdr->seq)) {
+        rte_pktmbuf_free(pkt);
+        return false;
+      } else
+        recv_wd.set(hdr->seq, pkt);
+      setup_after_init();
+      cstate = connection_state::ESTABLISHED;
       break;
     }
-    case protocol::pkt_type::FT_INIT_ACK:{
-        rt_handler.acknowledge(hdr->seq, hdr->wnd);
-        cstate = connection_state::ESTABLISHED;
+    case protocol::pkt_type::FT_INIT_ACK: {
+      rt_handler.acknowledge(hdr->ack, hdr->wnd);
+      ack_ctx.process_seq(hdr->seq);
+      if (recv_wd.is_set(hdr->seq)) {
         rte_pktmbuf_free(pkt);
-        break;
+        return false;
+      } else {
+        recv_wd.set(hdr->seq, pkt);
+      }
+      setup_after_init();
+      cstate = connection_state::ESTABLISHED;
+      break;
     }
     default:
       rte_pktmbuf_free(pkt);
@@ -279,34 +292,49 @@ struct transport {
     return true;
   }
 
-  void open_connection(const con_config& target){
-      auto *msg = protocol::prepare_init_header(allocator, min_seq);
-      bool retval = rt_handler.record_control_pkt(msg); 
-      assert(retval);
-      pkt_if->consume_pkt(msg, sport, target);
+  void open_connection() {
+    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
+    bool retval = rt_handler.record_pkt(msg, [](message *msg, uint64_t seq) {
+      protocol::prepare_init_header(msg, seq);
+    });
+    assert(retval);
+    auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
+    assert(hdr->type == protocol::FT_INIT);
+    FASTT_LOG_DEBUG("Sent init header to peer %u %u\n", target.ip, target.port);
+    pkt_if->consume_pkt(msg, sport, target);
   }
 
-  void accept_connection(const con_config& target){
-      recv_wd.advance();
-      recv_wd.consume_messages([](message* msg){ rte_pktmbuf_free(msg); }, 1);
-      auto *msg = protocol::prepare_init_ack_header(allocator, min_seq, recv_wd.capacity());
-      bool retval = rt_handler.record_control_pkt(msg);
-      assert(retval);
-      pkt_if->consume_pkt(msg, sport, target);
+  void accept_connection() {
+    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
+    bool retval = rt_handler.record_pkt(
+        msg, [budget = recv_wd.capacity()](message *msg, uint64_t seq) {
+          protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
+        });
+    FASTT_LOG_DEBUG("Sent ack for init");
+    assert(retval);
+    pkt_if->consume_pkt(msg, sport, target);
   }
 
-  bool poll(){
-      return recv_wd.has_ready_messages();
+  bool poll() {
+    recv_wd.advance();
+    return recv_wd.has_ready_messages();
   }
 
-  bool active(){ return connection_state::ESTABLISHED == cstate; }
+  bool active() { return connection_state::ESTABLISHED == cstate; }
 
   uint16_t receive_messages(message **messages, uint16_t bs) {
     probe_timeout();
+    recv_wd.advance();
     return recv_wd.consume_messages(
         [messages, i = 0](message *msg) mutable {
+          msg->shrink_headroom(sizeof(protocol::ft_header));
           messages[i++] = msg;
         },
         bs);
+  }
+
+  void setup_after_init() {
+    recv_wd.advance();
+    recv_wd.consume_messages([](message *msg) { rte_pktmbuf_free(msg); }, 1);
   }
 };
