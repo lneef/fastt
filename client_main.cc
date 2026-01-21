@@ -1,7 +1,10 @@
 #include "client.h"
 #include "iface.h"
+#include "kv.h"
 #include "message.h"
+#include "transaction.h"
 #include <arpa/inet.h>
+#include <atomic>
 #include <bits/getopt_core.h>
 #include <cstdint>
 #include <cstdlib>
@@ -10,17 +13,18 @@
 #include <getopt.h>
 #include <iostream>
 #include <memory>
+#include <random>
 #include <rte_common.h>
 #include <rte_eal.h>
 #include <rte_ether.h>
 #include <rte_launch.h>
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
+#include <rte_mbuf_core.h>
 #include <rte_mempool.h>
 #include <vector>
-#include <atomic>
 
-alignas(RTE_CACHE_LINE_MIN_SIZE)  std::atomic<double> lat = 0;
+alignas(RTE_CACHE_LINE_MIN_SIZE) std::atomic<double> lat = 0;
 
 struct netconfig {
   rte_ether_addr dmac;
@@ -78,35 +82,33 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 
 static constexpr auto dur = 10000;
 static constexpr uint16_t dataSize = 64;
-
 static int lcore_fn(void *arg) {
+  std::random_device dev;
+  std::mt19937 rng(dev());
+  std::uniform_int_distribution<std::mt19937::result_type> dist(INT64_MIN,
+                                                                INT64_MAX);
   auto *adapter = static_cast<lcore_adapter *>(arg);
+  transaction_queue queue{512};
   auto me = rte_lcore_index(rte_lcore_id());
   auto *con = adapter->connections[me];
   auto &allocator = adapter->allocator[me];
   auto &cif = *adapter->cifs[me];
   auto pkts = 0;
-  uint64_t sentt = 0;
-  uint64_t total = 0;
+  uint64_t now = rte_get_timer_cycles();
+
+  kv_proxy kv(&cif, con);
   while (pkts < dur) {
-    auto *msg = allocator->alloc_message(dataSize);
-    auto *data = static_cast<char *>(msg->data());
-    uint64_t now = rte_get_timer_cycles();
-    memcpy(data, &now, sizeof(now));
-    cif.send_message(con, msg, msg->len());
-    cif.flush();
-    msg = nullptr;
-    do {
-      msg = cif.recv_message(con);
-      cif.flush();
-    } while (!msg);
-    now = rte_get_timer_cycles();
-    memcpy(&sentt, msg->data(), sizeof(sentt));
-    total += (now - sentt);
-    ++pkts;
-    rte_pktmbuf_free(msg);
+    message* msg;  
+    auto *req = allocator->alloc_message(dataSize);
+    create_put_request(req, dist(rng), dist(rng));  
+    auto resp = kv.send_request(con, req, queue, dataSize);
+    kv.flush();
+    resp->wait_for_completion(msg);
+    allocator->deallocate(msg);
   }
-  lat += total / (static_cast<double>(rte_get_timer_hz()) / 1e6);
+
+  auto end = rte_get_timer_cycles();
+  lat += (end - now) / (static_cast<double>(rte_get_timer_hz()) / 1e6);
   return 0;
 }
 
@@ -128,10 +130,9 @@ int run(netconfig &conf) {
 
     auto [port, txq, rxq, pool] = ifc->get_slice(0);
     adpater.allocator[i] = std::make_shared<message_allocator>("pool", 8095);
-    adpater.cifs[i] = std::make_unique<client_iface>(port, txq, rxq,
-                                             adpater.allocator[i],
-                                             con_config{conf.sip, conf.sport});
-    auto& cif = adpater.cifs[i];
+    adpater.cifs[i] = std::make_unique<client_iface>(
+        port, txq, rxq, adpater.allocator[i], con_config{conf.sip, conf.sport});
+    auto &cif = adpater.cifs[i];
     auto *con = cif->open_connection({conf.dip, conf.dport}, conf.dmac);
     if (!con)
       return -1;
