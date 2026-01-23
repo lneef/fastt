@@ -182,6 +182,7 @@ struct ack_context {
 enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
 
 struct transport {
+  intrusive_node<transport> node;  
   window recv_wd;
   con_config target;
   retransmission_handler<> rt_handler;
@@ -198,7 +199,7 @@ struct transport {
 
   transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
             const con_config &target)
-      : recv_wd(min_seq), target(target), rt_handler(), scheduler(),
+      : node(this), recv_wd(min_seq), target(target), rt_handler(), scheduler(),
         ack_ctx(&scheduler), allocator(allocator), pkt_if(pkt_sink),
         sport(sport) {}
 
@@ -321,6 +322,13 @@ struct transport {
   }
 
   bool active() { return connection_state::ESTABLISHED == cstate; }
+
+  template<typename F>
+  void receive_messages(F&& f){
+      probe_timeout();
+      recv_wd.advance();
+      recv_wd.consume_messages(f, 32);
+  }    
 
   uint16_t receive_messages(message **messages, uint16_t bs) {
     probe_timeout();

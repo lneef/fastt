@@ -16,15 +16,12 @@
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
+#include "session.h"
 #include "transport/transport.h"
 #include "util.h"
 
 class iface;
 class connection;
-
-template <int N> struct poll_state {
-  std::array<connection *, N> events;
-};
 
 class connection {
 public:
@@ -41,11 +38,32 @@ public:
   bool poll() const { return has_ready_message(); }
   bool active() { return transport_impl->active(); }
 
+  void process_incoming() {
+    transport_impl->receive_messages([&](message *msg) {
+      auto *t = input.handle_input(msg);
+      if (t->state == transaction_state::DONE) {
+        incoming.push_back(t);
+        t->mark_inprogess();
+      }
+    });
+    transport_impl->send_acks();
+  }
+
+  template <typename F> void process_incoming_transaction(F &&cb) {
+    bool term = false;
+    while (!incoming.empty() && !term) {
+      term = cb(incoming.front());
+      incoming.pop_front();
+    }
+  }
+
 private:
   friend class connection_manager;
   bool has_ready_message() const;
   message_allocator *allocator;
   std::unique_ptr<transport> transport_impl;
+  transaction_manager input;
+  std::deque<transaction *> incoming;
 
 public:
   connection() = default;
@@ -106,14 +124,12 @@ public:
     return it;
   }
 
-  template <int N> uint16_t poll(poll_state<N> &events) {
+  template <typename F> void poll(F &&cb) {
     fetch_from_device();
-    uint16_t i = 0;
-    for (auto it = head.next, end = &tail; i < N && it != end; ++it) {
-      if (it->poll())
-        events.events[i++] = it;
+    for (auto it = head.next, end = &tail; it != end; ++it) {
+      it->process_incoming();
+      it->process_incoming_transaction(cb);
     }
-    return i;
   }
 
   void fetch_from_device() {

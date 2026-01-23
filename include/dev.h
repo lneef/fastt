@@ -3,14 +3,13 @@
 #include "log.h"
 #include "message.h"
 #include <cstdint>
-#include <generic/rte_cycles.h>
+#include <rte_cycles.h>
 #include <rte_ethdev.h>
 
 #include <array>
 
 class netdev {
   static constexpr uint16_t kDefaultInputBurstSize = 32;
-
 public:
   netdev(uint16_t port, uint16_t txq, uint16_t rxq)
       : port(port), txq(txq), rxq(rxq) {};

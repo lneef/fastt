@@ -1,6 +1,4 @@
 #pragma once
-#include <algorithm>
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <rte_ether.h>
@@ -69,53 +67,72 @@ static inline uint32_t jhash_3words(uint32_t a, uint32_t b, uint32_t c,
   __jhash_final(a, b, c);
   return c;
 }
+
 //-------------------------------------------------------------------------------
-
-template<typename T>
-void intrusive_push_front(T& sentinel, T* elem){
-    elem->next = sentinel.next;
-    sentinel.next->prev = elem;
-    elem->prev = &sentinel;
-    sentinel.next = elem;
+template <typename T> void intrusive_push_front(T &sentinel, T *elem) {
+  elem->next = sentinel.next;
+  sentinel.next->prev = elem;
+  elem->prev = &sentinel;
+  sentinel.next = elem;
 }
 
-template<typename T>
-T* intrusive_pop_back(T& sentinel){
-    auto *tail = sentinel.prev;
-    sentinel.prev = tail->prev;
-    tail->prev->next = &sentinel;
+template <typename T> T *intrusive_pop_back(T &sentinel) {
+  auto *tail = sentinel.prev;
+  sentinel.prev = tail->prev;
+  tail->prev->next = &sentinel;
+  return tail;
+}
+
+template <typename T> void intrusive_remove(T *elem) {
+  elem->prev->next = elem->next;
+  elem->next->prev = elem->prev;
+}
+
+template <typename T> struct intrusive_node {
+  T *elem;
+  intrusive_node<T> *next;
+  intrusive_node<T> *prev;
+  intrusive_node(T *elem) : elem(elem), next(nullptr), prev(nullptr) {}
+
+  void intrusive_push_front(intrusive_node<T> *elem) {
+    elem->next = next;
+    next->prev = elem;
+    elem->prev = this;
+    next = elem;
+  }
+
+  T *intrusive_pop_back() {
+    auto *tail = prev;
+    prev = tail->prev;
+    tail->prev->next = this;
     return tail;
-}
+  }
 
-template<typename T>
-void intrusive_remove(T* elem){
+  void intrusive_remove(intrusive_node<T> *elem) {
     elem->prev->next = elem->next;
     elem->next->prev = elem->prev;
-}
+  }
+};
 
 struct flow_tuple {
   uint32_t sip, dip;
-  uint16_t sport, dport; 
+  uint16_t sport, dport;
 
   friend bool operator==(const flow_tuple &lhs, const flow_tuple &rhs);
 };
 
-template<typename T>
-inline uint32_t calc_hash(const T& key);
+template <typename T> inline uint32_t calc_hash(const T &key);
 
-template<>
-inline uint32_t calc_hash<flow_tuple>(const flow_tuple& tuple){
-    return jhash_3words(tuple.sip, tuple.dip,
-                        tuple.sport | (tuple.dport) << 16); 
+template <> inline uint32_t calc_hash<flow_tuple>(const flow_tuple &tuple) {
+  return jhash_3words(tuple.sip, tuple.dip, tuple.sport | (tuple.dport) << 16);
 }
 
-template<>
-inline uint32_t calc_hash<uint32_t>(const uint32_t& val){
-    return jhash_3words(val, 0, 0);
+template <> inline uint32_t calc_hash<uint32_t>(const uint32_t &val) {
+  return jhash_3words(val, 0, 0);
 }
 
 template <typename K, typename V> struct fixed_size_hash_table {
-  using hash_t = uint32_t;  
+  using hash_t = uint32_t;
   struct entry_t {
     bool occupied;
     K key;
@@ -127,7 +144,7 @@ template <typename K, typename V> struct fixed_size_hash_table {
   uint32_t mask;
 
   V *lookup(const K &key) {
-    auto i = calc_hash(key) & mask;  
+    auto i = calc_hash(key) & mask;
     auto searched = 0u;
     for (; searched < table.size(); i = (i + 1) & mask, ++searched) {
       if (!table[i].occupied)
@@ -138,8 +155,8 @@ template <typename K, typename V> struct fixed_size_hash_table {
     return nullptr;
   }
 
-  template <typename ...Args>
-  std::pair<V *, bool> emplace(const K& key, Args&& ...args) {
+  template <typename... Args>
+  std::pair<V *, bool> emplace(const K &key, Args &&...args) {
     auto i = calc_hash(key) & mask;
     auto searched = 0u;
     for (; searched < table.size(); i = (i + 1) & mask, ++searched) {
@@ -156,8 +173,7 @@ template <typename K, typename V> struct fixed_size_hash_table {
     return {nullptr, false};
   }
 
-  fixed_size_hash_table(std::size_t size)
-      : table(size),  mask(size - 1) {}
+  fixed_size_hash_table(std::size_t size) : table(size), mask(size - 1) {}
 };
 
 struct con_config {
