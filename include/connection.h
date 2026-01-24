@@ -12,63 +12,72 @@
 #include <rte_udp.h>
 
 #include "dev.h"
-#include "log.h"
+#include "debug.h"
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
-#include "session.h"
+#include "transport/slot.h"
 #include "transport/transport.h"
 #include "util.h"
 
 class iface;
-class connection;
+class connection_manager;
 
 class connection {
+  static constexpr uint16_t kMaxTransactionPerConnection = 32;
+
 public:
   connection(message_allocator *allocator, packet_if *pkt_if,
-             const con_config &target, uint16_t sport)
+             const con_config &target, uint16_t sport,
+             connection_manager *manager, bool is_client)
       : allocator(allocator), transport_impl(std::make_unique<transport>(
-                                  allocator, pkt_if, sport, target)) {}
+                                  allocator, pkt_if, sport, target)),
+      manager(manager) {
+            slots.reserve(kMaxTransactionPerConnection);
+            for(uint16_t i = 0; i < kMaxTransactionPerConnection; ++i)
+                slots.emplace_back(i, transport_impl.get(), is_client);
+        }
   void process_pkt(rte_mbuf *pkt);
-  bool send_message(message *msg, uint16_t len);
   void acknowledge_all();
   void accept();
   uint16_t receive_message(message **msgs, uint16_t cnt);
   void open_connection();
-  bool poll() const { return has_ready_message(); }
+
   bool active() { return transport_impl->active(); }
+
+  intrusive_list_t<transaction_slot>& get_inprogress() { return inprogress; }
 
   void process_incoming() {
     transport_impl->receive_messages([&](message *msg) {
-      auto *t = input.handle_input(msg);
-      if (t->state == transaction_state::DONE) {
-        incoming.push_back(t);
-        t->mark_inprogess();
-      }
+      auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
+      slots[hdr->msg_id].handle_incoming(msg, hdr->fini);
+      slots[hdr->msg_id].queue_for_execution(inprogress);
+      if (hdr->fini)
+        free_slots.push_back(hdr->msg_id);
     });
-    transport_impl->send_acks();
   }
 
-  template <typename F> void process_incoming_transaction(F &&cb) {
-    bool term = false;
-    while (!incoming.empty() && !term) {
-      term = cb(incoming.front());
-      incoming.pop_front();
-    }
+  transaction_slot *start_transaction() {
+    if (free_slots.empty())
+      return nullptr;
+    auto slot_id = free_slots.front();
+    free_slots.pop_front();
+    return &slots[slot_id];
   }
+
+  connection_manager *get_manager() { return manager; }
 
 private:
   friend class connection_manager;
-  bool has_ready_message() const;
   message_allocator *allocator;
   std::unique_ptr<transport> transport_impl;
-  transaction_manager input;
-  std::deque<transaction *> incoming;
-
+  std::vector<transaction_slot> slots;
+  intrusive_list_t<transaction_slot, &transaction_slot::link> inprogress;
+  std::deque<uint16_t> free_slots;
+  connection_manager *manager;
 public:
-  connection() = default;
-  connection *next;
-  connection *prev;
+  list_hook link;
+
 };
 
 class connection_manager {
@@ -76,15 +85,11 @@ class connection_manager {
   static constexpr uint16_t kdefaultFlowTableSize = 512;
 
 public:
-  connection_manager(uint16_t port, uint16_t txq, uint16_t rxq, uint32_t sip,
-                     std::shared_ptr<message_allocator> allocator)
+  connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
+                     uint32_t sip, std::shared_ptr<message_allocator> allocator)
       : flows(kdefaultFlowTableSize), allocator(allocator), dev(port, txq, rxq),
-        scheduler(&dev), pkt_if(&scheduler, sip, port) {
-    head.next = &tail;
-    head.prev = nullptr;
-    tail.next = nullptr;
-    tail.prev = &head;
-  }
+        scheduler(&dev), pkt_if(&scheduler, sip, port), active(),
+        is_client(is_client) {}
 
   void handle_pkt(message *pkt, flow_tuple &ft) {
     FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n", ft.sip,
@@ -95,7 +100,7 @@ public:
     else {
       auto *connection = flows.lookup(ft);
       if (connection)
-        connection->process_pkt(pkt);
+        (*connection)->process_pkt(pkt);
       else {
         dump_pkt(pkt, pkt->len());
         rte_pktmbuf_free(pkt);
@@ -113,22 +118,24 @@ public:
                   rte_cpu_to_be_16(source.port));
     FASTT_LOG_DEBUG("Opened new connection to %d %d\n", ft.sip,
                     rte_be_to_cpu_16(ft.sport));
-    auto [it, inserted] =
-        flows.emplace(ft, allocator.get(), &pkt_if, target, source.port);
+    auto [it, inserted] = flows.emplace(
+        ft, std::make_unique<connection>(allocator.get(), &pkt_if, target,
+                                         source.port, this, is_client));
     if (!inserted)
       return nullptr;
-    it->open_connection();
-    intrusive_push_front(head, it);
-    assert(head.next == it);
+    it->get()->open_connection();
+    active.push_front(*it->get());
     flush();
-    return it;
+    return it->get();
   }
 
   template <typename F> void poll(F &&cb) {
     fetch_from_device();
-    for (auto it = head.next, end = &tail; it != end; ++it) {
-      it->process_incoming();
-      it->process_incoming_transaction(cb);
+    accept_connection();
+    for (auto &con : active) {
+      con.process_incoming();
+      for (auto &ts : con.get_inprogress())
+        cb(ts);
     }
   }
 
@@ -157,28 +164,30 @@ public:
     if (inserted) {
       con->accept();
       FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);
-      assert(head.next == con);
     }
     return con;
   }
   std::pair<connection *, bool> add_connection(const flow_tuple &tuple,
                                                uint16_t port) {
     auto [it, inserted] = flows.emplace(
-        tuple, allocator.get(), &pkt_if,
-        con_config{tuple.sip, rte_cpu_to_be_16(tuple.sport)}, port);
+        tuple, std::make_unique<connection>(
+                   allocator.get(), &pkt_if,
+                   con_config{tuple.sip, rte_cpu_to_be_16(tuple.sport)}, port,
+                   this, is_client));
     if (inserted)
-      intrusive_push_front(head, it);
-    return {it, inserted};
+      active.push_front(*it->get());
+    return {it->get(), inserted};
   }
 
   void flush() { scheduler.flush(); }
 
 private:
   std::deque<std::pair<message *, flow_tuple>> connection_requests;
-  fixed_size_hash_table<flow_tuple, connection> flows;
+  fixed_size_hash_table<flow_tuple, std::unique_ptr<connection>> flows;
   std::shared_ptr<message_allocator> allocator;
   netdev dev;
   packet_scheduler scheduler;
   packet_if pkt_if;
-  connection head, tail;
+  intrusive_list_t<connection> active;
+  bool is_client;
 };

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "log.h"
+#include "debug.h"
 #include "message.h"
 #include "packet_scheduler.h"
 #include "util.h"

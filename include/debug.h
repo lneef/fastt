@@ -15,3 +15,4 @@ void dump_pkt(message *msg, uint16_t len);
 #define FASTT_LOG_DEBUG(...)
 #define FASTT_DUMP_PKT(msg, len)
 #endif // DEBUG
+

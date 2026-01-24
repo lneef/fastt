@@ -101,9 +101,10 @@ static int lcore_fn(void *arg) {
     message* msg;  
     auto *req = allocator->alloc_message(dataSize);
     create_put_request(req, dist(rng), dist(rng));  
-    auto resp = kv.send_request(con, req, queue, dataSize);
+    auto resp = kv.send_request(con, req, queue);
     kv.flush();
-    resp->wait_for_completion(msg);
+    auto handle = resp->wait_for_completion();
+    msg = handle.slot->rx_if.read();
     allocator->deallocate(msg);
   }
 

@@ -51,14 +51,13 @@ inline void create_put_request(message* msg, int64_t key, int64_t val){
     kv_req->payload.val = val;
 }
 
-struct response_proxy;
+struct transaction_proxy;
 
 class kv_proxy{
     public:
         kv_proxy(client_iface* ifc, connection* con): ifc(ifc), con(con){}
  
-        message *recv_completion(connection *con);
-        std::unique_ptr<response_proxy> send_request(connection* con, message* msg, transaction_queue& q, uint16_t len);
+        std::unique_ptr<transaction_proxy> send_request(connection* con, message* msg, transaction_queue& q);
         void flush(){ ifc->flush(); }
     private:
             client_iface* ifc;

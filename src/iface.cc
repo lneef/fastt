@@ -1,5 +1,5 @@
 #include "iface.h"
-#include "log.h"
+#include "debug.h"
 #include "message.h"
 #include <cstdint>
 #include <rte_ethdev.h>
@@ -7,10 +7,12 @@
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
+#include <rte_timer.h>
 #include <tuple>
 
 int fastt::init() {
   FASTT_LOG_DEBUG("init fasst\n");
+  rte_timer_subsystem_init();
   return message::init();
 }
 

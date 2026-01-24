@@ -1,13 +1,7 @@
 #pragma once
 
-#include <algorithm>
 #include <cassert>
-#include <concepts>
-#include <cstddef>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <limits>
 #include <message.h>
 #include <rte_byteorder.h>
 #include <rte_cycles.h>
@@ -21,118 +15,15 @@
 #include <rte_mempool.h>
 #include <rte_ring.h>
 #include <rte_ring_core.h>
-#include <tuple>
-#include <type_traits>
-#include <deque>
 
-#include "log.h"
+#include "debug.h"
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
+#include "window.h"
 
 #include "retransmission_handler.h"
 #include "util.h"
-
-struct receiver_entry {
-  uint64_t seq;
-  receiver_entry() : seq(0) {}
-};
-
-template <typename D> struct ack_observer {
-  void process_ack(uint64_t ack_seq, uint64_t now) {
-    static_cast<D *>(this)->process_ack_impl(ack_seq, now);
-  }
-};
-
-struct window {
-  static constexpr uint16_t kMaxOustandingPackets = 32;
-  window(uint64_t min_seq)
-      : front(0), mask(kMaxOustandingPackets - 1), least_in_window(min_seq),
-        rtt_est(std::numeric_limits<uint64_t>::max()) {}
-
-  uint64_t get_last_acked_packet() const { return least_in_window - 1; }
-
-  bool set(uint64_t seq, message *msg) {
-    auto i = index(seq);
-    if (beyond_window(seq) || wd[i])
-      return false;
-    if (seq > max_acked)
-      max_acked = seq;
-    wd[i] = true;
-    messages[i] = msg;
-    return true;
-  }
-
-  bool is_set(uint64_t seq) {
-    return seq < least_in_window ||
-           (seq <= least_in_window + mask && wd[index(seq)]);
-  }
-
-  bool has_ready_messages() { return !output.empty(); }
-
-  bool beyond_window(uint64_t seq) { return seq > least_in_window + mask; }
-
-  uint64_t advance() {
-    assert(mask + 1 == wd.size());
-    while (wd[front]) {
-      if ((least_in_window & mask) == 0) {
-        last_round = round;
-        round = rte_get_timer_cycles();
-        did_resize_in_round = false;
-        estimate_rtt();
-      }
-      wd[front] = false;
-      output.push_back(messages[front]);
-      front = (front + 1) & mask;
-      ++least_in_window;
-    }
-    return least_in_window - 1;
-  }
-
-  uint16_t consume_messages(std::invocable<message *> auto &&f, uint16_t bs) {
-    uint16_t rcvd = 0;
-    while (!output.empty() && rcvd < bs) {
-      f(output.front());
-      output.pop_front();
-      ++rcvd;
-    }
-    return rcvd;
-  }
-
-  bool inside(uint64_t seq) {
-    return seq >= least_in_window && seq <= least_in_window + mask;
-  }
-
-  uint32_t capacity() const { return least_in_window + mask - max_acked; }
-
-  std::size_t __inline index(std::size_t i) {
-    assert(i >= least_in_window);
-    return (i - least_in_window + front) & mask;
-  }
-
-  bool try_reserve(uint64_t seq) {
-    assert(seq >= least_in_window);
-    seq -= least_in_window;
-    return seq <= mask;
-  }
-
-  void estimate_rtt() { rtt_est = std::min(rtt_est, round - last_round); }
-
-  uint64_t get_rtt() const { return rtt_est; }
-
-  std::size_t last_seq() const { return least_in_window + mask + 1; }
-
-  std::array<bool, kMaxOustandingPackets> wd{};
-  std::array<message *, kMaxOustandingPackets> messages{};
-  std::deque<message *> output;
-  std::size_t front, mask;
-  uint64_t least_in_window;
-  uint64_t max_acked = 0;
-  uint64_t rtt_est;
-  std::size_t acked_in_round = 0;
-  uint64_t round = 0, last_round = 0;
-  bool did_resize_in_round = true;
-};
 
 struct statistics {
   uint64_t retransmitted, acked, sent, ecn;
@@ -152,6 +43,7 @@ template <typename D> struct seq_observer {
 
 struct ack_scheduler : public seq_observer<ack_scheduler> {
   uint64_t last_acked;
+  uint64_t last_sack;
   bool pending_from_retry;
   void process_seq_impl(uint64_t seq) { pending_from_retry = seq < last_acked; }
 
@@ -159,7 +51,16 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
     return pending_from_retry || seq > last_acked;
   }
 
+  bool sack_pending(uint64_t seq) {
+    return pending_from_retry || seq > last_sack;
+  }
+
   void ack_callback(uint64_t seq) {
+    last_acked = seq;
+    pending_from_retry = false;
+  }
+
+  void sack_callback(uint64_t seq) {
     last_acked = seq;
     pending_from_retry = false;
   }
@@ -167,31 +68,11 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
   ack_scheduler() : last_acked(0), pending_from_retry(false) {}
 };
 
-template <typename... O>
-  requires(std::is_base_of_v<seq_observer<O>, O> && ...)
-struct ack_context {
-  std::tuple<O *...> observers;
 
-  void process_seq(uint64_t seq) {
-    std::apply([seq](auto &&...elems) { (elems->process_seq(seq), ...); },
-               observers);
-  }
-  ack_context(O *&&...observers) : observers((observers)...) {}
-};
-
-enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
-
-struct transport {
-  intrusive_node<transport> node;  
-  window recv_wd;
-  con_config target;
-  retransmission_handler<> rt_handler;
-  ack_scheduler scheduler;
-  ack_context<ack_scheduler> ack_ctx;
-  message_allocator *allocator;
-  packet_if *pkt_if;
-  uint16_t sport;
-  connection_state cstate = connection_state::ESTABLISHING;
+class transport {
+  static constexpr uint16_t kOustandingMessages = 64;
+  enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
+public:
   struct {
     uint64_t sent = 0;
     uint64_t with_ecn = 0;
@@ -199,18 +80,16 @@ struct transport {
 
   transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
             const con_config &target)
-      : node(this), recv_wd(min_seq), target(target), rt_handler(), scheduler(),
-        ack_ctx(&scheduler), allocator(allocator), pkt_if(pkt_sink),
-        sport(sport) {}
+      : recv_wd(min_seq), target(target), rt_handler(), scheduler(),
+        allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
 
-  void probe_timeout() {
+  void probe_timeout(uint16_t tid) {
     rt_handler.probe_retransmit(
-        [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
+        [&](message *msg) { pkt_if->consume_for_retransmission(msg); }, tid);
   }
 
-  bool send_pkt(message *pkt) {
+  bool send_pkt(message *pkt, uint16_t msg_id, bool fini = false) {
     assert(cstate == connection_state::ESTABLISHED);
-    probe_timeout();
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
       auto least_in_window = recv_wd.get_last_acked_packet();
@@ -218,10 +97,11 @@ struct transport {
         ack = least_in_window;
         scheduler.ack_callback(ack);
       }
-      protocol::prepare_ft_header(pkt, seq, ack, seq, recv_wd.capacity());
+      protocol::prepare_ft_header(pkt, seq, ack, msg_id, recv_wd.capacity(),
+                                  fini);
     };
 
-    auto inserted = rt_handler.record_pkt(pkt, ctor);
+    auto inserted = rt_handler.record_pkt(msg_id, pkt, ctor);
     if (inserted)
       pkt_if->consume_pkt(pkt, sport, target);
     return inserted;
@@ -233,14 +113,30 @@ struct transport {
             rt_stats.rtt};
   }
 
-  bool send_acks() {
-    auto acked = recv_wd.advance();
-    if (!scheduler.ack_pending(acked))
-      return false;
-    auto *msg = protocol::prepare_ack_pkt(acked, allocator, recv_wd.capacity());
+  bool acknowledge() {
+    message *msg;
+    bool is_sack = false;
+    uint64_t ack = recv_wd.get_last_acked_packet();
+
+    if (recv_wd.has_holes()) {
+      if (!scheduler.sack_pending(ack))
+        return false;
+      is_sack = true;
+      msg = allocator->alloc_message(sizeof(protocol::ft_header) +
+                                     sizeof(protocol::ft_sack_payload));
+      auto *sack_payload = rte_pktmbuf_mtod_offset(
+          msg, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
+      sack_payload->bit_map_len = recv_wd.copy_bitset(sack_payload->bit_map);
+      scheduler.sack_callback(ack);
+    } else {
+      if (!scheduler.ack_pending(ack))
+        return false;
+      msg = allocator->alloc_message(sizeof(protocol::ft_header));
+      scheduler.ack_callback(ack);
+    }
+    protocol::prepare_ack_pkt(msg, ack, recv_wd.capacity(), is_sack);
     FASTT_LOG_DEBUG("Return %u capacity to peer\n", recv_wd.capacity());
     pkt_if->consume_pkt(msg, sport, target);
-    scheduler.ack_callback(acked);
     return true;
   }
 
@@ -250,7 +146,7 @@ struct transport {
     case protocol::pkt_type::FT_MSG: {
       if (hdr->ack)
         rt_handler.acknowledge(hdr->ack, hdr->wnd);
-      ack_ctx.process_seq(hdr->seq);
+      scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
         rte_pktmbuf_free(pkt);
         return false;
@@ -259,6 +155,13 @@ struct transport {
       break;
     }
     case protocol::pkt_type::FT_ACK: {
+      auto *sack_payload = rte_pktmbuf_mtod_offset(
+          pkt, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
+      if (hdr->sack) {
+        rt_handler.acknowledge_sack(
+            sack_payload->bit_map, sack_payload->bit_map_len,
+            [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
+      }
       rt_handler.acknowledge(hdr->ack, hdr->wnd);
       rte_pktmbuf_free(pkt);
       break;
@@ -275,7 +178,7 @@ struct transport {
     }
     case protocol::pkt_type::FT_INIT_ACK: {
       rt_handler.acknowledge(hdr->ack, hdr->wnd);
-      ack_ctx.process_seq(hdr->seq);
+      scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
         rte_pktmbuf_free(pkt);
         return false;
@@ -295,7 +198,7 @@ struct transport {
 
   void open_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
-    bool retval = rt_handler.record_pkt(msg, [](message *msg, uint64_t seq) {
+    bool retval = rt_handler.record_pkt(0, msg, [](message *msg, uint64_t seq) {
       protocol::prepare_init_header(msg, seq);
     });
     assert(retval);
@@ -308,7 +211,7 @@ struct transport {
   void accept_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     bool retval = rt_handler.record_pkt(
-        msg, [budget = recv_wd.capacity()](message *msg, uint64_t seq) {
+        0, msg, [budget = recv_wd.capacity()](message *msg, uint64_t seq) {
           protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
         });
     FASTT_LOG_DEBUG("Sent ack for init");
@@ -316,33 +219,27 @@ struct transport {
     pkt_if->consume_pkt(msg, sport, target);
   }
 
-  bool poll() {
-    recv_wd.advance();
-    return recv_wd.has_ready_messages();
-  }
-
   bool active() { return connection_state::ESTABLISHED == cstate; }
 
-  template<typename F>
-  void receive_messages(F&& f){
-      probe_timeout();
-      recv_wd.advance();
-      recv_wd.consume_messages(f, 32);
-  }    
-
-  uint16_t receive_messages(message **messages, uint16_t bs) {
-    probe_timeout();
-    recv_wd.advance();
-    return recv_wd.consume_messages(
-        [messages, i = 0](message *msg) mutable {
-          msg->shrink_headroom(sizeof(protocol::ft_header));
-          messages[i++] = msg;
-        },
-        bs);
+  template <typename F> void receive_messages(F &&f) {
+    grant_returned += recv_wd.advance(f);
+    if (grant_returned >= kOustandingMessages / 2) {
+      acknowledge();
+      grant_returned = 0;
+    }
   }
 
+private:
   void setup_after_init() {
-    recv_wd.advance();
-    recv_wd.consume_messages([](message *msg) { rte_pktmbuf_free(msg); }, 1);
+    recv_wd.advance([](message *msg) { rte_pktmbuf_free(msg); });
   }
+  window<kOustandingMessages> recv_wd;
+  con_config target;
+  retransmission_handler<> rt_handler;
+  ack_scheduler scheduler;
+  message_allocator *allocator;
+  packet_if *pkt_if;
+  uint16_t sport;
+  uint32_t grant_returned = 0;
+  connection_state cstate = connection_state::ESTABLISHING;
 };

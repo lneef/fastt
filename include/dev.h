@@ -1,6 +1,6 @@
 #pragma once
 
-#include "log.h"
+#include "debug.h"
 #include "message.h"
 #include <cstdint>
 #include <rte_cycles.h>

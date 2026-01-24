@@ -1,4 +1,4 @@
-#include "log.h"
+#include "debug.h"
 #include "message.h"
 
 void dump_pkt(message *msg, uint16_t len) {

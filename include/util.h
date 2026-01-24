@@ -1,4 +1,7 @@
 #pragma once
+#include <boost/intrusive/link_mode.hpp>
+#include <boost/intrusive/list_hook.hpp>
+#include <boost/intrusive/options.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <rte_ether.h>
@@ -6,6 +9,15 @@
 #include <rte_mbuf_core.h>
 #include <utility>
 #include <vector>
+
+#include <boost/intrusive/list.hpp>
+
+namespace bi = boost::intrusive;
+
+using list_hook = bi::list_member_hook<bi::link_mode<bi::link_mode_type::auto_unlink>>;
+
+template<typename T, list_hook T::*link  = &T::link>
+using intrusive_list_t = bi::list<T, bi::member_hook<T, list_hook, link>, bi::constant_time_size<false>>;
 
 //-------------------------------------------------------------------------------
 /*
@@ -69,50 +81,6 @@ static inline uint32_t jhash_3words(uint32_t a, uint32_t b, uint32_t c,
 }
 
 //-------------------------------------------------------------------------------
-template <typename T> void intrusive_push_front(T &sentinel, T *elem) {
-  elem->next = sentinel.next;
-  sentinel.next->prev = elem;
-  elem->prev = &sentinel;
-  sentinel.next = elem;
-}
-
-template <typename T> T *intrusive_pop_back(T &sentinel) {
-  auto *tail = sentinel.prev;
-  sentinel.prev = tail->prev;
-  tail->prev->next = &sentinel;
-  return tail;
-}
-
-template <typename T> void intrusive_remove(T *elem) {
-  elem->prev->next = elem->next;
-  elem->next->prev = elem->prev;
-}
-
-template <typename T> struct intrusive_node {
-  T *elem;
-  intrusive_node<T> *next;
-  intrusive_node<T> *prev;
-  intrusive_node(T *elem) : elem(elem), next(nullptr), prev(nullptr) {}
-
-  void intrusive_push_front(intrusive_node<T> *elem) {
-    elem->next = next;
-    next->prev = elem;
-    elem->prev = this;
-    next = elem;
-  }
-
-  T *intrusive_pop_back() {
-    auto *tail = prev;
-    prev = tail->prev;
-    tail->prev->next = this;
-    return tail;
-  }
-
-  void intrusive_remove(intrusive_node<T> *elem) {
-    elem->prev->next = elem->next;
-    elem->next->prev = elem->prev;
-  }
-};
 
 struct flow_tuple {
   uint32_t sip, dip;
