@@ -149,8 +149,13 @@ public:
     accept_connection();
     for (auto &con : active) {
       con.process_incoming();
-      for (auto &ts : con.get_inprogress())
-        cb(ts);
+      auto& inprogress_list = con.inprogress;
+      auto it = inprogress_list.begin();
+      auto end = inprogress_list.end();
+      for (; it != end;){
+        auto ts = it++;  
+        cb(*ts);
+      }
     }
     rte_timer_manage();
   }
