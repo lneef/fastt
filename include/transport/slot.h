@@ -75,6 +75,11 @@ struct transaction_slot {
     link.unlink();
   }
 
+  void update_execution(){
+      assert(state == slot_state::COMPLETED);
+      state = slot_state::RUNNING;
+  }
+
   bool update_execution_state(intrusive_list_t<transaction_slot>& head){
     if (state == slot_state::COMPLETED) {
       assert(!link.is_linked());  

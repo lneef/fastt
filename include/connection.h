@@ -72,6 +72,7 @@ public:
       return nullptr;
     auto slot_id = free_slots.front();
     free_slots.pop_front();
+    slots[slot_id].update_execution();
     return &slots[slot_id];
   }
 
