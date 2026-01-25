@@ -10,7 +10,6 @@
 #include <rte_eal.h>
 #include <rte_lcore.h>
 #include <rte_timer.h>
-#include <vector>
 
 class transport;
 
@@ -48,11 +47,11 @@ struct transaction_slot {
   }
 
   bool completed() {
-    return state == slot_state::COMPLETED && incoming.empty();
+    return state == slot_state::COMPLETED;
   }
 
   bool has_outstanding_messages() const{
-      return has_outstanding_msgs;
+      return has_outstanding_msgs || incoming.size() > 0;
   }
 
   void handle_incoming_server(message *msg, bool fini) {
@@ -68,6 +67,7 @@ struct transaction_slot {
       transport_impl->acknowledge();
       stop_timer();
       state = slot_state::COMPLETED;
+      has_outstanding_msgs = false;
     }
   }
 
