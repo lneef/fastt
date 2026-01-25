@@ -35,7 +35,7 @@ public:
              connection_manager *manager, bool is_client)
       : allocator(allocator), transport_impl(std::make_unique<transport>(
                                   allocator, pkt_if, sport, target)),
-        manager(manager), is_client(is_client) {
+        manager(manager) {
     slots.reserve(kMaxTransactionPerConnection);
     for (uint16_t i = 0; i < kMaxTransactionPerConnection; ++i){
       slots.emplace_back(i, transport_impl.get(), is_client);
@@ -53,17 +53,24 @@ public:
 
   intrusive_list_t<transaction_slot> &get_inprogress() { return inprogress; }
 
-  void process_incoming() {
+  void process_incoming_server() {
     transport_impl->receive_messages([&](message *msg) {
       auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
-      auto fini = hdr->fini;
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
       slots[hdr->msg_id].update_execution_state(inprogress);
-      slots[hdr->msg_id].handle_incoming(msg, hdr->fini);
+      slots[hdr->msg_id].handle_incoming_server(msg, hdr->fini);
       msg->shrink_headroom(sizeof(protocol::ft_header));
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
-      if (fini && is_client)
-        free_slots.push_front(hdr->msg_id);
+    });
+  }
+
+  void process_incoming_client(){
+    transport_impl->receive_messages([&](message *msg) {
+      auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
+      FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
+      slots[hdr->msg_id].handle_incoming_client(msg, hdr->fini);
+      msg->shrink_headroom(sizeof(protocol::ft_header));
+      FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
     });
   }
 
@@ -76,6 +83,10 @@ public:
     return &slots[slot_id];
   }
 
+  void finish_transaction(transaction_slot* slot){
+      free_slots.push_front(slot->tid);
+  }
+
   connection_manager *get_manager() { return manager; }
 
 private:
@@ -86,7 +97,6 @@ private:
   intrusive_list_t<transaction_slot, &transaction_slot::link> inprogress;
   std::deque<uint16_t> free_slots;
   connection_manager *manager;
-  bool is_client = false;
 public:
   list_hook link;
 };
@@ -101,9 +111,9 @@ public:
       : flows(kdefaultFlowTableSize), allocator(allocator), dev(port, txq, rxq),
         scheduler(&dev), pkt_if(&scheduler, sip, port), active(),
         is_client(is_client), flush_timeout(rte_get_timer_cycles() / 1e6) {
-    //rte_timer_init(&flush_timer);
-    //rte_timer_reset(&flush_timer, flush_timeout, PERIODICAL, rte_lcore_id(),
-    //                flush_cb, this);
+    rte_timer_init(&flush_timer);
+    rte_timer_reset(&flush_timer, flush_timeout, PERIODICAL, rte_lcore_id(),
+                    flush_cb, this);
   }
 
   void handle_pkt(message *pkt, flow_tuple &ft) {
@@ -140,6 +150,7 @@ public:
       return nullptr;
     it->get()->open_connection();
     active.push_front(*it->get());
+    ++open_connections;
     flush();
     return it->get();
   }
@@ -148,7 +159,7 @@ public:
     fetch_from_device();
     accept_connection();
     for (auto &con : active) {
-      con.process_incoming();
+      con.process_incoming_server();
       auto& inprogress_list = con.inprogress;
       auto it = inprogress_list.begin();
       auto end = inprogress_list.end();
@@ -162,7 +173,7 @@ public:
 
   void poll_single_connection(connection* con){
       fetch_from_device();
-      con->process_incoming();
+      con->process_incoming_client();
       rte_timer_manage();
   }
 
@@ -201,9 +212,19 @@ public:
                    allocator.get(), &pkt_if,
                    con_config{tuple.sip, rte_cpu_to_be_16(tuple.sport)}, port,
                    this, is_client));
-    if (inserted)
+    if (inserted){
       active.push_front(*it->get());
+      ++open_connections;
+    }
     return {it->get(), inserted};
+  }
+
+  std::vector<statistics> get_stats(){ 
+      std::vector<statistics> stats(open_connections);
+      uint32_t i = 0;
+      for(auto& con: active)
+          stats[i++] = con.transport_impl->get_stats();
+      return stats;
   }
 
   void flush() { scheduler.flush(); }
@@ -224,6 +245,7 @@ private:
   packet_if pkt_if;
   intrusive_list_t<connection> active;
   bool is_client;
+  uint32_t open_connections = 0;
   uint64_t flush_timeout;
   rte_timer flush_timer;
 };

@@ -103,9 +103,10 @@ static int lcore_fn(void *arg) {
     create_put_request(req, dist(rng), dist(rng));  
     auto resp = kv.send_request(con, req, queue);
     kv.flush();
-    auto handle = resp->wait_for_completion();
+    auto handle = resp->wait();
     msg = handle.slot->rx_if.read();
-    allocator->deallocate(msg);
+    if(handle.completed)
+        allocator->deallocate(msg);
   }
 
   auto end = rte_get_timer_cycles();

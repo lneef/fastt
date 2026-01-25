@@ -26,13 +26,15 @@
 #include "util.h"
 
 struct statistics {
-  uint64_t retransmitted, acked, sent, ecn;
+  uint64_t retransmitted, acked, sent, retransmissions;
   double rtt;
   statistics(uint64_t retransmitted, uint64_t acked, uint64_t sent,
-             uint64_t ecn, uint64_t rtt_est)
-      : retransmitted(retransmitted), acked(acked), sent(sent), ecn(ecn) {
+             uint64_t retransmissions, uint64_t rtt_est)
+      : retransmitted(retransmitted), acked(acked), sent(sent), retransmissions(retransmissions) {
     rtt = static_cast<double>(rtt_est) / (rte_get_timer_hz() / 1e6);
   }
+
+  statistics(): retransmitted(), acked(), sent(), retransmissions(), rtt() {}
 };
 
 template <typename D> struct seq_observer {
@@ -75,7 +77,7 @@ class transport {
 public:
   struct {
     uint64_t sent = 0;
-    uint64_t with_ecn = 0;
+    uint64_t retransmissions = 0;
   } stats;
 
   transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
@@ -109,7 +111,7 @@ public:
 
   statistics get_stats() const {
     auto &rt_stats = rt_handler.get_stats();
-    return {rt_stats.retransmitted, rt_stats.acked, stats.sent, stats.with_ecn,
+    return {rt_stats.retransmitted, rt_stats.acked, stats.sent, stats.retransmissions,
             rt_stats.rtt};
   }
 
@@ -149,6 +151,7 @@ public:
         rt_handler.acknowledge(hdr->ack, hdr->wnd);
       scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
+        ++stats.retransmissions;  
         rte_pktmbuf_free(pkt);
         return false;
       } else
