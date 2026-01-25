@@ -129,7 +129,7 @@ int run(netconfig &conf) {
       return -1;
     ifaces[i] = std::move(*ifc);
 
-    auto [port, txq, rxq, pool] = ifc->get_slice(0);
+    auto [port, txq, rxq, pool] = ifaces[i].get_slice(0);
     adpater.allocator[i] = std::make_shared<message_allocator>("pool", 8095);
     adpater.cifs[i] = std::make_unique<client_iface>(
         port, txq, rxq, adpater.allocator[i], con_config{conf.sip, conf.sport});
