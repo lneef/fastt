@@ -37,8 +37,11 @@ public:
                                   allocator, pkt_if, sport, target)),
         manager(manager), is_client(is_client) {
     slots.reserve(kMaxTransactionPerConnection);
-    for (uint16_t i = 0; i < kMaxTransactionPerConnection; ++i)
+    for (uint16_t i = 0; i < kMaxTransactionPerConnection; ++i){
       slots.emplace_back(i, transport_impl.get(), is_client);
+      if(is_client)
+          free_slots.push_back(i);
+    }
   }
   void process_pkt(rte_mbuf *pkt);
   void acknowledge_all();
