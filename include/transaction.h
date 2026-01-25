@@ -1,6 +1,5 @@
 #include "client.h"
 #include "connection.h"
-#include "message.h"
 #include "queue.h"
 #include "transport/slot.h"
 #include <bit>
@@ -46,8 +45,10 @@ struct transaction_proxy{
     transaction_handle *t;
 
     transaction_handle& wait_for_completion(){
-        while(!t->slot->rx_if.has_incoming_messages())
+        while(!t->slot->rx_if.has_incoming_messages()){
             con->get_manager()->fetch_from_device();
+            con->process_incoming();
+        }
         q.pop_front();
         return *t;
     }
