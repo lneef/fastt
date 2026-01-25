@@ -16,7 +16,7 @@ public:
                const con_config &scon_config,
                std::shared_ptr<message_allocator> pool)
       : scon_config(scon_config),
-        manager(true, port, txq, rxq, scon_config.ip, pool) {}
+        manager(false, port, txq, rxq, scon_config.ip, pool) {}
 
   void complete() { manager.flush(); };
 
