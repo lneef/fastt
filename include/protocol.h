@@ -25,8 +25,8 @@ struct __rte_packed_begin ft_header{
 } __rte_packed_end;
 
 struct __rte_packed_begin ft_sack_payload{
-    static constexpr uint16_t kBitMapLen = 16;
-    uint8_t bit_map[kBitMapLen];
+    static constexpr uint16_t kBitMapLen = 2;
+    uint64_t bit_map[kBitMapLen];
     uint16_t bit_map_len;
 }__rte_packed_end;
 

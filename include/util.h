@@ -82,6 +82,12 @@ static inline uint32_t jhash_3words(uint32_t a, uint32_t b, uint32_t c,
 
 //-------------------------------------------------------------------------------
 
+__inline constexpr std::pair<unsigned, unsigned> get_bit_indices_64(unsigned i){
+    const uint32_t mask = 63;
+    const uint32_t div = 64;
+    return {i / div, i & mask};
+}
+
 struct flow_tuple {
   uint32_t sip, dip;
   uint16_t sport, dport;

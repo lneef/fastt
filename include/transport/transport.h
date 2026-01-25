@@ -128,6 +128,7 @@ public:
           msg, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
       sack_payload->bit_map_len = recv_wd.copy_bitset(sack_payload->bit_map);
       scheduler.sack_callback(ack);
+      FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %lu\n", sack_payload->bit_map_len, ack);
     } else {
       if (!scheduler.ack_pending(ack))
         return false;
@@ -155,14 +156,15 @@ public:
       break;
     }
     case protocol::pkt_type::FT_ACK: {
-      auto *sack_payload = rte_pktmbuf_mtod_offset(
-          pkt, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
+
+      rt_handler.acknowledge(hdr->ack, hdr->wnd);
       if (hdr->sack) {
+        auto *sack_payload = rte_pktmbuf_mtod_offset(
+          pkt, protocol::ft_sack_payload *, sizeof(protocol::ft_header));  
         rt_handler.acknowledge_sack(
             sack_payload->bit_map, sack_payload->bit_map_len,
             [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
       }
-      rt_handler.acknowledge(hdr->ack, hdr->wnd);
       rte_pktmbuf_free(pkt);
       break;
     }

@@ -1,15 +1,16 @@
 #pragma once
 
 #include "message.h"
+#include "util.h"
 
 #include <array>
+#include <bitset>
 #include <cstdint>
 #include <cstring>
-#include <vector>
 
 template <uint32_t N> struct window {
   window(uint64_t min_seq)
-      : wd(N), front(0), mask(N - 1), least_in_window(min_seq){}
+      : wd(), front(0), mask(N - 1), least_in_window(min_seq){}
 
   uint64_t get_last_acked_packet() const { return least_in_window - 1; }
 
@@ -65,21 +66,19 @@ template <uint32_t N> struct window {
 
   bool has_holes() { return largest_in_window != least_in_window; }
 
-  uint16_t copy_bitset(uint8_t *data) {
+  uint16_t copy_bitset(uint64_t *data) {  
     uint16_t id = 0;
-    uint8_t mask = sizeof(uint8_t) * 8 - 1;
-    std::memset(data, 0, (largest_in_window - least_in_window) / 8 + 1);
+    std::memset(data, 0, (largest_in_window - least_in_window + 63) / 64);
     for (auto i = least_in_window; i <= largest_in_window; ++i, ++id) {
-      auto bit_idx = id & mask;
-      auto idx = id >> 3;
-      data[idx] |= wd[index(i)] << bit_idx;
+      auto ind = get_bit_indices_64(id);  
+      data[ind.first] |= static_cast<uint64_t>(wd[index(i)]) << ind.second;
     }
     return id;
   }
 
   std::size_t last_seq() const { return least_in_window + mask + 1; }
 
-  std::vector<bool> wd;
+  std::bitset<N> wd;
   std::array<message *, N> messages{};
   std::size_t front, mask;
   uint64_t least_in_window;

@@ -1,18 +1,21 @@
 #pragma once
 
 #include <cstdint>
+#include <generic/rte_cycles.h>
 #include <memory.h>
 #include <memory>
 #include <rte_byteorder.h>
 #include <rte_ether.h>
 #include <rte_ip4.h>
+#include <rte_lcore.h>
 #include <rte_log.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
+#include <rte_timer.h>
 #include <rte_udp.h>
 
-#include "dev.h"
 #include "debug.h"
+#include "dev.h"
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
@@ -32,11 +35,11 @@ public:
              connection_manager *manager, bool is_client)
       : allocator(allocator), transport_impl(std::make_unique<transport>(
                                   allocator, pkt_if, sport, target)),
-      manager(manager) {
-            slots.reserve(kMaxTransactionPerConnection);
-            for(uint16_t i = 0; i < kMaxTransactionPerConnection; ++i)
-                slots.emplace_back(i, transport_impl.get(), is_client);
-        }
+        manager(manager), is_client(is_client) {
+    slots.reserve(kMaxTransactionPerConnection);
+    for (uint16_t i = 0; i < kMaxTransactionPerConnection; ++i)
+      slots.emplace_back(i, transport_impl.get(), is_client);
+  }
   void process_pkt(rte_mbuf *pkt);
   void acknowledge_all();
   void accept();
@@ -45,14 +48,15 @@ public:
 
   bool active() { return transport_impl->active(); }
 
-  intrusive_list_t<transaction_slot>& get_inprogress() { return inprogress; }
+  intrusive_list_t<transaction_slot> &get_inprogress() { return inprogress; }
 
   void process_incoming() {
     transport_impl->receive_messages([&](message *msg) {
       auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
+      FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
+      slots[hdr->msg_id].update_execution_state(inprogress);
       slots[hdr->msg_id].handle_incoming(msg, hdr->fini);
-      slots[hdr->msg_id].queue_for_execution(inprogress);
-      if (hdr->fini)
+      if (hdr->fini && is_client)
         free_slots.push_back(hdr->msg_id);
     });
   }
@@ -75,9 +79,9 @@ private:
   intrusive_list_t<transaction_slot, &transaction_slot::link> inprogress;
   std::deque<uint16_t> free_slots;
   connection_manager *manager;
+  bool is_client = false;
 public:
   list_hook link;
-
 };
 
 class connection_manager {
@@ -89,7 +93,11 @@ public:
                      uint32_t sip, std::shared_ptr<message_allocator> allocator)
       : flows(kdefaultFlowTableSize), allocator(allocator), dev(port, txq, rxq),
         scheduler(&dev), pkt_if(&scheduler, sip, port), active(),
-        is_client(is_client) {}
+        is_client(is_client), flush_timeout(rte_get_timer_cycles() / 1e6) {
+    //rte_timer_init(&flush_timer);
+    //rte_timer_reset(&flush_timer, flush_timeout, PERIODICAL, rte_lcore_id(),
+    //                flush_cb, this);
+  }
 
   void handle_pkt(message *pkt, flow_tuple &ft) {
     FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n", ft.sip,
@@ -137,6 +145,7 @@ public:
       for (auto &ts : con.get_inprogress())
         cb(ts);
     }
+    rte_timer_manage();
   }
 
   void fetch_from_device() {
@@ -181,7 +190,14 @@ public:
 
   void flush() { scheduler.flush(); }
 
+  ~connection_manager() { rte_timer_stop(&flush_timer); }
+
 private:
+  static void flush_cb(rte_timer *timer, void *arg) {
+    (void)timer;
+    auto *this_ptr = static_cast<connection_manager *>(arg);
+    this_ptr->flush();
+  }
   std::deque<std::pair<message *, flow_tuple>> connection_requests;
   fixed_size_hash_table<flow_tuple, std::unique_ptr<connection>> flows;
   std::shared_ptr<message_allocator> allocator;
@@ -190,4 +206,6 @@ private:
   packet_if pkt_if;
   intrusive_list_t<connection> active;
   bool is_client;
+  uint64_t flush_timeout;
+  rte_timer flush_timer;
 };

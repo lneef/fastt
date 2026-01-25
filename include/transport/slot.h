@@ -75,15 +75,16 @@ struct transaction_slot {
     link.unlink();
   }
 
-  bool queue_for_execution(intrusive_list_t<transaction_slot> &head) {
+  bool update_execution_state(intrusive_list_t<transaction_slot>& head){
     if (state == slot_state::COMPLETED) {
+      assert(!link.is_linked());  
       head.push_front(*this);  
       state = slot_state::RUNNING;
       rearm(); /*rearm timer*/
       return true;
     }
     return false;
-  }
+  } 
 
   struct {
     message *read() {

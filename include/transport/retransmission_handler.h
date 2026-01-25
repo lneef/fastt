@@ -109,10 +109,9 @@ public:
         break;
       if (entry.tid != tid || entry.sacked)
         continue;
-
-      cb(msg);
       FASTT_LOG_DEBUG("Retransmitting packet: %lu\n", entry.seq);
       prepare_retransmit(&entry);
+      cb(msg);
     }
   }
 
@@ -136,18 +135,18 @@ public:
   }
 
   template <typename F>
-  void acknowledge_sack(uint8_t *bitmap, uint16_t len, F &&retransmit_cb) {
-    static constexpr uint8_t bit_mask = 7;
+  void acknowledge_sack(uint64_t *bitmap, uint16_t len, F &&retransmit_cb) {
     auto pkt_seq = 0;
-    for (auto i = 0u; i < len; ++i) {
-      auto bit_idx = i & bit_mask;
-      auto idx = i >> 3;
-      unacked_packets[pkt_seq].sacked = bitmap[idx] & (1 << bit_idx);
-      if (!(bitmap[idx] & (1 << bit_mask))) {
+    for (auto i = 0u; i < len; ++i) { 
+      auto ind = get_bit_indices_64(i); 
+      auto val = bitmap[ind.first] & (1 << ind.second);
+      unacked_packets[pkt_seq].sacked = true;
+      if (!val) {
         auto &entry = unacked_packets[pkt_seq];
         prepare_retransmit(&entry);
         retransmit_cb(entry.packet);
       }
+      ++pkt_seq;
     }
   }
 
