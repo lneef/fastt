@@ -56,10 +56,13 @@ public:
   void process_incoming() {
     transport_impl->receive_messages([&](message *msg) {
       auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
+      auto fini = hdr->fini;
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
       slots[hdr->msg_id].update_execution_state(inprogress);
       slots[hdr->msg_id].handle_incoming(msg, hdr->fini);
-      if (hdr->fini && is_client)
+      msg->shrink_headroom(sizeof(protocol::ft_header));
+      FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
+      if (fini && is_client)
         free_slots.push_back(hdr->msg_id);
     });
   }
