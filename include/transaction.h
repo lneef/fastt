@@ -45,10 +45,8 @@ struct transaction_proxy{
     transaction_handle *t;
 
     transaction_handle& wait_for_completion(){
-        while(!t->slot->rx_if.has_incoming_messages()){
-            con->get_manager()->fetch_from_device();
-            con->process_incoming();
-        }
+        while(!t->slot->rx_if.has_incoming_messages())
+            con->get_manager()->poll_single_connection(con);
         q.pop_front();
         return *t;
     }

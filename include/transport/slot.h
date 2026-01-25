@@ -72,6 +72,7 @@ struct transaction_slot {
   void finish() {
     state = slot_state::COMPLETED;
     rte_timer_stop(timer.get());
+    incoming_pkts = 0;
     link.unlink();
   }
 

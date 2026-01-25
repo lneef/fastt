@@ -63,7 +63,7 @@ public:
       msg->shrink_headroom(sizeof(protocol::ft_header));
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
       if (fini && is_client)
-        free_slots.push_back(hdr->msg_id);
+        free_slots.push_front(hdr->msg_id);
     });
   }
 
@@ -158,6 +158,12 @@ public:
       }
     }
     rte_timer_manage();
+  }
+
+  void poll_single_connection(connection* con){
+      fetch_from_device();
+      con->process_incoming();
+      rte_timer_manage();
   }
 
   void fetch_from_device() {
