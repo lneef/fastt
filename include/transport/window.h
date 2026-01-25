@@ -10,7 +10,7 @@
 
 template <uint32_t N> struct window {
   window(uint64_t min_seq)
-      : wd(), front(0), mask(N - 1), least_in_window(min_seq){}
+      : wd(), front(0), mask(N - 1), least_in_window(min_seq), max_acked(0) {}
 
   uint64_t get_last_acked_packet() const { return least_in_window - 1; }
 
@@ -18,8 +18,8 @@ template <uint32_t N> struct window {
     auto i = index(seq);
     if (beyond_window(seq) || wd[i])
       return false;
-    if (seq > largest_in_window)
-      largest_in_window = seq;
+    if (seq > max_acked)
+      max_acked = seq;
     wd[i] = true;
     messages[i] = msg;
     return true;
@@ -50,7 +50,7 @@ template <uint32_t N> struct window {
   }
 
   uint32_t capacity() const {
-    return least_in_window + mask - largest_in_window;
+    return least_in_window + mask - max_acked;
   }
 
   std::size_t __inline index(std::size_t i) {
@@ -64,12 +64,12 @@ template <uint32_t N> struct window {
     return seq <= mask;
   }
 
-  bool has_holes() { return largest_in_window != least_in_window; }
+  bool has_holes() { return max_acked != least_in_window; }
 
   uint16_t copy_bitset(uint64_t *data) {  
     uint16_t id = 0;
-    std::memset(data, 0, (largest_in_window - least_in_window + 63) / 64);
-    for (auto i = least_in_window; i <= largest_in_window; ++i, ++id) {
+    std::memset(data, 0, (max_acked - least_in_window + 63) / 64);
+    for (auto i = least_in_window; i <= max_acked; ++i, ++id) {
       auto ind = get_bit_indices_64(id);  
       data[ind.first] |= static_cast<uint64_t>(wd[index(i)]) << ind.second;
     }
@@ -82,5 +82,5 @@ template <uint32_t N> struct window {
   std::array<message *, N> messages{};
   std::size_t front, mask;
   uint64_t least_in_window;
-  uint64_t largest_in_window;
+  uint64_t max_acked;
 };

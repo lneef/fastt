@@ -140,6 +140,7 @@ int run(netconfig &conf) {
     while (!cif->probe_connection_setup_done(con))
       ;
     con->acknowledge_all();
+    adpater.connections[i] = con;
   }
   run(lcore_fn, &adpater);
   std::cout << "avg: " << lat.load() / rte_lcore_count() << std::endl;
