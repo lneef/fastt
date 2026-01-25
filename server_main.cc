@@ -67,6 +67,7 @@ int run(netconfig &conf) {
     server.poll([](transaction_slot &slot) {
       auto *msg = slot.rx_if.read();
       slot.tx_if.send(msg, true);
+      slot.finish();
     });
     server.complete();
   }
