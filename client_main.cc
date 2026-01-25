@@ -30,7 +30,7 @@ struct netconfig {
   rte_ether_addr dmac;
   uint32_t sip, dip;
   uint16_t sport, dport;
-  uint32_t nports = 0;
+  uint32_t nports = 1;
 };
 
 struct lcore_adapter {
