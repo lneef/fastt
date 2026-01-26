@@ -70,7 +70,7 @@ template <uint32_t N> struct window {
 
   uint16_t copy_bitset(protocol::ft_sack_payload *data) {  
     uint16_t id = 0;
-    std::memset(data, 0, (max_acked - least_in_window + 63) / 64);
+    std::memset(data, 0, (max_acked - least_in_window + 64) / 64); /* 64 since least_in_window is part of the window */
     for (auto i = least_in_window; i <= max_acked; ++i, ++id) {
       auto ind = get_bit_indices_64(id);  
       data->bit_map[ind.first] |= static_cast<uint64_t>(wd[index(i)]) << ind.second;
