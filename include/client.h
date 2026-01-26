@@ -8,7 +8,6 @@
 #include <memory>
 #include <rte_ether.h>
 
-struct response_proxy;
 class transaction_queue;
 
 class client_iface {

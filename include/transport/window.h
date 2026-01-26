@@ -32,7 +32,8 @@ template <uint32_t N> struct window {
 
   bool beyond_window(uint64_t seq) { return seq > least_in_window + mask; }
 
-  uint32_t advance(std::invocable<message *> auto &&f) {
+  template<typename F>
+  uint32_t advance(F &&f) {
     assert(mask + 1 == wd.size());
     uint32_t advanced = 0;
     while (wd[front]) {

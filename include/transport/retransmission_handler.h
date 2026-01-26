@@ -1,5 +1,4 @@
 #pragma once
-#include <concepts>
 #include <cstdint>
 #include <message.h>
 #include <rte_cycles.h>
@@ -81,8 +80,9 @@ public:
     return burst_rtt;
   }
 
+  template<typename F>
   bool record_pkt(uint16_t tid, message *msg,
-                  std::invocable<message *, uint64_t> auto &&ctor) {
+                  F &&ctor) {
     if (unacked_packets.full() || budget == 0)
       return false;
     --budget;
@@ -95,7 +95,8 @@ public:
     return true;
   }
 
-  void probe_retransmit(std::invocable<message *> auto &&cb, uint16_t tid) {
+  template<typename F>
+  void probe_retransmit(F &&cb, uint16_t tid) {
     for (auto &entry : send_list) {
       auto *msg = entry.packet;
       if (*msg->get_ts() == 0)

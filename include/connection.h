@@ -11,7 +11,6 @@
 #include <rte_log.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
-#include <rte_timer.h>
 #include <rte_udp.h>
 
 #include "debug.h"
@@ -19,6 +18,7 @@
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
+#include "timer.h"
 #include "transport/slot.h"
 #include "transport/transport.h"
 #include "util.h"
@@ -28,7 +28,6 @@ class connection_manager;
 
 class connection {
   static constexpr uint16_t kMaxTransactionPerConnection = 32;
-
 public:
   connection(message_allocator *allocator, packet_if *pkt_if,
              const con_config &target, uint16_t sport,
@@ -110,10 +109,8 @@ public:
                      uint32_t sip, std::shared_ptr<message_allocator> allocator)
       : flows(kdefaultFlowTableSize), allocator(allocator), dev(port, txq, rxq),
         scheduler(&dev), pkt_if(&scheduler, sip, port), active(),
-        is_client(is_client), flush_timeout(rte_get_timer_cycles() / 1e6) {
-    rte_timer_init(&flush_timer);
-    rte_timer_reset(&flush_timer, flush_timeout, PERIODICAL, rte_lcore_id(),
-                    flush_cb, this);
+        is_client(is_client), flush_timeout(rte_get_timer_cycles() / 1e6), flush_timer(timertype::PERIODICAL) {
+            flush_timer.reset(flush_timeout, flush_cb, this);
   }
 
   void handle_pkt(message *pkt, flow_tuple &ft) {
@@ -174,7 +171,7 @@ public:
   void poll_single_connection(connection* con){
       fetch_from_device();
       con->process_incoming_client();
-      rte_timer_manage();
+      timer<dpdk_timer>::manage();
   }
 
   void fetch_from_device() {
@@ -229,7 +226,7 @@ public:
 
   void flush() { scheduler.flush(); }
 
-  ~connection_manager() { rte_timer_stop(&flush_timer); }
+  ~connection_manager() { flush_timer.stop();; }
 
 private:
   static void flush_cb(rte_timer *timer, void *arg) {
@@ -247,5 +244,5 @@ private:
   bool is_client;
   uint32_t open_connections = 0;
   uint64_t flush_timeout;
-  rte_timer flush_timer;
+  timer<dpdk_timer> flush_timer;
 };

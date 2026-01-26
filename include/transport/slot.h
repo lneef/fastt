@@ -1,15 +1,15 @@
 #pragma once
 
 #include "message.h"
+#include "timer.h"
 #include "transport.h"
 #include "util.h"
+#include "timer.h"
 #include <cstdint>
 #include <deque>
-#include <generic/rte_cycles.h>
-#include <memory>
+#include <rte_cycles.h>
 #include <rte_eal.h>
 #include <rte_lcore.h>
-#include <rte_timer.h>
 
 enum class slot_state {
   COMPLETED,
@@ -22,16 +22,15 @@ struct transaction_slot {
   list_hook link;
   transport *transport_impl;
   uint64_t incoming_pkts = 0;
-  std::unique_ptr<rte_timer> timer;
+  timer<dpdk_timer> slot_timer;
   uint16_t tid = 0;
   slot_state state = slot_state::COMPLETED;
   bool is_client = false;
   bool has_outstanding_msgs = false;
 
   transaction_slot(uint16_t tid, transport *transport_impl, bool is_client)
-      : transport_impl(transport_impl), timer(std::make_unique<rte_timer>()),
+      : transport_impl(transport_impl), slot_timer(timertype::SINGLE),
         tid(tid), is_client(is_client) {
-    rte_timer_init(timer.get());
   }
 
   static void timer_cb(rte_timer *timer, void *arg) {
@@ -70,13 +69,13 @@ struct transaction_slot {
     incoming_pkts = 0;
     auto timeout = rte_get_timer_hz() / 1e3 *
                    (is_client ? 2 : 1); /* set timeout to 2ms/1ms */
-    rte_timer_reset(timer.get(), timeout, SINGLE, rte_lcore_id(), timer_cb,
-                    this);
+    slot_timer.reset(timeout, timer_cb, this);
+
   }
 
   void stop_timer() {
     incoming_pkts = 0;
-    rte_timer_stop(timer.get());
+    slot_timer.stop();
   }
 
   void acknowledge() { transport_impl->acknowledge(); }

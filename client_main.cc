@@ -117,7 +117,7 @@ static int lcore_fn(void *arg) {
   }
 
   auto end = rte_get_timer_cycles();
-  lat += (end - now) / (static_cast<double>(rte_get_timer_hz()) / 1e6);
+  lat += (end - now) / (static_cast<double>(rte_get_timer_hz()) / 1e6) / pkts;
   return 0;
 }
 
