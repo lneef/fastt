@@ -6,6 +6,7 @@
 
 #include "debug.h"
 #include "message.h"
+#include "protocol.h"
 #include "queue.h"
 #include "util.h"
 
@@ -129,11 +130,11 @@ public:
   }
 
   template <typename F>
-  void acknowledge_sack(uint64_t *bitmap, uint16_t len, F &&retransmit_cb) {
+  void acknowledge_sack(protocol::ft_sack_payload* payload, F &&retransmit_cb) {
     auto pkt_seq = 0;
-    for (auto i = 0u; i < len; ++i) { 
+    for (auto i = 0u; i < payload->bit_map_len; ++i) { 
       auto ind = get_bit_indices_64(i); 
-      auto val = bitmap[ind.first] & (1 << ind.second);
+      auto val = payload->bit_map[ind.first] & (1 << ind.second);
       unacked_packets[pkt_seq].sacked = true;
       if (!val) {
         auto &entry = unacked_packets[pkt_seq];

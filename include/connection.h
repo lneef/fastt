@@ -171,7 +171,7 @@ public:
   void poll_single_connection(connection* con){
       fetch_from_device();
       con->process_incoming_client();
-      timer<dpdk_timer>::manage();
+      con_timer_manager.manage();
   }
 
   void fetch_from_device() {
@@ -245,4 +245,5 @@ private:
   uint32_t open_connections = 0;
   uint64_t flush_timeout;
   timer<dpdk_timer> flush_timer;
+  timer_manager<dpdk_timer> con_timer_manager;
 };

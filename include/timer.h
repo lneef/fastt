@@ -20,10 +20,6 @@ struct dpdk_timer{
     return rte_timer_reset(timer.get(), tp, rte_type, rte_lcore_id(), cb, arg);
   }
   int stop() { return rte_timer_stop(timer.get()); }
-
-  static int manage(){
-      return rte_timer_manage();
-  }
   enum rte_timer_type rte_type;
   std::unique_ptr<timer_t> timer;
 };
@@ -34,17 +30,31 @@ template <typename T> struct timer {
   using timer_cb_t = T::timer_cb_t;
 
   T impl;
+  timepoint_t timeout;
 
   template<typename ...Args>
   timer(Args&& ...args): impl(std::forward<Args>(args)...){} 
 
   int reset(timepoint_t to, timer_cb_t cb, void *timer_arg) {
+    timeout = to;  
     return impl.reset(to, cb, timer_arg);
   }
 
   int stop() { return impl.stop(); }
 
-  static int manage(){
-      return T::manage();
+  timepoint_t get_timout() const {
+      return timeout;
   }
+};
+
+template<typename T>
+struct timer_manager{
+
+}; 
+
+template<>
+struct timer_manager<dpdk_timer>{
+    int manage(){
+        return rte_timer_manage();
+    }
 };

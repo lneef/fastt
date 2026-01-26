@@ -1,6 +1,7 @@
 #pragma once
 
 #include "message.h"
+#include "protocol.h"
 #include "util.h"
 
 #include <array>
@@ -67,12 +68,12 @@ template <uint32_t N> struct window {
 
   bool has_holes() { return max_acked != least_in_window; }
 
-  uint16_t copy_bitset(uint64_t *data) {  
+  uint16_t copy_bitset(protocol::ft_sack_payload *data) {  
     uint16_t id = 0;
     std::memset(data, 0, (max_acked - least_in_window + 63) / 64);
     for (auto i = least_in_window; i <= max_acked; ++i, ++id) {
       auto ind = get_bit_indices_64(id);  
-      data[ind.first] |= static_cast<uint64_t>(wd[index(i)]) << ind.second;
+      data->bit_map[ind.first] |= static_cast<uint64_t>(wd[index(i)]) << ind.second;
     }
     return id;
   }
