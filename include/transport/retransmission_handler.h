@@ -39,13 +39,6 @@ struct sender_entry {
   message *get() { return packet; }
 
   sender_entry(const sender_entry &) = delete;
-
-  sender_entry(sender_entry &&other) {
-    packet = other.packet;
-    seq = other.seq;
-    retransmitted = other.retransmitted;
-    other.packet = nullptr;
-  }
 };
 
 template <bool with_rto = false> class retransmission_handler {
