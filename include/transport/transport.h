@@ -94,13 +94,15 @@ public:
     assert(cstate == connection_state::ESTABLISHED);
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
+      uint32_t ts = 0;
       auto least_in_window = recv_wd.get_last_acked_packet();
       if (scheduler.ack_pending(least_in_window)) {
         ack = least_in_window;
+        ts = recv_wd.get_ts();
         scheduler.ack_callback(ack);
       }
       protocol::prepare_ft_header(pkt, seq, ack, msg_id, recv_wd.capacity(),
-                                  fini);
+                                  fini, ts);
     };
 
     auto inserted = rt_handler.record_pkt(msg_id, pkt, ctor);
@@ -119,7 +121,6 @@ public:
     message *msg;
     bool is_sack = false;
     uint64_t ack = recv_wd.get_last_acked_packet();
-
     if (recv_wd.has_holes()) {
       if (!scheduler.sack_pending(ack))
         return false;
@@ -137,7 +138,7 @@ public:
       msg = allocator->alloc_message(sizeof(protocol::ft_header));
       scheduler.ack_callback(ack);
     }
-    protocol::prepare_ack_pkt(msg, ack, recv_wd.capacity(), is_sack);
+    protocol::prepare_ack_pkt(msg, ack, recv_wd.capacity(), recv_wd.get_ts(), is_sack);
     FASTT_LOG_DEBUG("Return %u capacity to peer\n", recv_wd.capacity());
     pkt_if->consume_pkt(msg, sport, target);
     return true;
@@ -145,10 +146,11 @@ public:
 
   bool process_pkt(message *pkt) {
     auto *hdr = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
+    auto ts = *pkt->get_ts() - hdr->ts;
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
       if (hdr->ack)
-        rt_handler.acknowledge(hdr->ack, hdr->wnd);
+        rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
       scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
         ++stats.retransmissions;  
@@ -159,13 +161,12 @@ public:
       break;
     }
     case protocol::pkt_type::FT_ACK: {
-
-      rt_handler.acknowledge(hdr->ack, hdr->wnd);
+      rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
       if (hdr->sack) {
         auto *sack_payload = rte_pktmbuf_mtod_offset(
           pkt, protocol::ft_sack_payload *, sizeof(protocol::ft_header));  
         rt_handler.acknowledge_sack(
-            sack_payload,
+            sack_payload, hdr->wnd, ts,
             [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
       }
       rte_pktmbuf_free(pkt);
@@ -182,7 +183,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_INIT_ACK: {
-      rt_handler.acknowledge(hdr->ack, hdr->wnd);
+      rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
       scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
         rte_pktmbuf_free(pkt);
@@ -240,7 +241,7 @@ private:
   }
   window<kOustandingMessages> recv_wd;
   con_config target;
-  retransmission_handler<> rt_handler;
+  retransmission_handler rt_handler;
   ack_scheduler scheduler;
   message_allocator *allocator;
   packet_if *pkt_if;

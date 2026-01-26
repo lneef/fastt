@@ -8,10 +8,11 @@
 #include <bitset>
 #include <cstdint>
 #include <cstring>
+#include <generic/rte_cycles.h>
 
 template <uint32_t N> struct window {
   window(uint64_t min_seq)
-      : wd(), front(0), mask(N - 1), least_in_window(min_seq), max_acked(0) {}
+      : wd(), front(0), mask(N - 1), least_in_window(min_seq), max_acked(0), to_us(rte_get_timer_hz() / 1e6) {}
 
   uint64_t get_last_acked_packet() const { return least_in_window - 1; }
 
@@ -19,8 +20,10 @@ template <uint32_t N> struct window {
     auto i = index(seq);
     if (beyond_window(seq) || wd[i])
       return false;
-    if (seq > max_acked)
+    if (seq > max_acked){
       max_acked = seq;
+      ts = *msg->get_ts();
+    }
     wd[i] = true;
     messages[i] = msg;
     return true;
@@ -80,9 +83,16 @@ template <uint32_t N> struct window {
 
   std::size_t last_seq() const { return least_in_window + mask + 1; }
 
+  uint64_t get_ts(){
+      auto now = rte_get_timer_cycles() / to_us;
+      return now - ts;
+  }
+
   std::bitset<N> wd;
   std::array<message *, N> messages{};
   std::size_t front, mask;
   uint64_t least_in_window;
   uint64_t max_acked;
+  uint64_t ts = 0;
+  uint64_t to_us;
 };
