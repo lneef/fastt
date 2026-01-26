@@ -91,6 +91,7 @@ struct transaction_slot {
   void update_execution() {
     assert(state == slot_state::COMPLETED);
     state = slot_state::RUNNING;
+    has_outstanding_msgs = true;
     rearm();
   }
 

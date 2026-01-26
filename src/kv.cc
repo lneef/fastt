@@ -13,3 +13,7 @@ std::unique_ptr<transaction_proxy> kv_proxy::start_transaction(connection *con,
   pkt->pt = packet_t::SINGLE;
   return std::make_unique<transaction_proxy>(q, con, th);
 }
+
+void kv_proxy::finish_transaction(transaction_proxy* proxy){
+    proxy->con->finish_transaction(proxy->t->slot);
+}
