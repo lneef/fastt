@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <atomic>
 #include <bits/getopt_core.h>
+#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -102,12 +103,12 @@ static int lcore_fn(void *arg) {
     auto *req = allocator->alloc_message(dataSize);
     create_put_request(req, dist(rng), dist(rng));  
     auto resp = kv.start_transaction(con, req, queue);
-    assert(resp);
+    assert(resp.get());
     resp->tx_if().send(req, true);
     kv.flush();
     resp->wait();
     msg = resp->rx_if().read();
-    if(resp->completed()){
+    if(resp->finish()){
         allocator->deallocate(msg);
         kv.finish_transaction(resp.get());
     }

@@ -9,7 +9,6 @@
 
 struct transaction_handle{
     transaction_slot* slot;
-    bool completed = false;
 };
 
 class transaction_queue{
@@ -44,6 +43,7 @@ struct transaction_proxy{
     transaction_queue& q;
     connection* con;
     transaction_handle *t;
+    bool done = false;
 
     auto& rx_if(){
         return t->slot->rx_if;
@@ -56,20 +56,21 @@ struct transaction_proxy{
     void wait(){
         if(!t->slot->has_outstanding_messages()){
             q.pop_front();
-            t->completed = true;
+            done = true;
             return;
         }
         while(!t->slot->rx_if.has_incoming_messages())
             con->get_manager()->poll_single_connection(con);
     }
 
-    bool completed(){
+    bool finish(){
         if(!t->slot->has_outstanding_messages()){
             q.pop_front();
-            t->completed = true;
+            done = true;
         }
-        return t->completed;
+        return done;
     }
 
+    bool completed() const { return done; }
 };
 
