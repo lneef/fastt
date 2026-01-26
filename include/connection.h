@@ -236,6 +236,7 @@ private:
     (void)timer;
     auto *this_ptr = static_cast<connection_manager *>(arg);
     this_ptr->flush();
+    FASTT_LOG_DEBUG("Flush\n");
   }
   std::deque<std::pair<message *, flow_tuple>> connection_requests;
   fixed_size_hash_table<flow_tuple, std::unique_ptr<connection>> flows;

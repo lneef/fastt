@@ -11,29 +11,26 @@
 #include <rte_lcore.h>
 #include <rte_timer.h>
 
-class transport;
-
 enum class slot_state {
   COMPLETED,
   RUNNING,
-
 };
 
 struct transaction_slot {
   static constexpr uint32_t kOutStandingMsg = 64;
-  uint16_t tid = 0;
-  slot_state state = slot_state::COMPLETED;
   std::deque<message *> incoming;
   list_hook link;
   transport *transport_impl;
-  bool is_client = false;
-  bool has_outstanding_msgs = false;
   uint64_t incoming_pkts = 0;
   std::unique_ptr<rte_timer> timer;
+  uint16_t tid = 0;
+  slot_state state = slot_state::COMPLETED;
+  bool is_client = false;
+  bool has_outstanding_msgs = false;
 
   transaction_slot(uint16_t tid, transport *transport_impl, bool is_client)
-      : tid(tid), transport_impl(transport_impl), is_client(is_client),
-        timer(std::make_unique<rte_timer>()) {
+      : transport_impl(transport_impl), timer(std::make_unique<rte_timer>()),
+        tid(tid), is_client(is_client) {
     rte_timer_init(timer.get());
   }
 
@@ -46,12 +43,10 @@ struct transaction_slot {
     slot->rearm();
   }
 
-  bool completed() {
-    return state == slot_state::COMPLETED;
-  }
+  bool completed() { return state == slot_state::COMPLETED; }
 
-  bool has_outstanding_messages() const{
-      return has_outstanding_msgs || incoming.size() > 0;
+  bool has_outstanding_messages() const {
+    return has_outstanding_msgs || incoming.size() > 0;
   }
 
   void handle_incoming_server(message *msg, bool fini) {
@@ -73,7 +68,8 @@ struct transaction_slot {
 
   void rearm() {
     incoming_pkts = 0;
-    auto timeout = rte_get_timer_hz() / 1e4 * (is_client ? 2 : 1);
+    auto timeout = rte_get_timer_hz() / 1e3 *
+                   (is_client ? 2 : 1); /* set timeout to 2ms/1ms */
     rte_timer_reset(timer.get(), timeout, SINGLE, rte_lcore_id(), timer_cb,
                     this);
   }
