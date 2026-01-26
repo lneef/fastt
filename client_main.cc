@@ -136,7 +136,6 @@ int run(netconfig &conf) {
     if (!ifc)
       return -1;
     ifaces[i] = std::move(*ifc);
-
     auto [port, txq, rxq, pool] = ifaces[i].get_slice(0);
     adpater.allocator[i] = std::make_shared<message_allocator>("pool", 8095);
     adpater.cifs[i] = std::make_unique<client_iface>(
@@ -151,6 +150,8 @@ int run(netconfig &conf) {
     adpater.connections[i] = con;
   }
   run(lcore_fn, &adpater);
+  for(auto& ifc : ifaces)
+      ifc.stop();
   std::cout << "avg: " << lat.load() / rte_lcore_count() << std::endl;
   return 0;
 }
