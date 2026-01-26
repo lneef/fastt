@@ -101,12 +101,15 @@ static int lcore_fn(void *arg) {
     message* msg;  
     auto *req = allocator->alloc_message(dataSize);
     create_put_request(req, dist(rng), dist(rng));  
-    auto resp = kv.send_request(con, req, queue);
+    auto resp = kv.start_transaction(con, req, queue);
+    resp->tx_if().send(req, true);
     kv.flush();
-    auto handle = resp->wait();
-    msg = handle.slot->rx_if.read();
-    if(handle.completed)
+    resp->wait();
+    msg = resp->rx_if().read();
+    if(resp->completed())
         allocator->deallocate(msg);
+    assert(resp->completed());
+    ++pkts;
   }
 
   auto end = rte_get_timer_cycles();

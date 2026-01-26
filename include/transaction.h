@@ -45,14 +45,26 @@ struct transaction_proxy{
     connection* con;
     transaction_handle *t;
 
-    transaction_handle& wait(){
-        while(!t->slot->rx_if.has_incoming_messages())
-            con->get_manager()->poll_single_connection(con);
+    auto& rx_if(){
+        return t->slot->rx_if;
+    }
+
+    auto& tx_if(){
+        return t->slot->tx_if;
+    }
+
+    void wait(){
         if(!t->slot->has_outstanding_messages()){
             q.pop_front();
             t->completed = true;
+            return;
         }
-        return *t;
+        while(!t->slot->rx_if.has_incoming_messages())
+            con->get_manager()->poll_single_connection(con);
+    }
+
+    bool completed(){
+        return t->completed;
     }
 
 };

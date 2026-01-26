@@ -57,7 +57,7 @@ class kv_proxy{
     public:
         kv_proxy(client_iface* ifc, connection* con): ifc(ifc), con(con){}
  
-        std::unique_ptr<transaction_proxy> send_request(connection* con, message* msg, transaction_queue& q);
+        std::unique_ptr<transaction_proxy> start_transaction(connection* con, message* msg, transaction_queue& q);
         void flush(){ ifc->flush(); }
     private:
             client_iface* ifc;
