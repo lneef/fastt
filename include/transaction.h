@@ -64,6 +64,10 @@ struct transaction_proxy{
     }
 
     bool completed(){
+        if(!t->slot->has_outstanding_messages()){
+            q.pop_front();
+            t->completed = true;
+        }
         return t->completed;
     }
 
