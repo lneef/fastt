@@ -111,10 +111,10 @@ public:
   void acknowledge_sack(protocol::ft_sack_payload* payload, uint64_t budget, uint64_t now, F &&retransmit_cb) {  
     auto pkt_seq = least_unacked_pkt;
     uint64_t largest_acked = 0;
-    for (auto i = 0u; i < payload->bit_map_len; ++i) { 
+    for (auto i = 0u; i < payload->bit_map_len; ++i, ++pkt_seq) { 
       auto ind = get_bit_indices_64(i); 
       auto val = payload->bit_map[ind.first] & (1 << ind.second);
-      auto &desc = unacked_packets[pkt_seq];
+      auto &desc = unacked_packets[i];
 
       if (!val) {
         prepare_retransmit(&desc);
@@ -124,7 +124,6 @@ public:
           largest_acked = pkt_seq;
 
       desc.sacked = true;
-      ++pkt_seq;
     }
     FASTT_LOG_DEBUG("Largest set seq num %lu\n", largest_acked);
     update_srtt(largest_acked, now);
@@ -132,7 +131,7 @@ public:
   }
 
   void update_srtt(uint64_t seq, uint64_t now){
-      auto &desc = unacked_packets[seq];
+      auto &desc = unacked_packets[seq - least_unacked_pkt];
       if(desc.retransmitted)
           return;
       if(rtt == 0)
