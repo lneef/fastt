@@ -22,6 +22,7 @@ struct transaction_slot {
   list_hook link;
   transport *transport_impl;
   uint64_t incoming_pkts = 0;
+  const uint64_t default_timeout;
   timer<dpdk_timer> slot_timer;
   uint16_t tid = 0;
   slot_state state = slot_state::COMPLETED;
@@ -29,7 +30,7 @@ struct transaction_slot {
   bool has_outstanding_msgs = false;
 
   transaction_slot(uint16_t tid, transport *transport_impl, bool is_client)
-      : transport_impl(transport_impl), slot_timer(timertype::SINGLE),
+      : transport_impl(transport_impl), default_timeout(get_ticks_ms()), slot_timer(timertype::SINGLE),
         tid(tid), is_client(is_client) {
   }
 
@@ -67,7 +68,7 @@ struct transaction_slot {
 
   void rearm() {
     incoming_pkts = 0;
-    auto timeout = rte_get_timer_hz() / 1e3 *
+    auto timeout = default_timeout *
                    (is_client ? 2 : 1); /* set timeout to 2ms/1ms */
     slot_timer.reset(timeout, timer_cb, this);
 

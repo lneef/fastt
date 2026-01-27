@@ -31,7 +31,7 @@ struct statistics {
   statistics(uint64_t retransmitted, uint64_t acked, uint64_t sent,
              uint64_t retransmissions, uint64_t rtt_est)
       : retransmitted(retransmitted), acked(acked), sent(sent), retransmissions(retransmissions) {
-    rtt = static_cast<double>(rtt_est) / (rte_get_timer_hz() / 1e6);
+    rtt = static_cast<double>(rtt_est);
   }
 
   statistics(): retransmitted(), acked(), sent(), retransmissions(), rtt() {}

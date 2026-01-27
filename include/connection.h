@@ -48,6 +48,10 @@ public:
   uint16_t receive_message(message **msgs, uint16_t cnt);
   void open_connection();
 
+  statistics get_transport_stats() const{
+      return transport_impl->get_stats();
+  }
+
   bool active() { return transport_impl->active(); }
 
   intrusive_list_t<transaction_slot> &get_inprogress() { return inprogress; }
@@ -109,7 +113,7 @@ public:
                      uint32_t sip, std::shared_ptr<message_allocator> allocator)
       : flows(kdefaultFlowTableSize), allocator(allocator), dev(port, txq, rxq),
         scheduler(&dev), pkt_if(&scheduler, sip, port), active(),
-        is_client(is_client), flush_timeout(rte_get_timer_cycles() / 1e6), flush_timer(timertype::PERIODICAL) {
+        is_client(is_client), flush_timeout(get_ticks_us()), flush_timer(timertype::PERIODICAL) {
             flush_timer.reset(flush_timeout, flush_cb, this);
   }
 
@@ -207,7 +211,7 @@ public:
     auto [it, inserted] = flows.emplace(
         tuple, std::make_unique<connection>(
                    allocator.get(), &pkt_if,
-                   con_config{tuple.sip, rte_cpu_to_be_16(tuple.sport)}, port,
+                   con_config{tuple.sip, rte_be_to_cpu_16(tuple.sport)}, port,
                    this, is_client));
     if (inserted){
       active.push_front(*it->get());

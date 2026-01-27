@@ -115,13 +115,15 @@ public:
       auto ind = get_bit_indices_64(i); 
       auto val = payload->bit_map[ind.first] & (1 << ind.second);
       auto &desc = unacked_packets[pkt_seq];
-      desc.sacked = true;
 
       if (!val) {
         prepare_retransmit(&desc);
         retransmit_cb(desc.packet);
-      }else
+      }else if(!desc.sacked) 
+          /* we want the largest seq not acked yet */
           largest_acked = pkt_seq;
+
+      desc.sacked = true;
       ++pkt_seq;
     }
     FASTT_LOG_DEBUG("Largest set seq num %lu\n", largest_acked);

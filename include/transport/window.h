@@ -12,7 +12,7 @@
 
 template <uint32_t N> struct window {
   window(uint64_t min_seq)
-      : wd(), front(0), mask(N - 1), least_in_window(min_seq), max_acked(0), to_us(rte_get_timer_hz() / 1e6) {}
+      : wd(), front(0), mask(N - 1), least_in_window(min_seq), max_acked(0){}
 
   uint64_t get_last_acked_packet() const { return least_in_window - 1; }
 
@@ -84,7 +84,7 @@ template <uint32_t N> struct window {
   std::size_t last_seq() const { return least_in_window + mask + 1; }
 
   uint64_t get_ts(){
-      auto now = rte_get_timer_cycles() / to_us;
+      auto now = rte_get_timer_cycles() / get_ticks_us();
       return now - ts;
   }
 
@@ -94,5 +94,4 @@ template <uint32_t N> struct window {
   uint64_t least_in_window;
   uint64_t max_acked;
   uint64_t ts = 0;
-  uint64_t to_us;
 };

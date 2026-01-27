@@ -4,6 +4,7 @@
 #include <boost/intrusive/options.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <generic/rte_cycles.h>
 #include <rte_ether.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
@@ -18,6 +19,14 @@ using list_hook = bi::list_member_hook<bi::link_mode<bi::link_mode_type::auto_un
 
 template<typename T, list_hook T::*link  = &T::link>
 using intrusive_list_t = bi::list<T, bi::member_hook<T, list_hook, link>, bi::constant_time_size<false>>;
+
+__inline uint64_t get_ticks_us(){
+    return rte_get_timer_hz() / 1e6;
+}
+
+__inline uint64_t get_ticks_ms(){
+    return rte_get_timer_hz() / 1e3;
+}
 
 //-------------------------------------------------------------------------------
 /*
