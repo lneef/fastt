@@ -99,12 +99,12 @@ public:
     if (seq < least_unacked_pkt)
       return;
     stats.acked = seq;
-    least_unacked_pkt = seq + 1;
     if(!is_sack){
         update_srtt(seq, now);
         update_budget(budget, seq);
     }
     cleanup_acked_pkts(seq);
+    least_unacked_pkt = seq + 1;
   }
 
   template <typename F>
