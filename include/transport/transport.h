@@ -67,7 +67,7 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
     pending_from_retry = false;
   }
 
-  ack_scheduler() : last_acked(0), pending_from_retry(false) {}
+  ack_scheduler() : last_acked(0), last_sack(1), pending_from_retry(false) {}
 };
 
 

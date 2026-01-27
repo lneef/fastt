@@ -69,7 +69,7 @@ template <uint32_t N> struct window {
     return seq <= mask;
   }
 
-  bool has_holes() { return max_acked != least_in_window; }
+  bool has_holes() { return max_acked != least_in_window - 1; }
 
   uint16_t copy_bitset(protocol::ft_sack_payload *data) {  
     uint16_t id = 0;
