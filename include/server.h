@@ -8,6 +8,7 @@
 #include <memory>
 #include <rte_byteorder.h>
 #include <rte_ether.h>
+#include <rte_lcore.h>
 #include <rte_mbuf_core.h>
 
 class server_iface {
@@ -16,7 +17,7 @@ public:
                const con_config &scon_config,
                std::shared_ptr<message_allocator> pool)
       : scon_config(scon_config),
-        manager(false, port, txq, rxq, scon_config.ip, pool) {}
+        manager(false, port, txq, rxq, scon_config.ip, pool, rte_lcore_id()) {}
 
   void complete() { manager.flush(); };
 

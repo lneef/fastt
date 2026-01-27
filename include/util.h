@@ -15,17 +15,22 @@
 
 namespace bi = boost::intrusive;
 
+extern uint64_t to_us;
+extern uint64_t to_ms;
+
+void init_timing();
+
 using list_hook = bi::list_member_hook<bi::link_mode<bi::link_mode_type::auto_unlink>>;
 
 template<typename T, list_hook T::*link  = &T::link>
 using intrusive_list_t = bi::list<T, bi::member_hook<T, list_hook, link>, bi::constant_time_size<false>>;
 
 __inline uint64_t get_ticks_us(){
-    return rte_get_timer_hz() / 1e6;
+    return to_us;
 }
 
 __inline uint64_t get_ticks_ms(){
-    return rte_get_timer_hz() / 1e3;
+    return to_ms;
 }
 
 //-------------------------------------------------------------------------------

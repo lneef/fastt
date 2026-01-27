@@ -1,6 +1,7 @@
 #include "debug.h"
 #include "iface.h"
 #include "message.h"
+#include "util.h"
 #include <cstdint>
 #include <memory>
 #include <rte_ethdev.h>
@@ -22,6 +23,7 @@ static constexpr unsigned RSS_KEY_LEN = 40;
 int fastt::init() {
   FASTT_LOG_DEBUG("init fasst\n");
   rte_timer_subsystem_init();
+  init_timing();
   return message::init();
 }
 

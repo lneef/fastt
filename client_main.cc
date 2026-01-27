@@ -134,17 +134,21 @@ static void run(lcore_function_t *f, void *args) {
 int run(netconfig &conf) {
   if (fastt::init())
     return -1;
-  auto ifc = iface::configure_port(0, 1, 1);
+  auto cnt = rte_lcore_count();
+  auto ifc = iface::configure_port(0, cnt, cnt);
   if (!ifc)
     return -1;
 
   uint16_t i = 0;
+  uint16_t lcore;
   lcore_adapter adpater(rte_lcore_count());
-  for (auto p : conf.sports) {
+  RTE_LCORE_FOREACH(lcore) {
     auto [port, txq, rxq, pool] = ifc->get_slice(i);
-    adpater.allocator[i] = std::make_shared<message_allocator>("pool", 8095);
+    adpater.allocator[i] =
+        std::make_shared<message_allocator>(("mpool" + std::to_string(i)).c_str(), 8095);
     adpater.cifs[i] = std::make_unique<client_iface>(
-        port, txq, rxq, adpater.allocator[i], con_config{conf.sip, p});
+        port, txq, rxq, adpater.allocator[i],
+        con_config{conf.sip, conf.sports[i]}, lcore);
     auto &cif = adpater.cifs[i];
     auto *con = cif->open_connection({conf.dip, conf.dport}, conf.dmac);
     if (!con)

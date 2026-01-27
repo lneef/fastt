@@ -110,11 +110,11 @@ class connection_manager {
 
 public:
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
-                     uint32_t sip, std::shared_ptr<message_allocator> allocator)
+                     uint32_t sip, std::shared_ptr<message_allocator> allocator, uint16_t lcore_id)
       : flows(kdefaultFlowTableSize), allocator(allocator), dev(port, txq, rxq),
         scheduler(&dev), pkt_if(&scheduler, sip, port), active(),
         is_client(is_client), flush_timeout(get_ticks_us()), flush_timer(timertype::PERIODICAL) {
-            flush_timer.reset(flush_timeout, flush_cb, this);
+            flush_timer.reset(flush_timeout, flush_cb, lcore_id, this);
   }
 
   void handle_pkt(message *pkt, flow_tuple &ft) {

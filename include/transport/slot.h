@@ -70,7 +70,7 @@ struct transaction_slot {
     incoming_pkts = 0;
     auto timeout = default_timeout *
                    (is_client ? 2 : 1); /* set timeout to 2ms/1ms */
-    slot_timer.reset(timeout, timer_cb, this);
+    slot_timer.reset(timeout, timer_cb, rte_lcore_id(), this);
 
   }
 
