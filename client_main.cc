@@ -85,7 +85,12 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 }
 
 static constexpr auto dur = 10000;
-static constexpr uint16_t dataSize = 64;
+static constexpr uint16_t dataSize = sizeof(kv_packet<kv_request>);
+static constexpr uint16_t cnt = 32;
+struct msg_context {
+  message *req;
+  std::unique_ptr<transaction_proxy> resp = nullptr;
+};
 static int lcore_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
@@ -99,22 +104,26 @@ static int lcore_fn(void *arg) {
   auto &cif = *adapter->cifs[me];
   auto pkts = 0;
   uint64_t now = rte_get_timer_cycles();
+  std::vector<msg_context> ctx(cnt);
 
   kv_proxy kv(&cif, con);
   while (pkts < dur) {
-    message *msg;
-    auto *req = allocator->alloc_message(dataSize);
-    auto resp = kv.start_transaction(con, queue);
-    assert(resp.get());
-    kv.lookup(dist(rng), req);
-    resp->tx_if().send(req, true);
-    resp->wait();
-    msg = resp->rx_if().read();
-    if (resp->finish()) {
-      allocator->deallocate(msg);
-      kv.finish_transaction(resp.get());
+    for (auto &c : ctx) {
+      c.req = allocator->alloc_message(dataSize);
+      c.resp = kv.start_transaction(con, queue);
+      assert(c.resp.get());
+      kv.lookup(dist(rng), c.req);
+      c.resp->tx_if().send(c.req, true);
     }
-    assert(resp->completed());
+    for (auto &c : ctx) {
+      c.resp->wait();
+      auto *msg = c.resp->rx_if().read();
+      if (c.resp->finish()) {
+        allocator->deallocate(msg);
+        kv.finish_transaction(c.resp.get());
+      }
+      assert(c.resp->completed());
+    }
     ++pkts;
   }
 
@@ -143,8 +152,8 @@ int run(netconfig &conf) {
   lcore_adapter adpater(rte_lcore_count());
   RTE_LCORE_FOREACH(lcore) {
     auto [port, txq, rxq, pool] = ifc->get_slice(i);
-    adpater.allocator[i] =
-        std::make_shared<message_allocator>(("mpool" + std::to_string(i)).c_str(), 8095);
+    adpater.allocator[i] = std::make_shared<message_allocator>(
+        ("mpool" + std::to_string(i)).c_str(), 8095);
     adpater.cifs[i] = std::make_unique<client_iface>(
         port, txq, rxq, adpater.allocator[i],
         con_config{conf.sip, conf.sports[i]}, lcore);
