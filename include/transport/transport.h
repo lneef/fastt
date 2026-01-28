@@ -54,8 +54,7 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
     return pending_from_retry || seq > last_acked;
   }
 
-
-  [[nodiscard]] uint64_t ack_callback(uint64_t seq) {
+  uint64_t ack_callback(uint64_t seq) {
     pending_from_retry = false;
     return seq - last_acked;
   }
@@ -64,10 +63,10 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
 };
 
 class slotted_transport{
-static constexpr uint16_t kOustandingMessages = 128;
+static constexpr uint16_t kOustandingMessages = 128; /* hack for happy path */
   enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
   struct slot_context{
-      window<kOustandingMessages> recv_wd;
+      window<kOustandingMessages / 32> recv_wd;
       ack_scheduler scheduler;
       retransmission_handler rt_handler;
       slot_context(): recv_wd(min_seq), scheduler(), rt_handler(){}
@@ -94,17 +93,17 @@ public:
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
       uint32_t ts = 0;
-      auto least_in_window = sctx.recv_wd.get_last_acked_packet();
-      if (sctx.scheduler.ack_pending(least_in_window)) {
-        ack = least_in_window;
+      auto max_rcvd = sctx.recv_wd.get_last_acked_packet();
+      if (sctx.scheduler.ack_pending(max_rcvd)) {
+        ack = max_rcvd;
         ts = sctx.recv_wd.get_ts();
-        grant_returned -= sctx.scheduler.ack_callback(ack);
+        sctx.scheduler.ack_callback(ack);
       }
       protocol::prepare_ft_header(pkt, seq, ack, msg_id, sctx.recv_wd.capacity(),
                                   fini, ts);
     };
 
-    auto inserted = sctx.rt_handler.record_pkt(msg_id, pkt, ctor);
+    auto inserted = sctx.rt_handler.record_pkt(msg_id, pkt, ctor, budget);
     if (inserted)
       pkt_if->consume_pkt(pkt, sport, target);
     return inserted;
@@ -139,7 +138,7 @@ public:
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
       if (hdr->ack)
-        sctx.rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
+        budget += sctx.rt_handler.acknowledge(hdr->ack, hdr->wnd, ts);
       sctx.scheduler.process_seq(hdr->seq);
       if (sctx.recv_wd.is_set(hdr->seq)) {
         ++stats.retransmissions;  
@@ -150,14 +149,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_ACK: {
-      sctx.rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
-      if (hdr->sack) {
-        auto *sack_payload = rte_pktmbuf_mtod_offset(
-          pkt, protocol::ft_sack_payload *, sizeof(protocol::ft_header));  
-        sctx.rt_handler.acknowledge_sack(
-            sack_payload, hdr->wnd, ts,
-            [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
-      }
+      budget += sctx.rt_handler.acknowledge(hdr->ack, hdr->wnd, ts);
       rte_pktmbuf_free(pkt);
       break;
     }
@@ -174,7 +166,7 @@ public:
     }
 
     case protocol::pkt_type::FT_INIT_ACK: {
-      sctx.rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
+      budget += sctx.rt_handler.acknowledge(hdr->ack, hdr->wnd, ts);
       sctx.scheduler.process_seq(hdr->seq);
       if (sctx.recv_wd.is_set(hdr->seq)) {
         rte_pktmbuf_free(pkt);
@@ -186,7 +178,6 @@ public:
       cstate = connection_state::ESTABLISHED;
       break;
     }
-
     default:
       rte_pktmbuf_free(pkt);
       break;
@@ -198,7 +189,7 @@ public:
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     bool retval = sc[0].rt_handler.record_pkt(0, msg, [](message *msg, uint64_t seq) {
       protocol::prepare_init_header(msg, seq);
-    });
+    }, budget);
     assert(retval);
     auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     assert(hdr->type == protocol::FT_INIT);
@@ -209,9 +200,9 @@ public:
   void accept_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     bool retval = sc[0].rt_handler.record_pkt(
-        0, msg, [budget = sc[0].recv_wd.capacity()](message *msg, uint64_t seq) {
+        0, msg, [budget = kOustandingMessages](message *msg, uint64_t seq) {
           protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
-        });
+        }, budget);
     FASTT_LOG_DEBUG("Sent ack for init");
     assert(retval);
     pkt_if->consume_pkt(msg, sport, target);
@@ -221,6 +212,7 @@ public:
 
   template <typename F> void receive_messages(F &&f, uint16_t tid, uint16_t cnt) {
     grant_returned += sc[tid].recv_wd.advance(f, cnt);
+    grant_returned &= (kOustandingMessages - 1);
     /* maybe we lost pkts */
     if (grant_returned >= kOustandingMessages / 4) {
       acknowledge(tid);
@@ -236,6 +228,7 @@ private:
     sc[0].recv_wd.advance([](message *msg) { rte_pktmbuf_free(msg); }, 1);
   }
 
+  uint32_t budget = 0;
   std::vector<slot_context> sc;
   con_config target;
   message_allocator *allocator;

@@ -200,7 +200,6 @@ public:
     auto [pkt, ft] = connection_requests.front();
     auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.dport));
     connection_requests.pop_front();
-    con->handle_incoming_server(pkt);
     if (inserted) {
       con->accept();
       FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);

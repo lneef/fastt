@@ -119,7 +119,7 @@ struct transaction_slot {
       return slot->incoming[--slot->ptr];
     }
 
-    bool has_incoming_messages() { return slot->has_outstanding_messages() || slot->ptr > 0; }
+    bool has_incoming_messages() { return slot->ptr > 0; }
 
     transaction_slot *slot;
   } rx_if{this};
