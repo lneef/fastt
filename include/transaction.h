@@ -58,7 +58,7 @@ struct transaction_proxy {
       return;
     }
     while (!t->slot->rx_if.has_incoming_messages())
-      con->get_manager()->poll_single_connection(con);
+      con->get_manager()->poll_open_connection();
   }
 
   bool finish() {

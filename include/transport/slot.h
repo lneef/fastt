@@ -4,9 +4,7 @@
 #include "timer.h"
 #include "transport.h"
 #include "util.h"
-#include "timer.h"
 #include <cstdint>
-#include <deque>
 #include <rte_cycles.h>
 #include <rte_eal.h>
 #include <rte_lcore.h>
@@ -18,26 +16,28 @@ enum class slot_state {
 
 struct transaction_slot {
   static constexpr uint32_t kOutStandingMsg = 64;
-  std::deque<message *> incoming;
+  static constexpr uint16_t kmsgBufSize = 8;
+  std::array<message *, kmsgBufSize> incoming;
   list_hook link;
-  transport *transport_impl;
+  slotted_transport *transport_impl;
   uint64_t incoming_pkts = 0;
   const uint64_t default_timeout;
   timer<dpdk_timer> slot_timer;
   uint16_t tid = 0;
+  uint16_t ptr = 0;
   slot_state state = slot_state::COMPLETED;
   bool is_client = false;
   bool has_outstanding_msgs = false;
 
-  transaction_slot(uint16_t tid, transport *transport_impl, bool is_client)
-      : transport_impl(transport_impl), default_timeout(get_ticks_ms()), slot_timer(timertype::SINGLE),
-        tid(tid), is_client(is_client) {
-  }
+  transaction_slot(uint16_t tid, slotted_transport *transport_impl,
+                   bool is_client)
+      : transport_impl(transport_impl), default_timeout(get_ticks_ms()),
+        slot_timer(timertype::SINGLE), tid(tid), is_client(is_client) {}
 
   static void timer_cb(rte_timer *timer, void *arg) {
     (void)timer;
     auto *slot = static_cast<transaction_slot *>(arg);
-    slot->transport_impl->acknowledge();
+    slot->transport_impl->acknowledge(slot->tid);
     if (slot->incoming_pkts == 0)
       slot->transport_impl->probe_timeout(slot->tid);
     slot->rearm();
@@ -46,17 +46,16 @@ struct transaction_slot {
   bool completed() { return state == slot_state::COMPLETED; }
 
   bool has_outstanding_messages() const {
-    return has_outstanding_msgs || incoming.size() > 0;
+    return has_outstanding_msgs ||
+           transport_impl->has_outstanding_messages(tid) || ptr > 0;
   }
 
-  void handle_incoming_server(message *msg, bool fini) {
-    incoming.push_back(msg);
+  void handle_incoming_server(bool fini) {
     ++incoming_pkts;
     has_outstanding_msgs = !fini;
   }
 
-  void handle_incoming_client(message *msg, bool fini) {
-    incoming.push_back(msg);
+  void handle_incoming_client(bool fini) {
     ++incoming_pkts;
     if (fini) {
       stop_timer();
@@ -67,10 +66,9 @@ struct transaction_slot {
 
   void rearm() {
     incoming_pkts = 0;
-    auto timeout = default_timeout *
-                   (is_client ? 2 : 1); /* set timeout to 2ms/1ms */
+    auto timeout =
+        default_timeout * (is_client ? 2 : 1); /* set timeout to 2ms/1ms */
     slot_timer.reset(timeout, timer_cb, rte_lcore_id(), this);
-
   }
 
   void stop_timer() {
@@ -78,7 +76,7 @@ struct transaction_slot {
     slot_timer.stop();
   }
 
-  void acknowledge() { transport_impl->acknowledge(); }
+  void acknowledge() { transport_impl->acknowledge(tid); }
 
   void finish() {
     state = slot_state::COMPLETED;
@@ -108,14 +106,20 @@ struct transaction_slot {
 
   struct {
     message *read() {
-      if (slot->incoming.empty())
+      if (!slot->ptr)
+        slot->transport_impl->receive_messages(
+            [this](message *msg) {
+              if (slot->ptr < kmsgBufSize)
+                slot->incoming[slot->ptr++] = msg;
+            },
+            slot->tid, kmsgBufSize);
+      if (!slot->ptr)
         return nullptr;
-      auto *msg = slot->incoming.front();
-      slot->incoming.pop_front();
-      return msg;
+
+      return slot->incoming[--slot->ptr];
     }
 
-    bool has_incoming_messages() { return slot->incoming.size() > 0; }
+    bool has_incoming_messages() { return slot->has_outstanding_messages() || slot->ptr > 0; }
 
     transaction_slot *slot;
   } rx_if{this};

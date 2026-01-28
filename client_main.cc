@@ -163,7 +163,7 @@ int run(netconfig &conf) {
       return -1;
     while (!cif->probe_connection_setup_done(con))
       ;
-    con->acknowledge_all();
+    con->acknowledge_open_connection();
     adpater.connections[i] = con;
     ++i;
   }
