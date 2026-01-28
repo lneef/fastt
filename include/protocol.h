@@ -14,16 +14,17 @@ enum pkt_type : uint8_t{
 };
 
 struct __rte_packed_begin ft_header{
-  uint64_t type :2;
+  pkt_type type :2;
   uint64_t wnd :16;
   uint64_t fini: 1;
   uint64_t sack: 1;
-  uint64_t msg_id : 16;  
+  uint64_t msg_id : 14;  
   uint64_t ts : 30;
   uint64_t seq;
   uint64_t ack;
 } __rte_packed_end;
 
+static_assert(sizeof(ft_header) == 24, "");
 
 struct __rte_packed_begin ft_sack_payload{
     static constexpr uint16_t kBitMapLen = 2;
