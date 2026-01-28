@@ -68,6 +68,7 @@ class kv_proxy{
         void lookup(int64_t key, message* msg){
             create_get_request(msg, key);
         };
+        void acknowledge() { con->acknowledge_all(); }
         void finish_transaction(transaction_proxy* proxy);
         void flush(){ ifc->flush(); }
     private:
