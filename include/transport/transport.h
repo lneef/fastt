@@ -229,7 +229,9 @@ public:
 
   template <typename F> void receive_messages(F &&f) {
     grant_returned += recv_wd.advance(f);
-    if (grant_returned >= kOustandingMessages / 2) {
+    /* maybe we lost pkts */
+    grant_returned += recv_wd.max_rx - recv_wd.least_in_window;
+    if (grant_returned >= kOustandingMessages / 4) {
       acknowledge();
       grant_returned = 0;
     }
