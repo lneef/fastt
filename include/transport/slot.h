@@ -59,7 +59,6 @@ struct transaction_slot {
     incoming.push_back(msg);
     ++incoming_pkts;
     if (fini) {
-      transport_impl->acknowledge();
       stop_timer();
       state = slot_state::COMPLETED;
       has_outstanding_msgs = false;
