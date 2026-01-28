@@ -2,7 +2,10 @@
 #include "iface.h"
 #include "kv.h"
 #include "message.h"
+#include "protocol.h"
 #include "transaction.h"
+#include "transport/retransmission_handler.h"
+#include "transport/window.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <bits/getopt_core.h>
@@ -14,6 +17,7 @@
 #include <cstring>
 #include <generic/rte_cycles.h>
 #include <getopt.h>
+#include <ios>
 #include <iostream>
 #include <memory>
 #include <random>
@@ -176,8 +180,40 @@ int run(netconfig &conf) {
 
 int main(int argc, char *argv[]) {
   int dpdk_argc = rte_eal_init(argc, argv);
-  auto conf = parse_cmdline(argc - dpdk_argc, argv + dpdk_argc);
-  run(conf);
+  //auto conf = parse_cmdline(argc - dpdk_argc, argv + dpdk_argc);
+  //run(conf);
+  retransmission_handler rt(8);
+  message_allocator allocator("n", 8095);
+  auto *m = allocator.alloc_message(64);
+
+  rt.record_pkt(0, m, [](message*, uint64_t){});
+
+  rt.record_pkt(0, m, [](message*, uint64_t){});
+
+  rt.record_pkt(0, m, [](message*, uint64_t){});
+
+  rt.record_pkt(0, m, [](message*, uint64_t){});
+
+  rt.record_pkt(0, m, [](message*, uint64_t){});
+
+  rt.record_pkt(0, m, [](message*, uint64_t){});
+
+
+  rt.record_pkt(0, m, [](message*, uint64_t){});
+
+
+  rt.record_pkt(0, m, [](message*, uint64_t){});
+
+  std::cerr << rt.size() << std::endl;
+  window<8> rw(1);
+  rw.set(4, m);
+  rw.set(1, m);
+  protocol::ft_sack_payload pl;
+  rw.copy_bitset(&pl);
+  auto v = pl.bit_map[0];
+  std::cerr << std::format("{:016x}", v) << std::endl;
+  std::cerr << pl.bit_map_len << std::endl;
+  rt.acknowledge_sack(&pl, 32, 0, [](message*){});
   rte_eal_cleanup();
   return 0;
 }

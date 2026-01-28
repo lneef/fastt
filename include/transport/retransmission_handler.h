@@ -1,14 +1,15 @@
 #pragma once
+#include <cassert>
 #include <cstdint>
 #include <message.h>
 #include <rte_cycles.h>
 
 #include "debug.h"
+#include "filter.h"
 #include "message.h"
 #include "protocol.h"
 #include "queue.h"
 #include "util.h"
-#include "filter.h"
 
 static constexpr uint64_t min_seq = 1;
 
@@ -32,7 +33,7 @@ struct sender_entry {
   sender_entry(const sender_entry &) = delete;
 };
 
- class retransmission_handler {
+class retransmission_handler {
   using indexable_queue = queue_base<sender_entry>;
   static constexpr uint16_t kQueuedPackets = 64;
   static constexpr uint64_t kMSecDiv = 1e3;
@@ -42,14 +43,14 @@ public:
     uint64_t acked, retransmitted, rtt;
     statistics() : acked(0), retransmitted(0) {}
   };
-  retransmission_handler()
-      : unacked_packets(kQueuedPackets), budget(1), seq(min_seq), rtt() {}
+  retransmission_handler(uint32_t budget = 1)
+      : unacked_packets(kQueuedPackets), budget(budget), seq(min_seq), rtt() {}
 
   uint64_t cleanup_acked_pkts(uint64_t seq) {
     uint64_t burst_rtt = 0;
     while (!unacked_packets.empty() && unacked_packets.front()->seq <= seq) {
       auto *desc = unacked_packets.front();
-     assert(desc->packet);
+      assert(desc->packet);
       rte_pktmbuf_free(desc->packet);
       desc->link.unlink();
       unacked_packets.pop_front();
@@ -57,9 +58,7 @@ public:
     return burst_rtt;
   }
 
-  template<typename F>
-  bool record_pkt(uint16_t tid, message *msg,
-                  F &&ctor) {
+  template <typename F> bool record_pkt(uint16_t tid, message *msg, F &&ctor) {
     if (unacked_packets.full() || budget == 0)
       return false;
     --budget;
@@ -72,8 +71,7 @@ public:
     return true;
   }
 
-  template<typename F>
-  void probe_retransmit(F &&cb, uint16_t tid) {
+  template <typename F> void probe_retransmit(F &&cb, uint16_t tid) {
     for (auto &entry : send_list) {
       auto *msg = entry.packet;
       if (*msg->get_ts() == 0)
@@ -88,6 +86,9 @@ public:
 
   void prepare_retransmit(sender_entry *entry) {
     ++stats.retransmitted;
+    // inc reference count
+    // in total we have n + 1 where n is the number of transmission of
+    // entry->msg n reduction because of cleanup
     entry->packet->inc_refcnt();
     *entry->packet->get_ts() = 0;
     entry->retransmitted = true;
@@ -99,29 +100,33 @@ public:
     if (seq < least_unacked_pkt)
       return;
     stats.acked = seq;
-    if(!is_sack){
-        update_srtt(seq, now);
-        update_budget(budget, seq);
+    if (!is_sack) {
+      update_srtt(seq, now);
+      update_budget(budget, seq);
     }
     cleanup_acked_pkts(seq);
     least_unacked_pkt = seq + 1;
   }
 
   template <typename F>
-  void acknowledge_sack(protocol::ft_sack_payload* payload, uint64_t budget, uint64_t now, F &&retransmit_cb) {  
+  void acknowledge_sack(protocol::ft_sack_payload *payload, uint64_t budget,
+                        uint64_t now, F &&retransmit_cb) {
     auto pkt_seq = least_unacked_pkt;
     uint64_t largest_acked = 0;
-    for (auto i = 0u; i < payload->bit_map_len; ++i, ++pkt_seq) { 
-      auto ind = get_bit_indices_64(i); 
+    assert(payload->bit_map_len > 0);
+    assert(payload->bit_map_len <= unacked_packets.size());
+    assert(unacked_packets.front()->seq == least_unacked_pkt);
+    for (auto i = 0u; i < payload->bit_map_len; ++i, ++pkt_seq) {
+      auto ind = get_bit_indices_64(i);
       auto val = payload->bit_map[ind.first] & (1 << ind.second);
       auto &desc = unacked_packets[i];
 
       if (!val) {
         prepare_retransmit(&desc);
         retransmit_cb(desc.packet);
-      }else if(!desc.sacked) 
-          /* we want the largest seq not acked yet */
-          largest_acked = pkt_seq;
+      } else if (!desc.sacked)
+        /* we want the largest seq not acked yet */
+        largest_acked = pkt_seq;
 
       desc.sacked = true;
     }
@@ -130,15 +135,16 @@ public:
     update_budget(budget, largest_acked);
   }
 
-  void update_srtt(uint64_t seq, uint64_t now){
-      auto &desc = unacked_packets[seq - least_unacked_pkt];
-      if(desc.retransmitted)
-          return;
-      if(rtt == 0)
-          rtt = now - *desc.packet->get_ts();
-      else
-        rtt = filter::exp_filter(rtt, now - *desc.packet->get_ts());
-      stats.rtt = rtt;
+  auto size() { return unacked_packets.size(); }
+  void update_srtt(uint64_t seq, uint64_t now) {
+    auto &desc = unacked_packets[seq - least_unacked_pkt];
+    if (desc.retransmitted)
+      return;
+    if (rtt == 0)
+      rtt = now - *desc.packet->get_ts();
+    else
+      rtt = filter::exp_filter(rtt, now - *desc.packet->get_ts());
+    stats.rtt = rtt;
   }
 
   uint64_t get_seq() const { return seq; }
@@ -168,5 +174,5 @@ private:
   uint32_t budget;
   uint64_t seq;
   uint64_t least_unacked_pkt = min_seq;
-  uint64_t rtt; 
+  uint64_t rtt;
 };

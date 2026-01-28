@@ -79,6 +79,7 @@ template <uint32_t N> struct window {
       data->bit_map[ind.first] |= static_cast<uint64_t>(wd[index(i)])
                                   << ind.second;
     }
+    data->bit_map_len = id;
     return id;
   }
 

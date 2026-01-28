@@ -129,7 +129,7 @@ public:
                                      sizeof(protocol::ft_sack_payload));
       auto *sack_payload = rte_pktmbuf_mtod_offset(
           msg, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
-      sack_payload->bit_map_len = recv_wd.copy_bitset(sack_payload);
+      recv_wd.copy_bitset(sack_payload);
       scheduler.sack_callback(ack);
       FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %lu\n", sack_payload->bit_map_len, ack);
     } else {
