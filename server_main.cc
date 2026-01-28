@@ -1,19 +1,23 @@
 #include "connection.h"
 #include "iface.h"
+#include "kv.h"
 #include "message.h"
 #include "server.h"
 #include "transport/slot.h"
 #include <arpa/inet.h>
 #include <bits/getopt_core.h>
 #include <cstdint>
-#include <cstdlib>
 #include <getopt.h>
 #include <memory>
+#include <random>
+#include <ranges>
 #include <rte_ether.h>
 #include <rte_log.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
+#include <unordered_map>
+#include <utility>
 
 struct netconfig {
   rte_ether_addr dmac;
@@ -21,30 +25,51 @@ struct netconfig {
   uint16_t sport, dport;
 };
 
+static std::random_device dev;
+static std::mt19937 rng(dev());
+static std::uniform_int_distribution<std::mt19937::result_type> dist(INT64_MIN,
+                                                                     INT64_MAX);
+static constexpr uint32_t kStoreSize = 1024;
+static std::unordered_map<int64_t, int64_t> store(kStoreSize);
+
+static void prepare() {
+  for (auto [k, v] :
+       std::ranges::views::iota(0, 1000) | std::views::transform([&](int) {
+         return std::make_pair(dist(rng), dist(rng));
+       })) {
+    store[k] = v;
+  }
+}
+
+static message *serve(message_allocator *allocator,
+                      kv_packet<kv_request> *packet) {
+  auto key = packet->payload.key;
+  auto it = store.find(key);
+
+  message *msg = allocator->alloc_message(sizeof(kv_packet<kv_completion>));
+  auto *completion = rte_pktmbuf_mtod(msg, kv_packet<kv_completion> *);
+  completion->id = packet->id;
+  completion->pt = packet->pt;
+  if (it == store.end()) {
+    completion->payload.reponse = response_t::FAILURE;
+    completion->payload.val = 0;
+  } else {
+    completion->payload.reponse = response_t::SUCCESS;
+    completion->payload.val = it->second;
+  }
+  return msg;
+}
+
 static netconfig parse_cmdline(int argc, char *argv[]) {
   int opt, option_index;
   netconfig conf;
-  static const struct option long_options[] = {
-      {"dip", required_argument, 0, 0},   {"sip", required_argument, 0, 0},
-      {"dmac", required_argument, 0, 0},  {"sport", required_argument, 0, 0},
-      {"dport", required_argument, 0, 0}, {0, 0, 0, 0}};
+  static const struct option long_options[] = {{"sip", required_argument, 0, 0},
+                                               {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
     switch (option_index) {
     case 0:
-      conf.dip = inet_addr(optarg);
-      break;
-    case 1:
       conf.sip = inet_addr(optarg);
-      break;
-    case 2:
-      rte_ether_unformat_addr(optarg, &conf.dmac);
-      break;
-    case 3:
-      conf.sport = atoi(optarg);
-      break;
-    case 4:
-      conf.dport = atoi(optarg);
       break;
     }
   }
@@ -52,6 +77,7 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 }
 
 int run(netconfig &conf) {
+  prepare();
   rte_log_set_global_level(RTE_LOG_DEBUG);
   if (fastt::init())
     return -1;
@@ -64,11 +90,14 @@ int run(netconfig &conf) {
   server_iface server(port, txq, rxq, con_config{conf.sip, conf.sport},
                       allocator);
   while (true) {
-    server.poll([](transaction_slot &slot) {
+    server.poll([&](transaction_slot &slot) {
       auto *msg = slot.rx_if.read();
-      slot.tx_if.send(msg, true);
+      auto *resp = serve(allocator.get(),
+                         rte_pktmbuf_mtod(msg, kv_packet<kv_request> *));
+      slot.tx_if.send(resp, true);
       if (!slot.has_outstanding_messages())
         slot.finish();
+      message_allocator::deallocate(msg);
     });
     server.complete();
   }

@@ -104,11 +104,10 @@ static int lcore_fn(void *arg) {
   while (pkts < dur) {
     message *msg;
     auto *req = allocator->alloc_message(dataSize);
-    create_put_request(req, dist(rng), dist(rng));
-    auto resp = kv.start_transaction(con, req, queue);
+    auto resp = kv.start_transaction(con, queue);
     assert(resp.get());
+    kv.lookup(dist(rng), req);
     resp->tx_if().send(req, true);
-    kv.flush();
     resp->wait();
     msg = resp->rx_if().read();
     if (resp->finish()) {
