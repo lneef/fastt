@@ -70,9 +70,10 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
   ack_scheduler() : last_acked(0), last_sack(1), pending_from_retry(false) {}
 };
 
-
+class connection;
 class transport {
   static constexpr uint16_t kOustandingMessages = 128;
+  friend class connection;
   enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
 public:
   struct {

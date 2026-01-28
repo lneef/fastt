@@ -27,7 +27,9 @@ class iface;
 class connection_manager;
 
 class connection {
-  static constexpr uint16_t kMaxTransactionPerConnection = 32;
+  static constexpr uint16_t kMaxTransactionPerConnection =
+      transport::kOustandingMessages;
+
 public:
   connection(message_allocator *allocator, packet_if *pkt_if,
              const con_config &target, uint16_t sport,
@@ -36,10 +38,10 @@ public:
                                   allocator, pkt_if, sport, target)),
         manager(manager) {
     slots.reserve(kMaxTransactionPerConnection);
-    for (uint16_t i = 0; i < kMaxTransactionPerConnection; ++i){
+    for (uint16_t i = 0; i < kMaxTransactionPerConnection; ++i) {
       slots.emplace_back(i, transport_impl.get(), is_client);
-      if(is_client)
-          free_slots.push_back(i);
+      if (is_client)
+        free_slots.push_back(i);
     }
   }
   void process_pkt(rte_mbuf *pkt);
@@ -48,9 +50,7 @@ public:
   uint16_t receive_message(message **msgs, uint16_t cnt);
   void open_connection();
 
-  statistics get_transport_stats() const{
-      return transport_impl->get_stats();
-  }
+  statistics get_transport_stats() const { return transport_impl->get_stats(); }
 
   bool active() { return transport_impl->active(); }
 
@@ -67,7 +67,7 @@ public:
     });
   }
 
-  void process_incoming_client(){
+  void process_incoming_client() {
     transport_impl->receive_messages([&](message *msg) {
       auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
@@ -86,9 +86,9 @@ public:
     return &slots[slot_id];
   }
 
-  void finish_transaction(transaction_slot* slot){
-      slot->acknowledge();
-      free_slots.push_front(slot->tid);
+  void finish_transaction(transaction_slot *slot) {
+    slot->acknowledge();
+    free_slots.push_front(slot->tid);
   }
 
   connection_manager *get_manager() { return manager; }
@@ -101,6 +101,7 @@ private:
   intrusive_list_t<transaction_slot, &transaction_slot::link> inprogress;
   std::deque<uint16_t> free_slots;
   connection_manager *manager;
+
 public:
   list_hook link;
 };
@@ -108,14 +109,15 @@ public:
 class connection_manager {
   static constexpr uint16_t kdefaultBurstSize = 32;
   static constexpr uint16_t kdefaultFlowTableSize = 512;
-
 public:
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
-                     uint32_t sip, std::shared_ptr<message_allocator> allocator, uint16_t lcore_id)
+                     uint32_t sip, std::shared_ptr<message_allocator> allocator,
+                     uint16_t lcore_id)
       : flows(kdefaultFlowTableSize), allocator(allocator), dev(port, txq, rxq),
         scheduler(&dev), pkt_if(&scheduler, sip, port), active(),
-        is_client(is_client), flush_timeout(get_ticks_us()), flush_timer(timertype::PERIODICAL) {
-            flush_timer.reset(flush_timeout, flush_cb, lcore_id, this);
+        is_client(is_client), flush_timeout(get_ticks_us()),
+        flush_timer(timertype::PERIODICAL) {
+    flush_timer.reset(flush_timeout, flush_cb, lcore_id, this);
   }
 
   void handle_pkt(message *pkt, flow_tuple &ft) {
@@ -162,21 +164,21 @@ public:
     accept_connection();
     for (auto &con : active) {
       con.process_incoming_server();
-      auto& inprogress_list = con.inprogress;
+      auto &inprogress_list = con.inprogress;
       auto it = inprogress_list.begin();
       auto end = inprogress_list.end();
-      for (; it != end;){
-        auto ts = it++;  
+      for (; it != end;) {
+        auto ts = it++;
         cb(*ts);
       }
     }
-    rte_timer_manage();
+    con_timer_manager.manage();
   }
 
-  void poll_single_connection(connection* con){
-      fetch_from_device();
-      con->process_incoming_client();
-      con_timer_manager.manage();
+  void poll_single_connection(connection *con) {
+    fetch_from_device();
+    con->process_incoming_client();
+    con_timer_manager.manage();
   }
 
   void fetch_from_device() {
@@ -198,8 +200,8 @@ public:
     if (connection_requests.empty())
       return nullptr;
     auto [pkt, ft] = connection_requests.front();
-    auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.dport));
     connection_requests.pop_front();
+    auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.dport));
     con->process_pkt(pkt);
     if (inserted) {
       con->accept();
@@ -214,24 +216,27 @@ public:
                    allocator.get(), &pkt_if,
                    con_config{tuple.sip, rte_be_to_cpu_16(tuple.sport)}, port,
                    this, is_client));
-    if (inserted){
+    if (inserted) {
       active.push_front(*it->get());
       ++open_connections;
     }
     return {it->get(), inserted};
   }
 
-  std::vector<statistics> get_stats(){ 
-      std::vector<statistics> stats(open_connections);
-      uint32_t i = 0;
-      for(auto& con: active)
-          stats[i++] = con.transport_impl->get_stats();
-      return stats;
+  std::vector<statistics> get_stats() {
+    std::vector<statistics> stats(open_connections);
+    uint32_t i = 0;
+    for (auto &con : active)
+      stats[i++] = con.transport_impl->get_stats();
+    return stats;
   }
 
   void flush() { scheduler.flush(); }
 
-  ~connection_manager() { flush_timer.stop();; }
+  ~connection_manager() {
+    flush_timer.stop();
+    ;
+  }
 
 private:
   static void flush_cb(rte_timer *timer, void *arg) {
