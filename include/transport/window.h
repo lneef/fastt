@@ -47,7 +47,6 @@ template <uint32_t N> struct window {
       front = (front + 1) & mask;
       ++advanced;
     }
-    FASTT_LOG_DEBUG("%lu\n", least_in_window);
     return advanced;
   }
 
