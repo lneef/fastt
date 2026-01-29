@@ -4,6 +4,8 @@
 #include <generic/rte_cycles.h>
 #include <memory.h>
 #include <memory>
+#include <ranges>
+#include <rte_branch_prediction.h>
 #include <rte_byteorder.h>
 #include <rte_ether.h>
 #include <rte_ip4.h>
@@ -109,6 +111,7 @@ public:
 class connection_manager {
   static constexpr uint16_t kdefaultBurstSize = 32;
   static constexpr uint16_t kdefaultFlowTableSize = 512;
+
 public:
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
                      uint32_t sip, std::shared_ptr<message_allocator> allocator,
@@ -124,11 +127,11 @@ public:
     FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n", ft.sip,
                     rte_be_to_cpu_16(ft.sport));
     auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
-    if (header->type == protocol::FT_INIT)
+    if (unlikely(header->type == protocol::FT_INIT))
       register_request(pkt, ft);
     else {
       auto *connection = flows.lookup(ft);
-      if (connection)
+      if (likely(connection))
         (*connection)->process_pkt(pkt);
       else {
         dump_pkt(pkt, pkt->len());
@@ -182,13 +185,18 @@ public:
   }
 
   void fetch_from_device() {
-    dev.rx_burst([this](message *pkt) {
-      flow_tuple ft;
-      auto *msg = pkt_if.consume_pkt(pkt, ft);
-      if (!msg)
-        return;
-      handle_pkt(pkt, ft);
-    });
+    std::array<flow_tuple, kdefaultBurstSize> fts;
+    uint16_t i = 0;
+    assert(vec.i == 0);
+    dev.rx_burst(vec);
+    for (auto &msg : vec)
+      msg = pkt_if.consume_pkt(msg, fts[i++]);
+    for (auto [msg, ft] : std::ranges::zip_view(vec, fts)) {
+      if (likely(msg))
+        handle_pkt(msg, ft);
+    }
+    vec.clear();
+    assert(vec.i == 0);
   }
 
   void register_request(message *pkt, flow_tuple &ft) {
@@ -254,6 +262,7 @@ private:
   bool is_client;
   uint32_t open_connections = 0;
   uint64_t flush_timeout;
+  packet_vector<kdefaultBurstSize> vec;
   timer<dpdk_timer> flush_timer;
   timer_manager<dpdk_timer> con_timer_manager;
 };

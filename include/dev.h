@@ -35,6 +35,15 @@ public:
     }
   }
 
+  template <unsigned N> void rx_burst(packet_vector<N>& vec) {
+    auto now = rte_get_timer_cycles() / get_ticks_us();
+    auto rcvd =
+        rte_eth_rx_burst(port, rxq, reinterpret_cast<rte_mbuf**>(vec.pkts.data()), vec.pkts.size());
+    for(auto i = 0; i < rcvd; ++i)
+        *vec.pkts[i]->get_ts() = now;
+    vec.i = rcvd;
+  }
+
 private:
   uint16_t port;
   uint16_t txq;

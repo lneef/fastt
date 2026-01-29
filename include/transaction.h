@@ -47,9 +47,13 @@ struct transaction_proxy {
                     transaction_handle *t)
       : q(q), con(con), t(t) {}
 
-  auto &rx_if() { return t->slot->rx_if; }
+  auto &rx_if() { 
+      return t->slot->rx_if; 
+  }
 
-  auto &tx_if() { return t->slot->tx_if; }
+  auto &tx_if() { 
+      return t->slot->tx_if; 
+  }
 
   void wait() {
     if (!t->slot->has_outstanding_messages()) {

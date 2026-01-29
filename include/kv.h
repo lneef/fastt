@@ -70,6 +70,9 @@ class kv_proxy{
         };
         void acknowledge() { con->acknowledge_all(); }
         void finish_transaction(transaction_proxy* proxy);
+        void poll_tx_completion(){
+            con->get_manager()->poll_single_connection(con);
+        }
         void flush(){ ifc->flush(); }
     private:
             client_iface* ifc;
