@@ -1,5 +1,5 @@
 #pragma once
-#include "log.h"
+#include "debug.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -9,19 +9,12 @@
 #include <rte_memory.h>
 #include <rte_mempool.h>
 
-class connection;
-
 struct message : public rte_mbuf {
   static int timestamp;
-  static int con_ptr;
   static int init();
   uint64_t *get_ts() { return RTE_MBUF_DYNFIELD(this, timestamp, uint64_t *); }
 
   void inc_refcnt() { return rte_pktmbuf_refcnt_update(this, 1); }
-
-  connection **get_con_ptr() {
-    return RTE_MBUF_DYNFIELD(this, timestamp, connection **);
-  }
 
   void *data() { return rte_pktmbuf_mtod(this, void *); }
   uint16_t len() { return data_len; }
@@ -73,8 +66,6 @@ private:
     if constexpr(RTE_PKTMBUF_HEADROOM < kRequiredHeadRoom)  
         rte_pktmbuf_adj(mbuf, kRequiredHeadRoom - RTE_PKTMBUF_HEADROOM);
     auto *msg = static_cast<message *>(mbuf);
-    auto **con = msg->get_con_ptr();
-    *con = nullptr;
     msg->data_len = data_size;
     msg->pkt_len = data_size;
     return msg;

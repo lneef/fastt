@@ -15,17 +15,26 @@ enum pkt_type : uint8_t{
 
 struct __rte_packed_begin ft_header{
   pkt_type type :2;
-  uint32_t wnd :16;
-  uint32_t fini: 1;
-  uint32_t reserved: 13;
-  uint32_t msg_id;  
+  uint64_t wnd :16;
+  uint64_t fini: 1;
+  uint64_t sack: 1;
+  uint64_t msg_id : 14;  
+  uint64_t ts : 30;
   uint64_t seq;
   uint64_t ack;
 } __rte_packed_end;
 
+static_assert(sizeof(ft_header) == 24, "");
 
-void prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint64_t msg_id, uint16_t wnd);
-message* prepare_ack_pkt(uint64_t ack, message_allocator* pool, uint16_t wnd);
+struct __rte_packed_begin ft_sack_payload{
+    static constexpr uint16_t kBitMapLen = 2;
+    uint64_t bit_map[kBitMapLen];
+    uint16_t bit_map_len;
+}__rte_packed_end;
+
+
+void prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint64_t msg_id, uint16_t wnd, bool fini = false, uint32_t us = 0);
+void prepare_ack_pkt(message* msg, uint64_t ack, uint16_t wnd, uint32_t us, bool is_sack = false);
 void prepare_init_header(message* msg, uint64_t seq);
 void prepare_init_ack_header(message* msg, uint64_t seq, uint64_t ack, uint16_t wnd);
 

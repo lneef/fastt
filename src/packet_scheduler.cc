@@ -10,6 +10,8 @@ bool packet_scheduler::add_pkt(rte_mbuf *pkt) {
 }
 
 uint16_t packet_scheduler::flush() {  
+  if(ptr == 0)
+      return 0;
   return do_send();
 }
 

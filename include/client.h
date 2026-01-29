@@ -1,14 +1,13 @@
 #pragma once
 
 #include "connection.h"
-#include "log.h"
+#include "debug.h"
 #include "message.h"
 #include "util.h"
 #include <cstdint>
 #include <memory>
 #include <rte_ether.h>
 
-struct response_proxy;
 class transaction_queue;
 
 class client_iface {
@@ -17,22 +16,12 @@ class client_iface {
 public:
   client_iface(uint16_t port, uint16_t txq, uint16_t rxq,
                std::shared_ptr<message_allocator> pool,
-               const con_config &scon_config)
+               const con_config &scon_config, uint16_t lcore_id)
       : scon_config(scon_config),
-        manager(port, txq, rxq, scon_config.ip, pool) {}
-
-  template <bool flush = false>
-  bool send_message(connection *con, message *message, uint16_t len) {
-    FASTT_LOG_DEBUG("Sending new message with len %u\n", len);
-    *message->get_con_ptr() = con;
-    bool sent = con->send_message(message, len);
-    if constexpr (flush)
-      manager.flush();
-    return sent;
-  }
+        manager(true, port, txq, rxq, scon_config.ip, pool, lcore_id) {}
 
   template <bool flush = true> bool probe_connection_setup_done(connection *con) {
-    recv_message(con);
+    manager.fetch_from_device();  
     if constexpr (flush)
       manager.flush();
     return con->active();

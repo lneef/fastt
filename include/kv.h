@@ -51,14 +51,25 @@ inline void create_put_request(message* msg, int64_t key, int64_t val){
     kv_req->payload.val = val;
 }
 
-struct response_proxy;
+inline void create_get_request(message* msg, int64_t key){
+    auto* kv_req = static_cast<kv_packet<kv_request>*>(msg->data());
+    kv_req->pt = packet_t::SINGLE;
+    kv_req->payload.op = request_t::GET;
+    kv_req->payload.key = key;
+}
+
+struct transaction_proxy;
 
 class kv_proxy{
     public:
         kv_proxy(client_iface* ifc, connection* con): ifc(ifc), con(con){}
  
-        message *recv_completion(connection *con);
-        std::unique_ptr<response_proxy> send_request(connection* con, message* msg, transaction_queue& q, uint16_t len);
+        std::unique_ptr<transaction_proxy> start_transaction(connection* con, transaction_queue& q);
+        void lookup(int64_t key, message* msg){
+            create_get_request(msg, key);
+        };
+        void acknowledge() { con->acknowledge_all(); }
+        void finish_transaction(transaction_proxy* proxy);
         void flush(){ ifc->flush(); }
     private:
             client_iface* ifc;

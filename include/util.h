@@ -1,13 +1,37 @@
 #pragma once
-#include <algorithm>
-#include <bit>
+#include <boost/intrusive/link_mode.hpp>
+#include <boost/intrusive/list_hook.hpp>
+#include <boost/intrusive/options.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <generic/rte_cycles.h>
 #include <rte_ether.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 #include <utility>
 #include <vector>
+
+#include <boost/intrusive/list.hpp>
+
+namespace bi = boost::intrusive;
+
+extern uint64_t to_us;
+extern uint64_t to_ms;
+
+void init_timing();
+
+using list_hook = bi::list_member_hook<bi::link_mode<bi::link_mode_type::auto_unlink>>;
+
+template<typename T, list_hook T::*link  = &T::link>
+using intrusive_list_t = bi::list<T, bi::member_hook<T, list_hook, link>, bi::constant_time_size<false>>;
+
+__inline uint64_t get_ticks_us(){
+    return to_us;
+}
+
+__inline uint64_t get_ticks_ms(){
+    return to_ms;
+}
 
 //-------------------------------------------------------------------------------
 /*
@@ -69,53 +93,32 @@ static inline uint32_t jhash_3words(uint32_t a, uint32_t b, uint32_t c,
   __jhash_final(a, b, c);
   return c;
 }
+
 //-------------------------------------------------------------------------------
 
-template<typename T>
-void intrusive_push_front(T& sentinel, T* elem){
-    elem->next = sentinel.next;
-    sentinel.next->prev = elem;
-    elem->prev = &sentinel;
-    sentinel.next = elem;
-}
-
-template<typename T>
-T* intrusive_pop_back(T& sentinel){
-    auto *tail = sentinel.prev;
-    sentinel.prev = tail->prev;
-    tail->prev->next = &sentinel;
-    return tail;
-}
-
-template<typename T>
-void intrusive_remove(T* elem){
-    elem->prev->next = elem->next;
-    elem->next->prev = elem->prev;
+__inline constexpr std::pair<unsigned, unsigned> get_bit_indices_64(unsigned i){
+    return {i / 64, i & 63};
 }
 
 struct flow_tuple {
   uint32_t sip, dip;
-  uint16_t sport, dport; 
+  uint16_t sport, dport;
 
   friend bool operator==(const flow_tuple &lhs, const flow_tuple &rhs);
 };
 
-template<typename T>
-inline uint32_t calc_hash(const T& key);
+template <typename T> inline uint32_t calc_hash(const T &key);
 
-template<>
-inline uint32_t calc_hash<flow_tuple>(const flow_tuple& tuple){
-    return jhash_3words(tuple.sip, tuple.dip,
-                        tuple.sport | (tuple.dport) << 16); 
+template <> inline uint32_t calc_hash<flow_tuple>(const flow_tuple &tuple) {
+  return jhash_3words(tuple.sip, tuple.dip, tuple.sport | (tuple.dport) << 16);
 }
 
-template<>
-inline uint32_t calc_hash<uint32_t>(const uint32_t& val){
-    return jhash_3words(val, 0, 0);
+template <> inline uint32_t calc_hash<uint32_t>(const uint32_t &val) {
+  return jhash_3words(val, 0, 0);
 }
 
 template <typename K, typename V> struct fixed_size_hash_table {
-  using hash_t = uint32_t;  
+  using hash_t = uint32_t;
   struct entry_t {
     bool occupied;
     K key;
@@ -127,7 +130,7 @@ template <typename K, typename V> struct fixed_size_hash_table {
   uint32_t mask;
 
   V *lookup(const K &key) {
-    auto i = calc_hash(key) & mask;  
+    auto i = calc_hash(key) & mask;
     auto searched = 0u;
     for (; searched < table.size(); i = (i + 1) & mask, ++searched) {
       if (!table[i].occupied)
@@ -138,8 +141,8 @@ template <typename K, typename V> struct fixed_size_hash_table {
     return nullptr;
   }
 
-  template <typename ...Args>
-  std::pair<V *, bool> emplace(const K& key, Args&& ...args) {
+  template <typename... Args>
+  std::pair<V *, bool> emplace(const K &key, Args &&...args) {
     auto i = calc_hash(key) & mask;
     auto searched = 0u;
     for (; searched < table.size(); i = (i + 1) & mask, ++searched) {
@@ -156,8 +159,7 @@ template <typename K, typename V> struct fixed_size_hash_table {
     return {nullptr, false};
   }
 
-  fixed_size_hash_table(std::size_t size)
-      : table(size),  mask(size - 1) {}
+  fixed_size_hash_table(std::size_t size) : table(size), mask(size - 1) {}
 };
 
 struct con_config {

@@ -37,6 +37,7 @@ public:
   }
 
   T& operator[](std::size_t i){
+      assert(i < size());
       return storage[(head + i) & mask];
   }
 
