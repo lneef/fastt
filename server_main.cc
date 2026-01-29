@@ -100,7 +100,7 @@ int run(netconfig &conf) {
       std::make_shared<message_allocator>("pool", 8095);
   server_iface server(port, txq, rxq, con_config{conf.sip, conf.sport},
                       allocator);
-  while (true) {
+  while (!terminate) {
     server.poll([&](transaction_slot &slot) {
       auto *msg = slot.rx_if.read();
       auto *resp = serve(allocator.get(),
