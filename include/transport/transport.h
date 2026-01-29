@@ -83,7 +83,7 @@ public:
 
   transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
             const con_config &target)
-      : recv_wd(min_seq), target(target), rt_handler(), scheduler(),
+      : recv_wd(min_seq), target(target), rt_handler(kOustandingMessages), scheduler(),
         allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
 
   void probe_timeout(uint16_t tid) {
@@ -231,7 +231,8 @@ public:
   template <typename F> void receive_messages(F &&f) {
     grant_returned += recv_wd.advance(f);
     /* maybe we lost pkts */
-    grant_returned += recv_wd.max_rx - recv_wd.least_in_window;
+    if(recv_wd.max_rx > recv_wd.least_in_window)
+        grant_returned += recv_wd.max_rx - recv_wd.least_in_window;
     if (grant_returned >= kOustandingMessages / 4) {
       acknowledge();
       grant_returned = 0;
