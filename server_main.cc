@@ -21,6 +21,7 @@
 #include <unordered_map>
 #include <utility>
 #include <signal.h>
+#include <format>
 
 struct netconfig {
   rte_ether_addr dmac;
@@ -114,6 +115,7 @@ int run(netconfig &conf) {
 
   auto stats = server.get_stats();
   std::cout << std::format("total: {0}, no: {1}\n", stats.total_rx_polled, stats.no_rx) << std::endl;
+  ifc->stop();
   return 0;
 }
 
