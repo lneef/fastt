@@ -28,6 +28,11 @@
 class iface;
 class connection_manager;
 
+struct statistics{
+    std::vector<transport_statistics> ts;
+    uint64_t total_rx_polled = 0, no_rx = 0;
+};
+
 class connection {
   static constexpr uint16_t kMaxTransactionPerConnection =
       transport::kOustandingMessages;
@@ -52,7 +57,7 @@ public:
   uint16_t receive_message(message **msgs, uint16_t cnt);
   void open_connection();
 
-  statistics get_transport_stats() const { return transport_impl->get_stats(); }
+  transport_statistics get_transport_stats() const { return transport_impl->get_stats(); }
 
   bool active() { return transport_impl->active(); }
 
@@ -231,12 +236,16 @@ public:
     return {it->get(), inserted};
   }
 
-  std::vector<statistics> get_stats() {
-    std::vector<statistics> stats(open_connections);
+  statistics get_stats() {
+    std::vector<transport_statistics> stats(open_connections);
     uint32_t i = 0;
     for (auto &con : active)
       stats[i++] = con.transport_impl->get_stats();
-    return stats;
+    statistics sts;
+    sts.no_rx = dev.no_rx;
+    sts.total_rx_polled = dev.total_rx;
+    sts.ts =std::move(stats);
+    return sts;
   }
 
   void flush() { scheduler.flush(); }

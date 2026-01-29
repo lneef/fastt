@@ -25,6 +25,8 @@ public:
    void poll(F&& f){
        manager.poll(f);
    }   
+
+  statistics get_stats() { return manager.get_stats(); }
 private:
   con_config scon_config;
   connection_manager manager;

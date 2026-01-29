@@ -8,7 +8,9 @@
 #include <bits/getopt_core.h>
 #include <cstdint>
 #include <getopt.h>
+#include <iostream>
 #include <memory>
+#include <ostream>
 #include <random>
 #include <ranges>
 #include <rte_ether.h>
@@ -18,6 +20,7 @@
 #include <rte_mempool.h>
 #include <unordered_map>
 #include <utility>
+#include <signal.h>
 
 struct netconfig {
   rte_ether_addr dmac;
@@ -76,6 +79,13 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
   return conf;
 }
 
+static volatile int terminate = 0;
+
+static void handler(int sig) {
+(void)sig;
+terminate = 1;
+}
+
 int run(netconfig &conf) {
   prepare();
   rte_log_set_global_level(RTE_LOG_DEBUG);
@@ -101,10 +111,17 @@ int run(netconfig &conf) {
     });
     server.complete();
   }
+
+  auto stats = server.get_stats();
+  std::cout << std::format("total: {0}, no: {1}\n", stats.total_rx_polled, stats.no_rx) << std::endl;
   return 0;
 }
 
 int main(int argc, char *argv[]) {
+  struct sigaction sa = {};
+  sa.sa_handler = handler;
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);  
   int dpdk_argc = rte_eal_init(argc, argv);
   auto conf = parse_cmdline(argc - dpdk_argc, argv + dpdk_argc);
   run(conf);

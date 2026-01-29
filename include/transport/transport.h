@@ -25,16 +25,16 @@
 #include "retransmission_handler.h"
 #include "util.h"
 
-struct statistics {
+struct transport_statistics {
   uint64_t retransmitted, acked, sent, retransmissions;
   double rtt;
-  statistics(uint64_t retransmitted, uint64_t acked, uint64_t sent,
+  transport_statistics(uint64_t retransmitted, uint64_t acked, uint64_t sent,
              uint64_t retransmissions, uint64_t rtt_est)
       : retransmitted(retransmitted), acked(acked), sent(sent), retransmissions(retransmissions) {
     rtt = static_cast<double>(rtt_est);
   }
 
-  statistics(): retransmitted(), acked(), sent(), retransmissions(), rtt() {}
+  transport_statistics(): retransmitted(), acked(), sent(), retransmissions(), rtt() {}
 };
 
 template <typename D> struct seq_observer {
@@ -112,7 +112,7 @@ public:
     return inserted;
   }
 
-  statistics get_stats() const {
+  transport_statistics get_stats() const {
     auto &rt_stats = rt_handler.get_stats();
     return {rt_stats.retransmitted, rt_stats.acked, stats.sent, stats.retransmissions,
             rt_stats.rtt};

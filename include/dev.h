@@ -12,15 +12,16 @@
 
 class netdev {
   static constexpr uint16_t kDefaultInputBurstSize = 32;
+
 public:
   netdev(uint16_t port, uint16_t txq, uint16_t rxq)
       : port(port), txq(txq), rxq(rxq) {};
 
   uint16_t tx_burst(rte_mbuf **pkts, uint16_t cnt) {
-    auto now = rte_get_timer_cycles() / get_ticks_us();   
+    auto now = rte_get_timer_cycles() / get_ticks_us();
     auto sent = rte_eth_tx_burst(port, txq, pkts, cnt);
-    for(uint16_t i = 0; i < sent; ++i)
-        *static_cast<message*>(pkts[i])->get_ts() = now;
+    for (uint16_t i = 0; i < sent; ++i)
+      *static_cast<message *>(pkts[i])->get_ts() = now;
     return sent;
   }
 
@@ -30,22 +31,29 @@ public:
     auto rcvd =
         rte_eth_rx_burst(port, rxq, pkts.data(), kDefaultInputBurstSize);
     for (uint16_t i = 0; i < rcvd; ++i) {
-      *static_cast<message*>(pkts[i])->get_ts() = now;  
-      cb(static_cast<message*>(pkts[i]));
+      *static_cast<message *>(pkts[i])->get_ts() = now;
+      cb(static_cast<message *>(pkts[i]));
     }
   }
 
-  template <unsigned N> void rx_burst(packet_vector<N>& vec) {
+  template <unsigned N> void rx_burst(packet_vector<N> &vec) {
     auto now = rte_get_timer_cycles() / get_ticks_us();
-    auto rcvd =
-        rte_eth_rx_burst(port, rxq, reinterpret_cast<rte_mbuf**>(vec.pkts.data()), vec.pkts.size());
-    for(auto i = 0; i < rcvd; ++i)
-        *vec.pkts[i]->get_ts() = now;
+    auto rcvd = rte_eth_rx_burst(port, rxq,
+                                 reinterpret_cast<rte_mbuf **>(vec.pkts.data()),
+                                 vec.pkts.size());
+    for (auto i = 0; i < rcvd; ++i)
+      *vec.pkts[i]->get_ts() = now;
     vec.i = rcvd;
+    ++total_rx;
+    no_rx += rcvd == 0;
   }
 
 private:
   uint16_t port;
   uint16_t txq;
   uint16_t rxq;
+
+public:
+  uint64_t no_rx = 0;
+  uint64_t total_rx = 0;
 };
