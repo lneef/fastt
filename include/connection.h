@@ -74,11 +74,11 @@ public:
     });
   }
 
-  void process_incoming_client() {
+  void process_incoming_client(intrusive_list_t<transaction_slot>& ready) {
     transport_impl->receive_messages([&](message *msg) {
       auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
-      slots[hdr->msg_id].handle_incoming_client(msg, hdr->fini);
+      slots[hdr->msg_id].handle_incoming_client(msg, hdr->fini, ready);
       msg->shrink_headroom(sizeof(protocol::ft_header));
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
     });
@@ -183,9 +183,9 @@ public:
     con_timer_manager.manage();
   }
 
-  void poll_single_connection(connection *con) {
+  void poll_single_connection(connection *con, intrusive_list_t<transaction_slot>& ready) {
     fetch_from_device();
-    con->process_incoming_client();
+    con->process_incoming_client(ready);
     con_timer_manager.manage();
   }
 

@@ -120,12 +120,11 @@ public:
 
   bool acknowledge() {
     message *msg;
-    bool is_sack = false;
+    bool is_sack = recv_wd.has_holes();
     uint64_t ack = recv_wd.get_last_acked_packet();
-    if (recv_wd.has_holes()) {
+    if (is_sack) {
       if (!scheduler.sack_pending(ack))
         return false;
-      is_sack = true;
       msg = allocator->alloc_message(sizeof(protocol::ft_header) +
                                      sizeof(protocol::ft_sack_payload));
       auto *sack_payload = rte_pktmbuf_mtod_offset(
@@ -233,7 +232,7 @@ public:
     /* maybe we lost pkts */
     if(recv_wd.max_rx > recv_wd.least_in_window)
         grant_returned += recv_wd.max_rx - recv_wd.least_in_window;
-    if (grant_returned >= kOustandingMessages / 4) {
+    if (grant_returned >= kOustandingMessages / 4 || recv_wd.has_holes()) {
       acknowledge();
       grant_returned = 0;
     }
@@ -243,6 +242,7 @@ private:
   void setup_after_init() {
     recv_wd.advance([](message *msg) { rte_pktmbuf_free(msg); });
   }
+
   window<kOustandingMessages> recv_wd;
   con_config target;
   retransmission_handler rt_handler;

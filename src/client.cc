@@ -1,6 +1,5 @@
 #include "client.h"
 #include "connection.h"
-#include "transaction.h"
 #include "util.h"
 
 connection *client_iface::open_connection(const con_config &target,

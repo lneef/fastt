@@ -89,7 +89,6 @@ terminate = 1;
 
 int run(netconfig &conf) {
   prepare();
-  rte_log_set_global_level(RTE_LOG_DEBUG);
   if (fastt::init())
     return -1;
   auto ifc = iface::configure_port(0, 1, 1);

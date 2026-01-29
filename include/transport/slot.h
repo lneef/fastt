@@ -55,7 +55,7 @@ struct transaction_slot {
     has_outstanding_msgs = !fini;
   }
 
-  void handle_incoming_client(message *msg, bool fini) {
+  void handle_incoming_client(message *msg, bool fini, intrusive_list_t<transaction_slot>& ready) {
     incoming.push_back(msg);
     ++incoming_pkts;
     if (fini) {
@@ -63,6 +63,8 @@ struct transaction_slot {
       state = slot_state::COMPLETED;
       has_outstanding_msgs = false;
     }
+    if(!link.is_linked())
+        ready.push_back(*this);
   }
 
   void rearm() {
