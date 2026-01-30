@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <message.h>
@@ -20,6 +21,7 @@
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
+#include "transport/filter.h"
 #include "window.h"
 
 #include "retransmission_handler.h"
@@ -72,9 +74,16 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
 
 class connection;
 class transport {
-  static constexpr uint16_t kOustandingMessages = 128;
+  static constexpr uint16_t kOustandingMessages = 4;
+  static constexpr uint16_t kNumStreams = 4;
   friend class connection;
   enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
+  struct stream{
+      retransmission_handler rt_handler;
+      ack_scheduler scheduler;
+      window <kOustandingMessages> recv_wd;
+      stream(): rt_handler(kOustandingMessages, kOustandingMessages), recv_wd(min_seq) {}
+  };
 public:
   struct {
     uint64_t sent = 0;
@@ -83,16 +92,17 @@ public:
 
   transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
             const con_config &target)
-      : recv_wd(min_seq), target(target), rt_handler(kOustandingMessages), scheduler(),
+      : target(target), 
         allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
 
   void probe_timeout(uint16_t tid) {
-    rt_handler.probe_retransmit(
-        [&](message *msg) { pkt_if->consume_for_retransmission(msg); }, tid);
+    streams[tid].rt_handler.probe_retransmit(
+        [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
   }
 
-  bool send_pkt(message *pkt, uint16_t msg_id, bool fini = false) {
+  bool send_pkt(message *pkt, uint16_t tid, bool fini = false) {
     assert(cstate == connection_state::ESTABLISHED);
+    auto& [rt_handler, scheduler, recv_wd] = streams[tid];
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
       uint32_t ts = 0;
@@ -102,24 +112,31 @@ public:
         ts = recv_wd.get_ts();
         scheduler.ack_callback(ack);
       }
-      protocol::prepare_ft_header(pkt, seq, ack, msg_id, recv_wd.capacity(),
+      protocol::prepare_ft_header(pkt, seq, ack, tid, recv_wd.capacity(),
                                   fini, ts);
     };
 
-    auto inserted = rt_handler.record_pkt(msg_id, pkt, ctor);
+    auto inserted = rt_handler.record_pkt(tid, pkt, ctor);
     if (inserted)
       pkt_if->consume_pkt(pkt, sport, target);
     return inserted;
   }
 
   transport_statistics get_stats() const {
-    auto &rt_stats = rt_handler.get_stats();
-    return {rt_stats.retransmitted, rt_stats.acked, stats.sent, stats.retransmissions,
-            rt_stats.rtt};
+    transport_statistics stats{};  
+    for(auto &st : streams){
+        
+    auto &rt_stats = st.rt_handler.get_stats();
+    stats.retransmitted += rt_stats.retransmitted;
+    stats.acked += rt_stats.acked;
+    stats.rtt = filter::exp_filter<uint64_t>(stats.rtt, rt_stats.rtt);
+    }
+    return stats;
   }
 
-  bool acknowledge() {
+  bool acknowledge(uint16_t tid) {
     message *msg;
+    auto& [_, scheduler, recv_wd] = streams[tid];
     bool is_sack = recv_wd.has_holes();
     uint64_t ack = recv_wd.get_last_acked_packet();
     if (is_sack) {
@@ -147,10 +164,11 @@ public:
   bool process_pkt(message *pkt) {
     auto *hdr = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
     auto ts = *pkt->get_ts() - hdr->ts;
+    auto& [rt_handler, scheduler, recv_wd] = streams[hdr->msg_id];
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
       if (hdr->ack)
-        rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
+        rt_handler.acknowledge(hdr->ack, hdr->wnd, ts);
       scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
         ++stats.retransmissions;  
@@ -161,14 +179,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_ACK: {
-      rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
-      if (hdr->sack) {
-        auto *sack_payload = rte_pktmbuf_mtod_offset(
-          pkt, protocol::ft_sack_payload *, sizeof(protocol::ft_header));  
-        rt_handler.acknowledge_sack(
-            sack_payload, hdr->wnd, ts,
-            [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
-      }
+      rt_handler.acknowledge(hdr->ack, hdr->wnd, ts);
       rte_pktmbuf_free(pkt);
       break;
     }
@@ -183,7 +194,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_INIT_ACK: {
-      rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
+      rt_handler.acknowledge(hdr->ack, hdr->wnd, ts);
       scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
         rte_pktmbuf_free(pkt);
@@ -204,7 +215,7 @@ public:
 
   void open_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
-    bool retval = rt_handler.record_pkt(0, msg, [](message *msg, uint64_t seq) {
+    bool retval = streams[0].rt_handler.record_pkt(0, msg, [](message *msg, uint64_t seq) {
       protocol::prepare_init_header(msg, seq);
     });
     assert(retval);
@@ -216,9 +227,10 @@ public:
 
   void accept_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
+    auto &[rt_handler, _, recv_wd] = streams[0];
     bool retval = rt_handler.record_pkt(
         0, msg, [budget = recv_wd.capacity()](message *msg, uint64_t seq) {
-          protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
+          protocol::prepare_init_ack_header(msg, seq, min_seq, kOustandingMessages);
         });
     FASTT_LOG_DEBUG("Sent ack for init");
     assert(retval);
@@ -228,25 +240,17 @@ public:
   bool active() { return connection_state::ESTABLISHED == cstate; }
 
   template <typename F> void receive_messages(F &&f) {
-    grant_returned += recv_wd.advance(f);
-    /* maybe we lost pkts */
-    if(recv_wd.max_rx > recv_wd.least_in_window)
-        grant_returned += recv_wd.max_rx - recv_wd.least_in_window;
-    if (grant_returned >= kOustandingMessages / 4 || recv_wd.has_holes()) {
-      acknowledge();
-      grant_returned = 0;
-    }
+    for(auto& st: streams)  
+        grant_returned += st.recv_wd.advance(f);
   }
 
 private:
   void setup_after_init() {
-    recv_wd.advance([](message *msg) { rte_pktmbuf_free(msg); });
+    streams[0].recv_wd.advance([](message *msg) { rte_pktmbuf_free(msg); });
   }
 
-  window<kOustandingMessages> recv_wd;
+  std::array<stream, kNumStreams> streams;
   con_config target;
-  retransmission_handler rt_handler;
-  ack_scheduler scheduler;
   message_allocator *allocator;
   packet_if *pkt_if;
   uint16_t sport;

@@ -37,7 +37,7 @@ struct transaction_slot {
   static void timer_cb(rte_timer *timer, void *arg) {
     (void)timer;
     auto *slot = static_cast<transaction_slot *>(arg);
-    slot->transport_impl->acknowledge();
+    slot->transport_impl->acknowledge(slot->tid);
     if (slot->incoming_pkts == 0)
       slot->transport_impl->probe_timeout(slot->tid);
     slot->rearm();
@@ -80,7 +80,7 @@ struct transaction_slot {
     slot_timer.stop();
   }
 
-  void acknowledge() { transport_impl->acknowledge(); }
+  void acknowledge() { transport_impl->acknowledge(tid); }
 
   void finish() {
     state = slot_state::COMPLETED;

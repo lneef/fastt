@@ -7,7 +7,6 @@
 #include "debug.h"
 #include "filter.h"
 #include "message.h"
-#include "protocol.h"
 #include "queue.h"
 #include "util.h"
 
@@ -70,13 +69,11 @@ public:
     return true;
   }
 
-  template <typename F> void probe_retransmit(F &&cb, uint16_t tid) {
+  template <typename F> void probe_retransmit(F &&cb) {
     for (auto &entry : send_list) {
       auto *msg = entry.packet;
       if (*msg->get_ts() == 0)
-        break;
-      if (entry.tid != tid || entry.sacked)
-        continue;
+        break; 
       FASTT_LOG_DEBUG("Retransmitting packet: %lu\n", entry.seq);
       prepare_retransmit(&entry);
       cb(msg);
@@ -95,43 +92,14 @@ public:
     send_list.push_front(*entry);
   }
 
-  void acknowledge(uint64_t seq, uint16_t budget, uint64_t now, bool is_sack) {
+  void acknowledge(uint64_t seq, uint16_t budget, uint64_t now) {
     if (seq < least_unacked_pkt)
       return;
     stats.acked = seq;
-    if (!is_sack) {
-      update_srtt(seq, now);
-      update_budget(budget, seq);
-    }
+    update_srtt(seq, now);
+    update_budget(budget, seq);
     cleanup_acked_pkts(seq);
     least_unacked_pkt = seq + 1;
-  }
-
-  template <typename F>
-  void acknowledge_sack(protocol::ft_sack_payload *payload, uint64_t budget,
-                        uint64_t now, F &&retransmit_cb) {
-    auto pkt_seq = least_unacked_pkt;
-    uint64_t largest_acked = 0;
-    assert(payload->bit_map_len > 0);
-    assert(payload->bit_map_len <= unacked_packets.size());
-    assert(unacked_packets.front()->seq == least_unacked_pkt);
-    for (auto i = 0u; i < payload->bit_map_len; ++i, ++pkt_seq) {
-      auto ind = get_bit_indices_64(i);
-      auto val = payload->bit_map[ind.first] & (1 << ind.second);
-      auto &desc = unacked_packets[i];
-
-      if (!val) {
-        prepare_retransmit(&desc);
-        retransmit_cb(desc.packet);
-      } else if (!desc.sacked)
-        /* we want the largest seq not acked yet */
-        largest_acked = pkt_seq;
-
-      desc.sacked = true;
-    }
-    FASTT_LOG_DEBUG("Largest set seq num %lu\n", largest_acked);
-    update_srtt(largest_acked, now);
-    update_budget(budget, largest_acked);
   }
 
   auto size() { return unacked_packets.size(); }
