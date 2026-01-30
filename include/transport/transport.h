@@ -92,7 +92,7 @@ public:
 
   transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
             const con_config &target)
-      : target(target), 
+      : streams(kNumStreams), target(target), 
         allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
 
   void probe_timeout(uint16_t tid) {
@@ -249,7 +249,7 @@ private:
     streams[0].recv_wd.advance([](message *msg) { rte_pktmbuf_free(msg); });
   }
 
-  std::array<stream, kNumStreams> streams;
+  std::vector<stream> streams;
   con_config target;
   message_allocator *allocator;
   packet_if *pkt_if;
