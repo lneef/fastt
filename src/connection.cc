@@ -15,7 +15,8 @@ void connection::process_pkt(rte_mbuf *pkt) {
 } 
 
 void connection::acknowledge_all(){
-    transport_impl->acknowledge();
+    for(auto& slot: slots)
+        slot.acknowledge();
 }
 
 void connection::accept(){
