@@ -137,7 +137,7 @@ public:
       return false;
     msg = allocator->alloc_message(sizeof(protocol::ft_header));
     scheduler.ack_callback(ack);
-    protocol::prepare_ack_pkt(msg, ack, recv_wd.capacity(), recv_wd.get_ts(),
+    protocol::prepare_ack_pkt(msg, ack, recv_wd.capacity(), recv_wd.get_ts(), tid,
                               false);
     FASTT_LOG_DEBUG("Return %u capacity to peer\n", recv_wd.capacity());
     pkt_if->consume_pkt(msg, sport, target);
