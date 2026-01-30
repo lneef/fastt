@@ -72,8 +72,7 @@ class kv_proxy {
 public:
   kv_proxy(client_iface *ifc, connection *con)
       : ifc(ifc), con(con), completion_timeout(rte_get_timer_hz() / 1e4) {
-    rte_timer_reset(&timer, completion_timeout, PERIODICAL, rte_lcore_id(),
-                    poll_tx_completion_cb, this);
+
   }
 
   transaction_slot* start_transaction(connection *con);

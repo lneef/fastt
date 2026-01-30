@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <generic/rte_cycles.h>
 #include <rte_cycles.h>
 #include <getopt.h>
 #include <iostream>
@@ -99,6 +100,7 @@ static int lcore_fn(void *arg) {
   kv_proxy kv(&cif, con);
   uint64_t t = 0;
   uint64_t c = 0;
+  auto now = rte_get_timer_cycles();
   while(t < dur){
       auto &done = kv.completions();
       for(; done.size() > 0; done.pop_front()){
@@ -128,7 +130,9 @@ static int lcore_fn(void *arg) {
       }
   }
   kv.acknowledge();
+  auto end = rte_get_timer_cycles();
   auto stats = con->get_transport_stats();
+  std::cerr << (end - now)  / (rte_get_timer_hz() / 1e6) << std::endl;
   std::cerr << stats.rtt << ", " << stats.acked << std::endl;
   return 0;
 }
