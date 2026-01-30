@@ -120,11 +120,13 @@ public:
   transport_statistics get_stats() const {
     transport_statistics stats{};
     for (auto &st : streams) {
-
       auto &rt_stats = st.rt_handler.get_stats();
       stats.retransmitted += rt_stats.retransmitted;
       stats.acked += rt_stats.acked;
-      stats.rtt = filter::exp_filter<uint64_t>(stats.rtt, rt_stats.rtt);
+      if(!stats.rtt)
+          stats.rtt = rt_stats.rtt;
+      else
+        stats.rtt = filter::exp_filter<uint64_t>(stats.rtt, rt_stats.rtt);
     }
     return stats;
   }
