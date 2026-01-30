@@ -69,7 +69,7 @@ public:
     return true;
   }
 
-  template <typename F> void probe_retransmit(F &&cb) {
+  template <typename F> void probe_retransmit(F &&cb) {  
     for (auto &entry : send_list) {
       auto *msg = entry.packet;
       if (*msg->get_ts() == 0)
