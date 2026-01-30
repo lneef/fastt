@@ -16,13 +16,14 @@ void protocol::prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint6
     ft->type = protocol::pkt_type::FT_MSG;
 }
 
-void protocol::prepare_ack_pkt(message* msg, uint64_t ack, uint16_t wnd, uint32_t us, bool is_sack){
+void protocol::prepare_ack_pkt(message* msg, uint64_t ack, uint16_t wnd, uint32_t us, uint16_t tid, bool is_sack){
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header*);
     ft->ack = ack;
     ft->sack = is_sack;
     ft->seq = 0;
     ft->wnd = wnd;
     ft->ts = us;
+    ft->msg_id = tid;
     ft->type = protocol::pkt_type::FT_ACK;
 }
 
