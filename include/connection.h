@@ -35,7 +35,7 @@ struct statistics{
 
 class connection {
   static constexpr uint16_t kMaxTransactionPerConnection =
-      transport::kOustandingMessages;
+      transport::kNumStreams;
 
 public:
   connection(message_allocator *allocator, packet_if *pkt_if,
