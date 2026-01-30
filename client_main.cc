@@ -108,6 +108,7 @@ static int lcore_fn(void *arg) {
           kv.finish_transaction(&slot);
           ++c;
       }
+      kv.poll_tx_completion();
       auto *tx = kv.start_transaction(con);
       if(!tx)
           continue;

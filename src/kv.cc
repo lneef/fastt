@@ -4,7 +4,6 @@
 #include <rte_timer.h>
 
 transaction_slot *kv_proxy::start_transaction(connection *con) {
-  rte_timer_manage();  
   return con->start_transaction();
 }
 

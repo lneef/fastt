@@ -81,7 +81,7 @@ public:
   void acknowledge() { con->acknowledge_all(); }
   void finish_transaction(transaction_slot *slot);
 
-  void poll_tx_completion() {
+  void poll_tx_completion() {  
     con->get_manager()->poll_single_connection(con, ready);
   }
 
