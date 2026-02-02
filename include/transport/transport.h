@@ -145,7 +145,7 @@ public:
     }
     protocol::prepare_ack_pkt(msg, ack, recv_wd.capacity(kOustandingMessages),
                               recv_wd.get_ts(), is_sack);
-    FASTT_LOG_DEBUG("Return %u capacity to peer\n", recv_wd.capacity());
+    FASTT_LOG_DEBUG("Return %u capacity to peer\n", recv_wd.capacity(kOustandingMessages));
     pkt_if->consume_pkt(msg, sport, target);
     return true;
   }
