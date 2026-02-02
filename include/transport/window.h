@@ -10,8 +10,11 @@
 #include <cstdint>
 #include <cstring>
 #include <generic/rte_cycles.h>
+#include <rte_branch_prediction.h>
 
-template <uint32_t N> struct window {
+template <uint32_t width> struct window {
+  // reserve some headroom  
+  static constexpr uint32_t N = 2 * width;  
   window(uint64_t min_seq)
       : wd(), front(0), mask(N - 1), least_in_window(min_seq), max_rx(0) {}
 
@@ -42,10 +45,20 @@ template <uint32_t N> struct window {
     uint32_t advanced = 0;
     while (wd[front]) {
       ++least_in_window;
-      f(messages[front]);
+      if(likely(messages[front]))
+        f(messages[front]);
       wd[front] = false;
       front = (front + 1) & mask;
       ++advanced;
+    }
+
+    auto it = front;
+    auto head = least_in_window;
+    while(unlikely(head <= max_rx)){
+        if(wd[it] && messages[it])
+            messages[it] = f(messages[it]);
+        it = (it + 1) & mask;
+        ++head;
     }
     return advanced;
   }
@@ -54,7 +67,7 @@ template <uint32_t N> struct window {
     return seq >= least_in_window && seq <= least_in_window + mask;
   }
 
-  uint32_t capacity() const { return least_in_window + mask - max_rx; }
+  uint32_t capacity(uint32_t min_capacity) const { return std::min<uint32_t>(least_in_window + mask - max_rx, min_capacity); }
 
   std::size_t __inline index(std::size_t i) {
     assert(i >= least_in_window);

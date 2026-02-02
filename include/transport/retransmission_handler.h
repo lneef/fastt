@@ -35,7 +35,6 @@ struct sender_entry {
 
 class retransmission_handler {
   using indexable_queue = queue_base<sender_entry>;
-  static constexpr uint16_t kQueuedPackets = 64;
   static constexpr uint64_t kMSecDiv = 1e3;
 
 public:
@@ -43,8 +42,8 @@ public:
     uint64_t acked, retransmitted, rtt;
     statistics() : acked(0), retransmitted(0) {}
   };
-  retransmission_handler(uint32_t budget = 1)
-      : unacked_packets(kQueuedPackets), budget(budget), seq(min_seq), rtt() {}
+  retransmission_handler(uint32_t queued_packets, uint32_t budget = 1)
+      : unacked_packets(2 * queued_packets), budget(budget), seq(min_seq), rtt() {}
 
   uint64_t cleanup_acked_pkts(uint64_t seq) {
     uint64_t burst_rtt = 0;
@@ -87,7 +86,7 @@ public:
   void prepare_retransmit(sender_entry *entry) {
     ++stats.retransmitted;
     // inc reference count
-    // in total we have n + 1 where n is the number of transmission of
+    // in total we have n + 1 where n is the number of transmissions 
     // entry->msg n reduction because of cleanup
     entry->packet->inc_refcnt();
     *entry->packet->get_ts() = 0;

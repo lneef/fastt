@@ -2,7 +2,6 @@
 #include "iface.h"
 #include "kv.h"
 #include "message.h"
-#include "transaction.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <bits/getopt_core.h>
@@ -13,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <generic/rte_cycles.h>
+#include <rte_cycles.h>
 #include <getopt.h>
 #include <iostream>
 #include <memory>
@@ -27,6 +27,7 @@
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 alignas(RTE_CACHE_LINE_MIN_SIZE) std::atomic<double> lat = 0;
@@ -86,51 +87,61 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 
 static constexpr auto dur = 10000;
 static constexpr uint16_t dataSize = sizeof(kv_packet<kv_request>);
-static constexpr uint16_t cnt = 32;
-struct msg_context {
-  message *req;
-  std::unique_ptr<transaction_proxy> resp = nullptr;
-};
+
 static int lcore_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
   std::uniform_int_distribution<std::mt19937::result_type> dist(INT64_MIN,
                                                                 INT64_MAX);
   auto *adapter = static_cast<lcore_adapter *>(arg);
-  transaction_queue queue{512};
   auto me = rte_lcore_index(rte_lcore_id());
   auto *con = adapter->connections[me];
   auto &allocator = adapter->allocator[me];
   auto &cif = *adapter->cifs[me];
-  auto pkts = 0;
-  uint64_t now = rte_get_timer_cycles();
-  std::vector<msg_context> ctx(cnt);
-
+  std::unordered_map<int64_t, int64_t> keys;
   kv_proxy kv(&cif, con);
-  while (pkts < dur) {
-    for (auto &c : ctx) {
-      c.req = allocator->alloc_message(dataSize);
-      c.resp = kv.start_transaction(con, queue);
-      assert(c.resp.get());
-      kv.lookup(dist(rng), c.req);
-      c.resp->tx_if().send(c.req, true);
-    }
-    for (auto &c : ctx) {
-      c.resp->wait();
-      auto *msg = c.resp->rx_if().read();
-      if (c.resp->finish()) {
-        allocator->deallocate(msg);
-        kv.finish_transaction(c.resp.get());
+  uint64_t t = 0;
+  uint64_t c = 0;
+  auto now = rte_get_timer_cycles();
+  while(t < dur){
+      auto &done = kv.completions();
+      for(; done.size() > 0; done.pop_front()){
+          auto &slot = done.front();
+          auto* resp = slot.rx_if.read();
+          auto *kv_comp = rte_pktmbuf_mtod(resp, kv_packet<kv_completion>*);
+          assert(kv_comp->payload.key == keys[kv_comp->id]);
+          keys.erase(kv_comp->id);
+          allocator->deallocate(resp);
+          kv.finish_transaction(&slot);
+          ++c;
       }
-      assert(c.resp->completed());
-    }
-    kv.acknowledge();
-    ++pkts;
+      kv.poll_tx_completion();
+      auto *tx = kv.start_transaction(con);
+      if(!tx)
+          continue;
+      auto* req = allocator->alloc_message(dataSize);
+      auto key = dist(rng);
+      keys[t] = key;
+      kv.lookup(dist(rng), req, t);
+      tx->tx_if.send(req, true);
+      ++t;
   }
-
+  while(c < t){
+      kv.poll_tx_completion();
+      auto &done = kv.completions();
+      for(; done.size() > 0; done.pop_front()){
+          auto& slot = done.front();
+          auto* resp = slot.rx_if.read();
+          auto *kv_comp = rte_pktmbuf_mtod(resp, kv_packet<kv_completion>*);
+          assert(kv_comp->payload.key == keys[kv_comp->id]);
+          allocator->deallocate(resp);
+          ++c;
+      }
+  }
+  kv.acknowledge();
   auto end = rte_get_timer_cycles();
-  lat += (end - now) / (static_cast<double>(rte_get_timer_hz()) / 1e6) / pkts;
   auto stats = con->get_transport_stats();
+  std::cerr << (end - now)  / (rte_get_timer_hz() / 1e6) << std::endl;
   std::cerr << stats.rtt << ", " << stats.acked << std::endl;
   return 0;
 }

@@ -4,6 +4,8 @@
 #include <generic/rte_cycles.h>
 #include <memory.h>
 #include <memory>
+#include <ranges>
+#include <rte_branch_prediction.h>
 #include <rte_byteorder.h>
 #include <rte_ether.h>
 #include <rte_ip4.h>
@@ -25,6 +27,11 @@
 
 class iface;
 class connection_manager;
+
+struct statistics {
+  std::vector<transport_statistics> ts;
+  uint64_t total_rx_polled = 0, no_rx = 0;
+};
 
 class connection {
   static constexpr uint16_t kMaxTransactionPerConnection =
@@ -50,30 +57,37 @@ public:
   uint16_t receive_message(message **msgs, uint16_t cnt);
   void open_connection();
 
-  statistics get_transport_stats() const { return transport_impl->get_stats(); }
+  transport_statistics get_transport_stats() const {
+    return transport_impl->get_stats();
+  }
 
   bool active() { return transport_impl->active(); }
 
   intrusive_list_t<transaction_slot> &get_inprogress() { return inprogress; }
 
   void process_incoming_server() {
-    transport_impl->receive_messages([&](message *msg) {
+    transport_impl->receive_messages([&](message *msg) -> message * {
       auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
       slots[hdr->msg_id].update_execution_state(inprogress);
-      slots[hdr->msg_id].handle_incoming_server(msg, hdr->fini);
+      if (!slots[hdr->msg_id].handle_incoming_server(msg, hdr->sid, hdr->fini))
+        return msg;
       msg->shrink_headroom(sizeof(protocol::ft_header));
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
+      return nullptr;
     });
   }
 
-  void process_incoming_client() {
-    transport_impl->receive_messages([&](message *msg) {
+  void process_incoming_client(intrusive_list_t<transaction_slot> &ready) {
+    transport_impl->receive_messages([&](message *msg) -> message * {
       auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
-      slots[hdr->msg_id].handle_incoming_client(msg, hdr->fini);
+      if (!slots[hdr->msg_id].handle_incoming_client(msg, hdr->sid, hdr->fini,
+                                                     ready))
+        return msg;
       msg->shrink_headroom(sizeof(protocol::ft_header));
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
+      return nullptr;
     });
   }
 
@@ -87,7 +101,6 @@ public:
   }
 
   void finish_transaction(transaction_slot *slot) {
-    slot->acknowledge();
     free_slots.push_front(slot->tid);
   }
 
@@ -109,6 +122,7 @@ public:
 class connection_manager {
   static constexpr uint16_t kdefaultBurstSize = 32;
   static constexpr uint16_t kdefaultFlowTableSize = 512;
+
 public:
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
                      uint32_t sip, std::shared_ptr<message_allocator> allocator,
@@ -124,11 +138,11 @@ public:
     FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n", ft.sip,
                     rte_be_to_cpu_16(ft.sport));
     auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
-    if (header->type == protocol::FT_INIT)
+    if (unlikely(header->type == protocol::FT_INIT))
       register_request(pkt, ft);
     else {
       auto *connection = flows.lookup(ft);
-      if (connection)
+      if (likely(connection))
         (*connection)->process_pkt(pkt);
       else {
         dump_pkt(pkt, pkt->len());
@@ -175,20 +189,26 @@ public:
     con_timer_manager.manage();
   }
 
-  void poll_single_connection(connection *con) {
+  void poll_single_connection(connection *con,
+                              intrusive_list_t<transaction_slot> &ready) {
     fetch_from_device();
-    con->process_incoming_client();
+    con->process_incoming_client(ready);
     con_timer_manager.manage();
   }
 
   void fetch_from_device() {
-    dev.rx_burst([this](message *pkt) {
-      flow_tuple ft;
-      auto *msg = pkt_if.consume_pkt(pkt, ft);
-      if (!msg)
-        return;
-      handle_pkt(pkt, ft);
-    });
+    std::array<flow_tuple, kdefaultBurstSize> fts;
+    uint16_t i = 0;
+    assert(vec.i == 0);
+    dev.rx_burst(vec);
+    for (auto &msg : vec)
+      msg = pkt_if.consume_pkt(msg, fts[i++]);
+    for (auto [msg, ft] : std::ranges::zip_view(vec, fts)) {
+      if (likely(msg))
+        handle_pkt(msg, ft);
+    }
+    vec.clear();
+    assert(vec.i == 0);
   }
 
   void register_request(message *pkt, flow_tuple &ft) {
@@ -223,12 +243,16 @@ public:
     return {it->get(), inserted};
   }
 
-  std::vector<statistics> get_stats() {
-    std::vector<statistics> stats(open_connections);
+  statistics get_stats() {
+    std::vector<transport_statistics> stats(open_connections);
     uint32_t i = 0;
     for (auto &con : active)
       stats[i++] = con.transport_impl->get_stats();
-    return stats;
+    statistics sts;
+    sts.no_rx = dev.no_rx;
+    sts.total_rx_polled = dev.total_rx;
+    sts.ts = std::move(stats);
+    return sts;
   }
 
   void flush() { scheduler.flush(); }
@@ -254,6 +278,7 @@ private:
   bool is_client;
   uint32_t open_connections = 0;
   uint64_t flush_timeout;
+  packet_vector<kdefaultBurstSize> vec;
   timer<dpdk_timer> flush_timer;
   timer_manager<dpdk_timer> con_timer_manager;
 };

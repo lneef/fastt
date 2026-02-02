@@ -1,4 +1,5 @@
 #pragma once
+#include "message.h"
 #include <boost/intrusive/link_mode.hpp>
 #include <boost/intrusive/list_hook.hpp>
 #include <boost/intrusive/options.hpp>
@@ -32,6 +33,17 @@ __inline uint64_t get_ticks_us(){
 __inline uint64_t get_ticks_ms(){
     return to_ms;
 }
+
+template<unsigned N>
+struct packet_vector{
+    std::array<message*, N> pkts;
+    uint16_t i = 0;
+
+    constexpr void clear(){ i = 0; }
+
+    auto begin() {return pkts.begin();}
+    auto end() {return pkts.begin() + i; }
+};
 
 //-------------------------------------------------------------------------------
 /*

@@ -8,7 +8,9 @@
 #include <bits/getopt_core.h>
 #include <cstdint>
 #include <getopt.h>
+#include <iostream>
 #include <memory>
+#include <ostream>
 #include <random>
 #include <ranges>
 #include <rte_ether.h>
@@ -18,6 +20,8 @@
 #include <rte_mempool.h>
 #include <unordered_map>
 #include <utility>
+#include <signal.h>
+#include <format>
 
 struct netconfig {
   rte_ether_addr dmac;
@@ -50,6 +54,7 @@ static message *serve(message_allocator *allocator,
   auto *completion = rte_pktmbuf_mtod(msg, kv_packet<kv_completion> *);
   completion->id = packet->id;
   completion->pt = packet->pt;
+  completion->payload.key = packet->payload.key;
   if (it == store.end()) {
     completion->payload.reponse = response_t::FAILURE;
     completion->payload.val = 0;
@@ -76,9 +81,15 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
   return conf;
 }
 
+static volatile int terminate = 0;
+
+static void handler(int sig) {
+(void)sig;
+terminate = 1;
+}
+
 int run(netconfig &conf) {
   prepare();
-  rte_log_set_global_level(RTE_LOG_DEBUG);
   if (fastt::init())
     return -1;
   auto ifc = iface::configure_port(0, 1, 1);
@@ -89,7 +100,7 @@ int run(netconfig &conf) {
       std::make_shared<message_allocator>("pool", 8095);
   server_iface server(port, txq, rxq, con_config{conf.sip, conf.sport},
                       allocator);
-  while (true) {
+  while (!terminate) {
     server.poll([&](transaction_slot &slot) {
       auto *msg = slot.rx_if.read();
       auto *resp = serve(allocator.get(),
@@ -101,10 +112,18 @@ int run(netconfig &conf) {
     });
     server.complete();
   }
+
+  auto stats = server.get_stats();
+  std::cout << std::format("total: {0}, no: {1}\n", stats.total_rx_polled, stats.no_rx) << std::endl;
+  ifc->stop();
   return 0;
 }
 
 int main(int argc, char *argv[]) {
+  struct sigaction sa = {};
+  sa.sa_handler = handler;
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);  
   int dpdk_argc = rte_eal_init(argc, argv);
   auto conf = parse_cmdline(argc - dpdk_argc, argv + dpdk_argc);
   run(conf);
