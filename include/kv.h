@@ -39,6 +39,7 @@ struct [[gnu::packed]] kv_request {
 
 struct [[gnu::packed]] kv_completion {
   response_t reponse;
+  int64_t key;
   int64_t val;
 };
 
@@ -58,9 +59,10 @@ inline void create_put_request(message *msg, int64_t key, int64_t val) {
   kv_req->payload.val = val;
 }
 
-inline void create_get_request(message *msg, int64_t key) {
+inline void create_get_request(message *msg, int64_t key, int64_t id) {
   auto *kv_req = static_cast<kv_packet<kv_request> *>(msg->data());
   kv_req->pt = packet_t::SINGLE;
+  kv_req->id = id;
   kv_req->payload.op = request_t::GET;
   kv_req->payload.key = key;
 }
@@ -76,7 +78,7 @@ public:
   }
 
   transaction_slot* start_transaction(connection *con);
-  void lookup(int64_t key, message *msg) { create_get_request(msg, key); };
+  void lookup(int64_t key, message *msg, int64_t id) { create_get_request(msg, key, id); };
   void acknowledge() { con->acknowledge_all(); }
   void finish_transaction(transaction_slot *slot);
 

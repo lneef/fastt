@@ -54,6 +54,7 @@ static message *serve(message_allocator *allocator,
   auto *completion = rte_pktmbuf_mtod(msg, kv_packet<kv_completion> *);
   completion->id = packet->id;
   completion->pt = packet->pt;
+  completion->payload.key = packet->payload.key;
   if (it == store.end()) {
     completion->payload.reponse = response_t::FAILURE;
     completion->payload.val = 0;
