@@ -101,7 +101,6 @@ public:
   }
 
   void finish_transaction(transaction_slot *slot) {
-    slot->acknowledge();
     free_slots.push_front(slot->tid);
   }
 

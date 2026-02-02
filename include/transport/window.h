@@ -54,10 +54,11 @@ template <uint32_t width> struct window {
 
     auto it = front;
     auto head = least_in_window;
-    while(unlikely(head < max_rx)){
+    while(unlikely(head <= max_rx)){
         if(wd[it] && messages[it])
             messages[it] = f(messages[it]);
         it = (it + 1) & mask;
+        ++head;
     }
     return advanced;
   }
