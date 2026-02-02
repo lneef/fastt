@@ -28,9 +28,9 @@
 class iface;
 class connection_manager;
 
-struct statistics{
-    std::vector<transport_statistics> ts;
-    uint64_t total_rx_polled = 0, no_rx = 0;
+struct statistics {
+  std::vector<transport_statistics> ts;
+  uint64_t total_rx_polled = 0, no_rx = 0;
 };
 
 class connection {
@@ -57,30 +57,37 @@ public:
   uint16_t receive_message(message **msgs, uint16_t cnt);
   void open_connection();
 
-  transport_statistics get_transport_stats() const { return transport_impl->get_stats(); }
+  transport_statistics get_transport_stats() const {
+    return transport_impl->get_stats();
+  }
 
   bool active() { return transport_impl->active(); }
 
   intrusive_list_t<transaction_slot> &get_inprogress() { return inprogress; }
 
   void process_incoming_server() {
-    transport_impl->receive_messages([&](message *msg) {
+    transport_impl->receive_messages([&](message *msg) -> message * {
       auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
       slots[hdr->msg_id].update_execution_state(inprogress);
-      slots[hdr->msg_id].handle_incoming_server(msg, hdr->fini);
+      if (!slots[hdr->msg_id].handle_incoming_server(msg, hdr->sid, hdr->fini))
+        return msg;
       msg->shrink_headroom(sizeof(protocol::ft_header));
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
+      return nullptr;
     });
   }
 
-  void process_incoming_client(intrusive_list_t<transaction_slot>& ready) {
-    transport_impl->receive_messages([&](message *msg) {
+  void process_incoming_client(intrusive_list_t<transaction_slot> &ready) {
+    transport_impl->receive_messages([&](message *msg) -> message * {
       auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
-      slots[hdr->msg_id].handle_incoming_client(msg, hdr->fini, ready);
+      if (!slots[hdr->msg_id].handle_incoming_client(msg, hdr->sid, hdr->fini,
+                                                     ready))
+        return msg;
       msg->shrink_headroom(sizeof(protocol::ft_header));
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
+      return nullptr;
     });
   }
 
@@ -183,7 +190,8 @@ public:
     con_timer_manager.manage();
   }
 
-  void poll_single_connection(connection *con, intrusive_list_t<transaction_slot>& ready) {
+  void poll_single_connection(connection *con,
+                              intrusive_list_t<transaction_slot> &ready) {
     fetch_from_device();
     con->process_incoming_client(ready);
     con_timer_manager.manage();
@@ -244,7 +252,7 @@ public:
     statistics sts;
     sts.no_rx = dev.no_rx;
     sts.total_rx_polled = dev.total_rx;
-    sts.ts =std::move(stats);
+    sts.ts = std::move(stats);
     return sts;
   }
 

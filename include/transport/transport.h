@@ -29,12 +29,14 @@ struct transport_statistics {
   uint64_t retransmitted, acked, sent, retransmissions;
   double rtt;
   transport_statistics(uint64_t retransmitted, uint64_t acked, uint64_t sent,
-             uint64_t retransmissions, uint64_t rtt_est)
-      : retransmitted(retransmitted), acked(acked), sent(sent), retransmissions(retransmissions) {
+                       uint64_t retransmissions, uint64_t rtt_est)
+      : retransmitted(retransmitted), acked(acked), sent(sent),
+        retransmissions(retransmissions) {
     rtt = static_cast<double>(rtt_est);
   }
 
-  transport_statistics(): retransmitted(), acked(), sent(), retransmissions(), rtt() {}
+  transport_statistics()
+      : retransmitted(), acked(), sent(), retransmissions(), rtt() {}
 };
 
 template <typename D> struct seq_observer {
@@ -75,6 +77,7 @@ class transport {
   static constexpr uint16_t kOustandingMessages = 128;
   friend class connection;
   enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
+
 public:
   struct {
     uint64_t sent = 0;
@@ -83,15 +86,15 @@ public:
 
   transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
             const con_config &target)
-      : recv_wd(min_seq), target(target), rt_handler(kOustandingMessages), scheduler(),
-        allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
+      : recv_wd(min_seq), target(target), rt_handler(kOustandingMessages),
+        scheduler(), allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
 
   void probe_timeout(uint16_t tid) {
     rt_handler.probe_retransmit(
         [&](message *msg) { pkt_if->consume_for_retransmission(msg); }, tid);
   }
 
-  bool send_pkt(message *pkt, uint16_t msg_id, bool fini = false) {
+  bool send_pkt(message *pkt, uint8_t sid, uint16_t msg_id, bool fini = false) {
     assert(cstate == connection_state::ESTABLISHED);
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
@@ -102,8 +105,9 @@ public:
         ts = recv_wd.get_ts();
         scheduler.ack_callback(ack);
       }
-      protocol::prepare_ft_header(pkt, seq, ack, msg_id, recv_wd.capacity(),
-                                  fini, ts);
+      protocol::prepare_ft_header(pkt, seq, ack, sid, msg_id,
+                                  recv_wd.capacity(kOustandingMessages), fini,
+                                  ts);
     };
 
     auto inserted = rt_handler.record_pkt(msg_id, pkt, ctor);
@@ -114,8 +118,8 @@ public:
 
   transport_statistics get_stats() const {
     auto &rt_stats = rt_handler.get_stats();
-    return {rt_stats.retransmitted, rt_stats.acked, stats.sent, stats.retransmissions,
-            rt_stats.rtt};
+    return {rt_stats.retransmitted, rt_stats.acked, stats.sent,
+            stats.retransmissions, rt_stats.rtt};
   }
 
   bool acknowledge() {
@@ -131,14 +135,16 @@ public:
           msg, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
       recv_wd.copy_bitset(sack_payload);
       scheduler.sack_callback(ack);
-      FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %lu\n", sack_payload->bit_map_len, ack);
+      FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %lu\n",
+                      sack_payload->bit_map_len, ack);
     } else {
       if (!scheduler.ack_pending(ack))
         return false;
       msg = allocator->alloc_message(sizeof(protocol::ft_header));
       scheduler.ack_callback(ack);
     }
-    protocol::prepare_ack_pkt(msg, ack, recv_wd.capacity(), recv_wd.get_ts(), is_sack);
+    protocol::prepare_ack_pkt(msg, ack, recv_wd.capacity(kOustandingMessages),
+                              recv_wd.get_ts(), is_sack);
     FASTT_LOG_DEBUG("Return %u capacity to peer\n", recv_wd.capacity());
     pkt_if->consume_pkt(msg, sport, target);
     return true;
@@ -153,7 +159,7 @@ public:
         rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
       scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
-        ++stats.retransmissions;  
+        ++stats.retransmissions;
         rte_pktmbuf_free(pkt);
         return false;
       } else
@@ -164,7 +170,7 @@ public:
       rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
       if (hdr->sack) {
         auto *sack_payload = rte_pktmbuf_mtod_offset(
-          pkt, protocol::ft_sack_payload *, sizeof(protocol::ft_header));  
+            pkt, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
         rt_handler.acknowledge_sack(
             sack_payload, hdr->wnd, ts,
             [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
@@ -217,7 +223,9 @@ public:
   void accept_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     bool retval = rt_handler.record_pkt(
-        0, msg, [budget = recv_wd.capacity()](message *msg, uint64_t seq) {
+        0, msg,
+        [budget = recv_wd.capacity(kOustandingMessages)](message *msg,
+                                                         uint64_t seq) {
           protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
         });
     FASTT_LOG_DEBUG("Sent ack for init");
@@ -230,8 +238,8 @@ public:
   template <typename F> void receive_messages(F &&f) {
     grant_returned += recv_wd.advance(f);
     /* maybe we lost pkts */
-    if(recv_wd.max_rx > recv_wd.least_in_window)
-        grant_returned += recv_wd.max_rx - recv_wd.least_in_window;
+    if (recv_wd.max_rx > recv_wd.least_in_window)
+      grant_returned += recv_wd.max_rx - recv_wd.least_in_window;
     if (grant_returned >= kOustandingMessages / 4 || recv_wd.has_holes()) {
       acknowledge();
       grant_returned = 0;
@@ -240,7 +248,10 @@ public:
 
 private:
   void setup_after_init() {
-    recv_wd.advance([](message *msg) { rte_pktmbuf_free(msg); });
+    recv_wd.advance([](message *msg) {
+      rte_pktmbuf_free(msg);
+      return nullptr;
+    });
   }
 
   window<kOustandingMessages> recv_wd;

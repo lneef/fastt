@@ -4,13 +4,14 @@
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 
-void protocol::prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint64_t msg_id, uint16_t wnd, bool fini, uint32_t us){
+void protocol::prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint8_t sid, uint64_t msg_id, uint16_t wnd, bool fini, uint32_t us){
     auto *ft = msg->move_headroom<protocol::ft_header>();
     ft->ack = ack;
     ft->seq = seq;
     ft->msg_id = msg_id;
     ft->wnd = wnd;
     ft->fini = fini;
+    ft->sid = sid;
     ft->ts = us;
     ft->sack = 0;
     ft->type = protocol::pkt_type::FT_MSG;

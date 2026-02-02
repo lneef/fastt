@@ -28,6 +28,7 @@ struct transaction_slot {
   slot_state state = slot_state::COMPLETED;
   bool is_client = false;
   bool has_outstanding_msgs = false;
+  uint8_t sid = 0, tx_sid = 0;
 
   transaction_slot(uint16_t tid, transport *transport_impl, bool is_client)
       : transport_impl(transport_impl), default_timeout(get_ticks_ms()), slot_timer(timertype::SINGLE),
@@ -49,13 +50,20 @@ struct transaction_slot {
     return has_outstanding_msgs || incoming.size() > 0;
   }
 
-  void handle_incoming_server(message *msg, bool fini) {
+  bool handle_incoming_server(message *msg, uint8_t msid, bool fini) {
+    if(msid != sid)
+        return false;
+    ++sid;
     incoming.push_back(msg);
     ++incoming_pkts;
     has_outstanding_msgs = !fini;
+    return true;
   }
 
-  void handle_incoming_client(message *msg, bool fini, intrusive_list_t<transaction_slot>& ready) {
+  bool handle_incoming_client(message *msg, uint8_t msid, bool fini, intrusive_list_t<transaction_slot>& ready) {
+    if(msid != sid)
+        return false;
+    ++sid;
     incoming.push_back(msg);
     ++incoming_pkts;
     if (fini) {
@@ -65,6 +73,7 @@ struct transaction_slot {
     }
     if(!link.is_linked())
         ready.push_back(*this);
+    return true;
   }
 
   void rearm() {
@@ -124,7 +133,7 @@ struct transaction_slot {
 
   struct {
     bool send(message *msg, bool last = false) {
-      return slot->transport_impl->send_pkt(msg, slot->tid, last);
+      return slot->transport_impl->send_pkt(msg, slot->tx_sid++, slot->tid, last);
     }
     transaction_slot *slot;
   } tx_if{this};
