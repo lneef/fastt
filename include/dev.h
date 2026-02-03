@@ -10,11 +10,11 @@
 
 #include <array>
 
-class netdev {
+class qpair {
   static constexpr uint16_t kDefaultInputBurstSize = 32;
 
 public:
-  netdev(uint16_t port, uint16_t txq, uint16_t rxq)
+  qpair(uint16_t port, uint16_t txq, uint16_t rxq)
       : port(port), txq(txq), rxq(rxq) {};
 
   uint16_t tx_burst(rte_mbuf **pkts, uint16_t cnt) {

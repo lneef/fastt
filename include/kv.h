@@ -2,7 +2,7 @@
 
 #include "client.h"
 #include "message.h"
-#include "transport/slot.h"
+#include "slot.h"
 #include "util.h"
 #include <cstdint>
 #include <generic/rte_cycles.h>

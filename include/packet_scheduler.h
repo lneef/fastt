@@ -10,11 +10,11 @@ public:
   static constexpr uint16_t kDefaultOutBurstSize = 32;  
   bool add_pkt(rte_mbuf *pkt);
   uint16_t flush();
-  packet_scheduler(netdev *dev): dev(dev), buffer(kDefaultOutBurstSize), ptr(0) {}
+  packet_scheduler(qpair *dev): dev(dev), buffer(kDefaultOutBurstSize), ptr(0) {}
 
 private:
   uint16_t do_send();
-  netdev *dev;
+  qpair *dev;
   std::vector<rte_mbuf *> buffer;
   std::size_t ptr;
 };

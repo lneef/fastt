@@ -21,7 +21,7 @@
 #include "packet_if.h"
 #include "protocol.h"
 #include "timer.h"
-#include "transport/slot.h"
+#include "slot.h"
 #include "transport/transport.h"
 #include "util.h"
 
@@ -271,7 +271,7 @@ private:
   std::deque<std::pair<message *, flow_tuple>> connection_requests;
   fixed_size_hash_table<flow_tuple, std::unique_ptr<connection>> flows;
   std::shared_ptr<message_allocator> allocator;
-  netdev dev;
+  qpair dev;
   packet_scheduler scheduler;
   packet_if pkt_if;
   intrusive_list_t<connection> active;
