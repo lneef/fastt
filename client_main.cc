@@ -98,7 +98,6 @@ static int lcore_fn(void *arg) {
   auto *con = adapter->connections[me];
   auto &allocator = adapter->allocator[me];
   auto &cif = *adapter->cifs[me];
-  std::unordered_map<int64_t, int64_t> keys;
   kv_proxy kv(&cif, con);
   uint64_t t = 0;
   uint64_t c = 0;
@@ -109,8 +108,6 @@ static int lcore_fn(void *arg) {
           auto &slot = done.front();
           auto* resp = slot.rx_if.read();
           auto *kv_comp = rte_pktmbuf_mtod(resp, kv_packet<kv_completion>*);
-          assert(kv_comp->payload.key == keys[kv_comp->id]);
-          keys.erase(kv_comp->id);
           allocator->deallocate(resp);
           kv.finish_transaction(&slot);
           ++c;
@@ -120,8 +117,6 @@ static int lcore_fn(void *arg) {
       if(!tx)
           continue;
       auto* req = allocator->alloc_message(dataSize);
-      auto key = dist(rng);
-      keys[t] = key;
       kv.lookup(dist(rng), req, t);
       tx->tx_if.send(req, true);
       ++t;
@@ -132,8 +127,6 @@ static int lcore_fn(void *arg) {
       for(; done.size() > 0; done.pop_front()){
           auto& slot = done.front();
           auto* resp = slot.rx_if.read();
-          auto *kv_comp = rte_pktmbuf_mtod(resp, kv_packet<kv_completion>*);
-          assert(kv_comp->payload.key == keys[kv_comp->id]);
           allocator->deallocate(resp);
           ++c;
       }

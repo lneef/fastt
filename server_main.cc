@@ -3,7 +3,7 @@
 #include "kv.h"
 #include "message.h"
 #include "server.h"
-#include "transport/slot.h"
+#include "slot.h"
 #include <arpa/inet.h>
 #include <bits/getopt_core.h>
 #include <cstdint>
@@ -23,6 +23,8 @@
 #include <signal.h>
 #include <format>
 
+#include <tlx/container/btree_map.hpp>
+
 struct netconfig {
   rte_ether_addr dmac;
   uint32_t sip, dip;
@@ -33,12 +35,13 @@ static std::random_device dev;
 static std::mt19937 rng(dev());
 static std::uniform_int_distribution<std::mt19937::result_type> dist(INT64_MIN,
                                                                      INT64_MAX);
-static constexpr uint32_t kStoreSize = 1024;
-static std::unordered_map<int64_t, int64_t> store(kStoreSize);
+static constexpr uint32_t kStoreSize = 1024 * 1024;
+static tlx::btree_map<int64_t, int64_t> store;
 
 static void prepare() {
+  uint32_t size = kStoreSize;  
   for (auto [k, v] :
-       std::ranges::views::iota(0, 1000) | std::views::transform([&](int) {
+       std::ranges::views::iota(0u, size) | std::views::transform([&](int) {
          return std::make_pair(dist(rng), dist(rng));
        })) {
     store[k] = v;
