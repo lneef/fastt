@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <err.h>
@@ -9,9 +10,9 @@
 #include <liburing.h>
 #include <memory>
 #include <netinet/in.h>
-#include <print>
 #include <sys/mman.h>
 #include <vector>
+#include <cassert>
 
 namespace uring {
 static constexpr int kQueueDepth = 128;
@@ -109,7 +110,7 @@ struct uring_context {
       *sqe = io_uring_get_sqe(&ring);
     }
     if (!*sqe) {
-      std::print(stderr, "cannot get sqe\n");
+      fprintf(stderr, "cannot get sqe\n");
       return true;
     }
     return false;
@@ -130,7 +131,7 @@ struct uring_context {
                    IORING_SETUP_CQSIZE;
     ret = io_uring_queue_init_params(kQueueDepth, &ring, &params);
     if (ret) {
-      std::print(stderr, "Queue init failed: {}\n", strerror(-ret));
+      fprintf(stderr, "Queue init failed: %s\n", strerror(-ret));
       return ret;
     }
 
@@ -150,7 +151,7 @@ struct uring_context {
     mapped = mmap(NULL, buf_ring_size, PROT_READ | PROT_WRITE,
                   MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
     if (mapped == MAP_FAILED) {
-      std::print(stderr, "buf_ring mmap: {}\n", strerror(errno));
+      fprintf(stderr, "buf_ring mmap: %s\n", strerror(errno));
       return -1;
     }
     buf_ring = (struct io_uring_buf_ring *)mapped;
@@ -165,7 +166,7 @@ struct uring_context {
 
     ret = io_uring_register_buf_ring(&ring, &reg, 0);
     if (ret) {
-      std::print(stderr, "buf_ring init failed: {}\n", strerror(-ret));
+      fprintf(stderr, "buf_ring init failed: %s\n", strerror(-ret));
       return ret;
     }
 
@@ -196,12 +197,14 @@ struct iface_base {
 
   void prepare_send(void *buf, size_t len, unsigned idx, int peer_fd) {
     auto *sqe = io_uring_get_sqe(&ctx->ring);
+    assert(sqe && "No free sqe");
     io_uring_prep_send(sqe, peer_fd, buf, len, 0);
     io_uring_sqe_set_data64(sqe, tag_send(idx));
   }
 
   void prepare_send_zc(void *buf, size_t len, unsigned idx, int peer_fd) {
     auto *sqe = io_uring_get_sqe(&ctx->ring);
+    assert(sqe && "No free sqe");
     io_uring_prep_send_zc(sqe, peer_fd, buf, len, 0, 0);
     io_uring_sqe_set_data64(sqe, tag_send(idx));
   }
@@ -222,7 +225,7 @@ struct iface_base {
     port = port_arg <= 0 ? 0 : htons(port_arg);
     fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     if (fd < 0) {
-      std::print(stderr, "sock init failed {}\n", strerror(errno));
+      fprintf(stderr, "sock init failed %s\n", strerror(errno));
       return fd;
     }
     return 0;
@@ -230,7 +233,7 @@ struct iface_base {
 
   int process_cqe_send(struct io_uring_cqe *cqe) {
     if (cqe->res < 0)
-      std::print(stderr, "bad send %s\n", strerror(-cqe->res));
+      fprintf(stderr, "bad send %s\n", strerror(-cqe->res));
     auto tx_idx = untag(cqe->user_data);
     auto *buf = ctx->tx_buffer[tx_idx];
     pool.free(buf);
@@ -293,7 +296,7 @@ struct server_iface : iface_base {
     int ret = setsockopt(clients.front(), SOL_SOCKET, SO_REUSEADDR, &enable,
                          sizeof(enable));
     if (ret) {
-      std::print("Failed to set socket op: {}\n", strerror(errno));
+      fprintf(stderr, "Failed to set socket op: %s\n", strerror(errno));
       return ret;
     }
     struct sockaddr_in addr = {.sin_family = AF_INET,
@@ -303,7 +306,7 @@ struct server_iface : iface_base {
     ret = bind(clients.front(), reinterpret_cast<struct sockaddr *>(&addr),
                sizeof(addr));
     if (ret) {
-      std::print("Binding socket failed: {}\n", strerror(-ret));
+      fprintf(stderr, "Binding socket failed: %s\n", strerror(-ret));
       return ret;
     }
     return listen(clients.front(), 1 << 10);
@@ -348,8 +351,10 @@ struct server_iface : iface_base {
 template <typename T> int add_recv(T *iface, int fd, int idx) {
   struct io_uring_sqe *sqe;
 
-  if (iface->ctx->get_sqe(&sqe))
+  if (iface->ctx->get_sqe(&sqe)){
+    fprintf(stderr, "No free sqe\n");  
     return -1;
+  }
 
   io_uring_prep_recv_multishot(sqe, fd, nullptr, 0, 0);
 
@@ -367,7 +372,7 @@ __inline void recycle_buffer(uring_context *ctx, int idx) {
 
 __inline int process_cqe_send(iface_base *st, struct io_uring_cqe *cqe) {
   if (cqe->res < 0)
-    std::print(stderr, "bad send %s\n", strerror(-cqe->res));
+    fprintf(stderr, "bad send %s\n", strerror(-cqe->res));
   auto tx_idx = untag(cqe->user_data);
   auto *buf = st->ctx->tx_buffer[tx_idx];
   st->pool.free(buf);
@@ -387,9 +392,9 @@ int process_cqe_recv(T *st, struct io_uring_cqe *cqe, int fd, unsigned sidx,
     return 0;
 
   if (!(cqe->flags & IORING_CQE_F_BUFFER) || cqe->res < 0) {
-    std::print(stderr, "recv cqe bad res %d\n", cqe->res);
+    fprintf(stderr, "recv cqe bad res %d\n", cqe->res);
     if (cqe->res == -EFAULT || cqe->res == -EINVAL)
-      std::print(stderr, "NB: This requires a kernel version >= 6.0\n");
+      fprintf(stderr, "NB: This requires a kernel version >= 6.0\n");
     return -1;
   }
   idx = cqe->flags >> 16;
