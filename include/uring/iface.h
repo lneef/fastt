@@ -21,6 +21,7 @@ static constexpr int kBufShift = 12;
 static constexpr unsigned kCQEntries = kQueueDepth * 8;
 static constexpr int kMaxClientFd = 128;
 static constexpr int kDefaultBufferSize = 256;
+static constexpr uint64_t kAcceptTag = 2 * (kMaxClientFd + 1) + 1;
 
 static constexpr uint64_t tag_send(unsigned idx) {
   return static_cast<uint64_t>(idx) * 2;
@@ -269,8 +270,8 @@ struct client_iface : iface_base {
       process_cqe_send(cqe);
       break;
     }
-    case 1: {
-      return process_cqe_recv(this, cqe, 0, 0, f);
+    case 1: {          
+      return process_cqe_recv(this, cqe, fd, 0, f);
       break;
     }
     }
@@ -284,13 +285,13 @@ struct server_iface : iface_base {
   std::deque<int> free_slots;
 
   server_iface()
-      : iface_base(), clients(kMaxClientFd + 1), con_state(kMaxClientFd) {
+      : iface_base(), clients(kMaxClientFd + 1), con_state(kMaxClientFd + 1) {
 
-    for (auto idx = 0; idx < kMaxClientFd; ++idx)
+    for (auto idx = 1; idx < kMaxClientFd + 1; ++idx)
       free_slots.push_back(idx);
   }
 
-  slot &connection_state(unsigned idx) { return con_state[idx - 1]; }
+  slot &connection_state(unsigned idx) { return con_state[idx]; }
 
   int setup(int port_arg) { return setup_base(port_arg, clients.front()); }
 
@@ -317,8 +318,9 @@ struct server_iface : iface_base {
 
   int uring_prepare_accept() {
     auto sqe = io_uring_get_sqe(&ctx->ring);
+    add_recv(this, clients.front(), 0);
     io_uring_prep_multishot_accept(sqe, clients.front(), nullptr, nullptr, 0);
-    io_uring_sqe_set_data64(sqe, tag_recv(0));
+    io_uring_sqe_set_data64(sqe, kAcceptTag);
     return 0;
   }
 
@@ -326,7 +328,7 @@ struct server_iface : iface_base {
     if (cqe->res > 0) {
       auto idx = free_slots.front();
       free_slots.pop_front();
-      clients[idx + 1] = cqe->res;
+      clients[idx] = cqe->res;
       con_state[idx] = {};
       add_recv(this, cqe->res, idx);
       return 0;
@@ -335,21 +337,17 @@ struct server_iface : iface_base {
   }
 
   int handle_cqe(struct io_uring_cqe *cqe, auto &&f) {
+    if (cqe->user_data == kAcceptTag)
+        return handle_accept(cqe);  
     switch (cqe->user_data & 1) {
     case 0: {
-      process_cqe_send(cqe);
-      break;
+      return process_cqe_send(cqe);
     }
     case 1: {
       auto idx = untag(cqe->user_data);
-      if (idx == 0)
-        handle_accept(cqe);
-      else
-        return process_cqe_recv(this, cqe, clients[idx], idx, f);
-      break;
+      return process_cqe_recv(this, cqe, clients[idx], idx, f);
     }
     }
-    return 0;
   }
 };
 
@@ -365,7 +363,7 @@ template <typename T> int add_recv(T *iface, int fd, int idx) {
 
   sqe->flags |= IOSQE_BUFFER_SELECT;
   sqe->buf_group = 0;
-  io_uring_sqe_set_data64(sqe, tag_recv(idx + 1));
+  io_uring_sqe_set_data64(sqe, tag_recv(idx));
   return 0;
 }
 
@@ -387,6 +385,7 @@ __inline int process_cqe_send(iface_base *st, struct io_uring_cqe *cqe) {
 template <typename T>
 int process_cqe_recv(T *st, struct io_uring_cqe *cqe, int fd, unsigned sidx,
                      auto &&f) {
+  assert(fd > 0);  
   int ret, idx;
   if (!(cqe->flags & IORING_CQE_F_MORE)) {
     ret = add_recv<T>(st, fd, sidx);
@@ -397,12 +396,12 @@ int process_cqe_recv(T *st, struct io_uring_cqe *cqe, int fd, unsigned sidx,
     return 0;
 
   if (!(cqe->flags & IORING_CQE_F_BUFFER) || cqe->res < 0) {
-    fprintf(stderr, "recv cqe bad res %d\n", cqe->res);
+    fprintf(stderr, "recv cqe bad res %s\n", strerror(-cqe->res));
     if (cqe->res == -EFAULT || cqe->res == -EINVAL)
       fprintf(stderr, "NB: This requires a kernel version >= 6.0\n");
     return -1;
   }
-  idx = cqe->flags >> 16;
+  idx = cqe->flags >> 16; // 16 bits is bid
   auto *buf = st->ctx->get_buffer(idx);
   f(buf, cqe->res, sidx);
   recycle_buffer(st->ctx.get(), idx);
