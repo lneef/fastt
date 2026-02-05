@@ -40,10 +40,6 @@ template <typename T> int add_recv(T *iface, int fd, int idx);
 
 struct slot {
   static constexpr unsigned kDefaultAssemblyBufferSize = 256 * 1024;
-  struct msg_buf {
-    char *buf;
-    size_t ptr, len;
-  };
   uint16_t idx = 0;
   std::vector<uint8_t> reassemble_buffer;
   unsigned off = 0;
@@ -91,7 +87,7 @@ struct uring_context {
   unsigned char *buffer_base;
   int buf_shift = kBufShift;
   size_t buf_ring_size;
-  std::array<void *, kQueueDepth> tx_buffer;
+  std::array<void *, kQueueDepth> tx_buffer{};
   uint16_t next_to_use = 0;
 
   uint16_t next_free_tx_buffer(void *buf) {
@@ -250,6 +246,7 @@ struct iface_base {
     auto tx_idx = untag(cqe->user_data);
     auto *buf = ctx->tx_buffer[tx_idx];
     pool.free(buf);
+    ctx->tx_buffer[tx_idx] = nullptr;
     return 0;
   }
 };
