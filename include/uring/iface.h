@@ -261,7 +261,14 @@ struct client_iface : iface_base {
     return 0;
   }
 
-  int setup(int port_arg) { return setup_base(port_arg, fd); }
+  int setup(int port_arg) { 
+      int ret = setup_base(port_arg, fd); 
+      if(ret < 0){
+          fprintf(stderr, "Setting up socket failed %s\n", strerror(-ret));
+          return ret;
+      }
+      return add_recv(this, fd, tag_recv(0));
+  }
 
   int handle_cqe(struct io_uring_cqe *cqe, auto &&f) {
     switch (cqe->user_data & 1) {
