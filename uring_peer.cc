@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
 #include <arpa/inet.h>
+#include <bit>
 #include <bits/getopt_core.h>
 #include <cerrno>
 #include <cstdint>
@@ -65,8 +66,7 @@ static int handle_request(uring::server_iface *sock, kv_packet<kv_request> *req,
     completion->payload.reponse = response_t::SUCCESS;
     completion->payload.val = it->second;
   }
-  auto tx_idx = sock->ctx->next_free_tx_buffer(completion);
-  sock->prepare_send(completion, sizeof(*completion), tx_idx,
+  sock->prepare_send(completion, sizeof(*completion), std::bit_cast<uint64_t>(completion),
                      sock->clients[idx], sqe);
   return 0;
 }
@@ -80,8 +80,7 @@ static uint64_t request_batch(uring::client_iface *st, uint64_t t, uint8_t bs) {
     if (!buf)
       break;
     create_kv_request(buf, t++, dist(rng));
-    auto tx_idx = st->ctx->next_free_tx_buffer(buf);
-    st->prepare_send(buf, sizeof(kv_packet<kv_request>), tx_idx, st->fd, sqe);
+    st->prepare_send(buf, sizeof(kv_packet<kv_request>), std::bit_cast<uint64_t>(buf), st->fd, sqe);
   }
   return t;
 }
@@ -158,7 +157,6 @@ static int client_fun(struct sockaddr_in *addr) {
 
   while (c < kDefaultTXN) {
     c += process_completions(&iface);
-    printf("%lu\n", c);
   }
   return 0;
 }
@@ -209,6 +207,7 @@ static int server_fun(int port_arg) {
       if (ret)
         break;
     }
+    printf("%u\n", cnt);
     io_uring_cq_advance(&iface.ctx->ring, cnt);
   }
   return 0;

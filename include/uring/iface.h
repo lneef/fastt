@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <bit>
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -40,6 +41,7 @@ template <typename T> int add_recv(T *iface, int fd, int idx);
 
 struct slot {
   static constexpr unsigned kDefaultAssemblyBufferSize = 256 * 1024;
+
   uint16_t idx = 0;
   std::vector<uint8_t> reassemble_buffer;
   unsigned off = 0;
@@ -87,7 +89,7 @@ struct uring_context {
   unsigned char *buffer_base;
   int buf_shift = kBufShift;
   size_t buf_ring_size;
-  std::array<void *, kQueueDepth> tx_buffer{};
+  std::array<void *, kQueueDepth> tx_buffer;
   uint16_t next_to_use = 0;
 
   uint16_t next_free_tx_buffer(void *buf) {
@@ -202,20 +204,21 @@ struct iface_base {
 
   buffer_pool<kDefaultBufferSize> pool;
 
-  iface_base() : ctx(std::make_unique<uring_context>()), pool(512) {}
+  iface_base() : ctx(std::make_unique<uring_context>()), pool(kDefaultBufferSize) {}
 
-  void prepare_send(void *buf, size_t len, unsigned idx, int peer_fd,
+  void prepare_send(void *buf, size_t len, uint64_t idx, int peer_fd,
                     struct io_uring_sqe *sqe) {
     assert(sqe && "No free sqe");
     io_uring_prep_send(sqe, peer_fd, buf, len, 0);
-    io_uring_sqe_set_data64(sqe, tag_send(idx));
+    io_uring_sqe_set_data64(sqe, idx);
   }
 
-  void prepare_send_zc(void *buf, size_t len, unsigned idx, int peer_fd,
+  void prepare_send_zc(void *buf, size_t len, uint64_t idx, int peer_fd,
                        struct io_uring_sqe *sqe) {
     assert(sqe && "No free sqe");
     io_uring_prep_send_zc(sqe, peer_fd, buf, len, 0, 0);
-    io_uring_sqe_set_data64(sqe, tag_send(idx));
+    assert((idx & 1) == 0);
+    io_uring_sqe_set_data64(sqe, idx);
   }
 
   int uring_submit_and_wait(struct io_uring_cqe **cqe) {
@@ -243,10 +246,8 @@ struct iface_base {
   int process_cqe_send(struct io_uring_cqe *cqe) {
     if (cqe->res < 0)
       fprintf(stderr, "bad send %s\n", strerror(-cqe->res));
-    auto tx_idx = untag(cqe->user_data);
-    auto *buf = ctx->tx_buffer[tx_idx];
+    auto *buf = std::bit_cast<void*>(cqe->user_data);
     pool.free(buf);
-    ctx->tx_buffer[tx_idx] = nullptr;
     return 0;
   }
 };
@@ -387,15 +388,6 @@ __inline void recycle_buffer(uring_context *ctx, int idx) {
   io_uring_buf_ring_add(ctx->buf_ring, ctx->get_buffer(idx), ctx->buffer_size(),
                         idx, io_uring_buf_ring_mask(kNumBuffer), 0);
   io_uring_buf_ring_advance(ctx->buf_ring, 1);
-}
-
-__inline int process_cqe_send(iface_base *st, struct io_uring_cqe *cqe) {
-  if (cqe->res < 0)
-    fprintf(stderr, "bad send %s\n", strerror(-cqe->res));
-  auto tx_idx = untag(cqe->user_data);
-  auto *buf = st->ctx->tx_buffer[tx_idx];
-  st->pool.free(buf);
-  return 0;
 }
 
 template <typename T>
