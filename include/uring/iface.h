@@ -183,7 +183,14 @@ struct uring_context {
     return 0;
   }
 
-  struct io_uring_sqe *get_slot() { return io_uring_get_sqe(&ring); }
+  struct io_uring_sqe *get_slot() { 
+      auto *sqe = io_uring_get_sqe(&ring); 
+      if(!sqe){
+          io_uring_submit(&ring);
+          sqe = io_uring_get_sqe(&ring);
+      }
+      return sqe;
+  }
 
   ~uring_context() {
     munmap(buf_ring, buf_ring_size);
@@ -416,9 +423,7 @@ int process_cqe_recv(T *st, struct io_uring_cqe *cqe, int fd, unsigned sidx,
   idx = cqe->flags >> 16; // 16 bits is bid
   auto *buf = st->ctx->get_buffer(idx);
   ret = f(buf, cqe->res, sidx);
-  if(ret)
-      return -1;
   recycle_buffer(st->ctx.get(), idx);
-  return 0;
+  return ret;
 }
 } // namespace uring

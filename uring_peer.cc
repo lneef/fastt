@@ -205,9 +205,9 @@ static int server_fun(int port_arg) {
         slt.off = off;
         return ret;
       });
+      ++cnt;
       if (ret)
         break;
-      ++cnt;
     }
     io_uring_cq_advance(&iface.ctx->ring, cnt);
   }
