@@ -179,6 +179,10 @@ struct uring_context {
     return 0;
   }
 
+  struct io_uring_sqe* get_slot(){
+      return io_uring_get_sqe(&ring);
+  }
+
   ~uring_context() {
     munmap(buf_ring, buf_ring_size);
     io_uring_queue_exit(&ring);
@@ -195,15 +199,13 @@ struct iface_base {
 
   iface_base() : ctx(std::make_unique<uring_context>()), pool(512) {}
 
-  void prepare_send(void *buf, size_t len, unsigned idx, int peer_fd) {
-    auto *sqe = io_uring_get_sqe(&ctx->ring);
+  void prepare_send(void *buf, size_t len, unsigned idx, int peer_fd, struct io_uring_sqe* sqe) {
     assert(sqe && "No free sqe");
     io_uring_prep_send(sqe, peer_fd, buf, len, 0);
     io_uring_sqe_set_data64(sqe, tag_send(idx));
   }
 
-  void prepare_send_zc(void *buf, size_t len, unsigned idx, int peer_fd) {
-    auto *sqe = io_uring_get_sqe(&ctx->ring);
+  void prepare_send_zc(void *buf, size_t len, unsigned idx, int peer_fd, struct io_uring_sqe *sqe) {
     assert(sqe && "No free sqe");
     io_uring_prep_send_zc(sqe, peer_fd, buf, len, 0, 0);
     io_uring_sqe_set_data64(sqe, tag_send(idx));
@@ -325,6 +327,7 @@ struct server_iface : iface_base {
       free_slots.pop_back();
       clients[idx] = cqe->res;
       con_state[idx] = {};
+      return 0;
     }
     return cqe->res;
   }

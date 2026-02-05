@@ -47,8 +47,11 @@ static void prepare() {
   }
 }
 
-static void handle_request(uring::server_iface *sock,
+static int handle_request(uring::server_iface *sock,
                            kv_packet<kv_request> *req, int idx) {
+  auto* sqe = sock->ctx->get_slot();  
+  if(!sqe)
+      return -1;
   auto key = req->payload.key;
   auto it = store.find(key);
   auto *completion =
@@ -65,18 +68,22 @@ static void handle_request(uring::server_iface *sock,
   }
   auto tx_idx = sock->ctx->next_free_tx_buffer(completion);
   sock->prepare_send(completion, sizeof(*completion), tx_idx,
-                     sock->clients[idx]);
+                     sock->clients[idx], sqe);
+  return 0;
 }
 
 static uint64_t request_batch(uring::client_iface *st, uint64_t t, uint8_t bs) {
   for (auto i = 0u; i < bs; ++i) {
+    auto* sqe = st->ctx->get_slot();
+    if(!sqe)
+        break;
     uint8_t *buf = static_cast<uint8_t *>(st->pool.alloc());
     if (!buf)
       break;
     create_kv_request(buf, t++, dist(rng));
     st->ctx->next_free_tx_buffer(buf);
     st->prepare_send(buf, sizeof(kv_packet<kv_request>), 0,
-                     st->fd);
+                     st->fd, sqe);
   }
   return t;
 }
