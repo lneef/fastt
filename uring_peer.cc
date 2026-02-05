@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <bits/getopt_core.h>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -151,6 +152,8 @@ static int server_fun(int port_arg){
 
     while (true) {
       ret = iface.uring_submit_and_wait(&cqe);
+      if(ret == -ETIME)
+          continue;
       head = 0;
       io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
         ret = iface.handle_cqe(
