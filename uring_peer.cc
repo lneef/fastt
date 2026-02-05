@@ -84,6 +84,21 @@ static uint64_t request_batch(uring::client_iface *st, uint64_t t, uint8_t bs) {
   return t;
 }
 
+template <typename T, typename I>
+static size_t parse(I *st, uint8_t *data, size_t size, unsigned idx,
+                    auto &&handler) {
+  unsigned i = 0;
+  for (; i < size;) {
+    auto *req = reinterpret_cast<T *>(data + i);
+    if (size - i < sizeof(*req))
+      break;
+    i += sizeof(*req);
+    handler(st, req, idx);
+  }
+  std::memmove(data, data + i, size - i);
+  return size - i;
+}
+
 static uint64_t process_completions(uring::client_iface *st) {
   unsigned head = 0;
   unsigned c = 0;
@@ -91,36 +106,26 @@ static uint64_t process_completions(uring::client_iface *st) {
   int ret;
   struct io_uring_cqe *cqe;
   ret = st->uring_submit_and_wait(&cqe);
-  if(ret == -ETIME)
-      return 0;
+  if (ret == -ETIME)
+    return 0;
   if (ret < 0) {
     fprintf(stderr, "submission failed %s\n", strerror(-ret));
     return ret;
   }
   io_uring_for_each_cqe(&st->ctx->ring, head, cqe) {
     st->handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {
-      (void)size, (void)sidx, (void)buf;
+      std::memcpy(st->reassembly.data() + st->off, buf, size);
+      st->off += size;
+      st->off = parse<kv_packet<kv_completion>, uring::client_iface>(
+          st, st->reassembly.data(), st->off, sidx,
+          [&](uring::client_iface *, kv_packet<kv_completion> *, unsigned) {
+            ++c;
+          });
     });
-    if (cqe->user_data & 1)
-      ++c;
     ++cnt;
   }
   io_uring_cq_advance(&st->ctx->ring, cnt);
   return c;
-}
-
-static size_t parse(uring::server_iface *st, uint8_t *data, size_t size,
-                  unsigned idx) {
-  unsigned i = 0;
-  for (; i < size;) {
-    auto *req = reinterpret_cast<kv_packet<kv_request> *>(data + i);
-    if (size - i < sizeof(*req))
-      break;
-    i += sizeof(*req);
-    handle_request(st, req, idx);
-  }
-  std::memmove(data, data + i, size - i);
-  return size - i;
 }
 
 static int client_fun(struct sockaddr_in *addr) {
@@ -179,11 +184,13 @@ static int server_fun(int port_arg) {
     }
     unsigned cnt = 0;
     io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
-      ret = iface.handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {     
+      ret = iface.handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {
         auto &slt = iface.connection_state(sidx);
         std::memcpy(slt.reassemble_buffer.data() + slt.off, buf, size);
         slt.off += size;
-        slt.off = parse(&iface, slt.reassemble_buffer.data(), slt.off, sidx);
+        slt.off = parse<kv_packet<kv_request>, uring::server_iface>(
+            &iface, slt.reassemble_buffer.data(), slt.off, sidx,
+            handle_request);
       });
       if (ret)
         break;

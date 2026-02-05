@@ -250,6 +250,7 @@ struct iface_base {
 struct client_iface : iface_base {
   int fd;
   std::vector<uint8_t> reassembly;
+  size_t off = 0;
 
   client_iface() : iface_base(), reassembly(slot::kDefaultAssemblyBufferSize) {}
 
