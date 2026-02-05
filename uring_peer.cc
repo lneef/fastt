@@ -91,6 +91,7 @@ static uint64_t request_batch(uring::client_iface *st, uint64_t t, uint8_t bs) {
 static uint64_t process_completions(uring::client_iface *st) {
   unsigned head = 0;  
   struct io_uring_cqe *cqe;
+  st->uring_submit_and_wait(&cqe);;
   io_uring_for_each_cqe(&st->ctx->ring, head, cqe){
     st->handle_cqe(cqe,
                       [&](void *buf, size_t size, unsigned sidx) {
