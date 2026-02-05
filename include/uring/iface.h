@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace uring {
-static constexpr int kQueueDepth = 128;
+static constexpr int kQueueDepth = 256;
 static constexpr int kNumBuffer = kQueueDepth * 16;
 static constexpr int kBufShift = 12;
 static constexpr unsigned kCQEntries = kQueueDepth * 8;
