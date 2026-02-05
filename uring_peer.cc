@@ -109,7 +109,7 @@ static uint64_t process_completions(uring::client_iface *st) {
   return c;
 }
 
-static void parse(uring::server_iface *st, uint8_t *data, size_t size,
+static size_t parse(uring::server_iface *st, uint8_t *data, size_t size,
                   unsigned idx) {
   unsigned i = 0;
   for (; i < size;) {
@@ -120,6 +120,7 @@ static void parse(uring::server_iface *st, uint8_t *data, size_t size,
     handle_request(st, req, idx);
   }
   std::memmove(data, data + i, size - i);
+  return size - i;
 }
 
 static int client_fun(struct sockaddr_in *addr) {
@@ -182,7 +183,7 @@ static int server_fun(int port_arg) {
         auto &slt = iface.connection_state(sidx);
         std::memcpy(slt.reassemble_buffer.data() + slt.off, buf, size);
         slt.off += size;
-        parse(&iface, slt.reassemble_buffer.data(), slt.off, sidx);
+        slt.off = parse(&iface, slt.reassemble_buffer.data(), slt.off, sidx);
       });
       if (ret)
         break;
