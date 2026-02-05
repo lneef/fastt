@@ -36,6 +36,8 @@ template <typename T>
 int process_cqe_recv(T *st, struct io_uring_cqe *cqe, int fd, unsigned sidx,
                      auto &&f);
 
+template <typename T> int add_recv(T *iface, int fd, int idx);
+
 struct slot {
   static constexpr unsigned kDefaultAssemblyBufferSize = 256 * 1024;
   struct msg_buf {
@@ -327,6 +329,7 @@ struct server_iface : iface_base {
       free_slots.pop_back();
       clients[idx] = cqe->res;
       con_state[idx] = {};
+      add_recv(this, cqe->res, idx);
       return 0;
     }
     return cqe->res;
