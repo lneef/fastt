@@ -5,8 +5,8 @@
 #include "server.h"
 #include "slot.h"
 #include <arpa/inet.h>
-#include <bits/getopt_core.h>
 #include <cstdint>
+#include <format>
 #include <getopt.h>
 #include <iostream>
 #include <memory>
@@ -18,10 +18,9 @@
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
-#include <unordered_map>
-#include <utility>
 #include <signal.h>
-#include <format>
+#include <utility>
+#include <atomic>
 
 #include <tlx/container/btree_map.hpp>
 
@@ -39,7 +38,7 @@ static constexpr uint32_t kStoreSize = 1024 * 1024;
 static tlx::btree_map<int64_t, int64_t> store;
 
 static void prepare() {
-  uint32_t size = kStoreSize;  
+  uint32_t size = kStoreSize;
   for (auto [k, v] :
        std::ranges::views::iota(0u, size) | std::views::transform([&](int) {
          return std::make_pair(dist(rng), dist(rng));
@@ -84,11 +83,11 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
   return conf;
 }
 
-static volatile int terminate = 0;
+static std::atomic<int> terminate = 0;
 
 static void handler(int sig) {
-(void)sig;
-terminate = 1;
+  (void)sig;
+  terminate = 1;
 }
 
 int run(netconfig &conf) {
@@ -117,7 +116,9 @@ int run(netconfig &conf) {
   }
 
   auto stats = server.get_stats();
-  std::cout << std::format("total: {0}, no: {1}\n", stats.total_rx_polled, stats.no_rx) << std::endl;
+  std::cout << std::format("total: {0}, no: {1}\n", stats.total_rx_polled,
+                           stats.no_rx)
+            << std::endl;
   ifc->stop();
   return 0;
 }
@@ -126,7 +127,7 @@ int main(int argc, char *argv[]) {
   struct sigaction sa = {};
   sa.sa_handler = handler;
   sigaction(SIGINT, &sa, NULL);
-  sigaction(SIGTERM, &sa, NULL);  
+  sigaction(SIGTERM, &sa, NULL);
   int dpdk_argc = rte_eal_init(argc, argv);
   auto conf = parse_cmdline(argc - dpdk_argc, argv + dpdk_argc);
   run(conf);

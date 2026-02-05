@@ -27,7 +27,6 @@
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 alignas(RTE_CACHE_LINE_MIN_SIZE) std::atomic<double> lat = 0;
@@ -107,7 +106,6 @@ static int lcore_fn(void *arg) {
       for(; done.size() > 0; done.pop_front()){
           auto &slot = done.front();
           auto* resp = slot.rx_if.read();
-          auto *kv_comp = rte_pktmbuf_mtod(resp, kv_packet<kv_completion>*);
           allocator->deallocate(resp);
           kv.finish_transaction(&slot);
           ++c;

@@ -9,48 +9,7 @@
 #include <rte_lcore.h>
 #include <rte_timer.h>
 
-static constexpr uint16_t payload_offset = 0;
-enum class packet_t : uint8_t {
-  SINGLE = 0,
-  BATCH = 1,
-};
-
-enum class request_t : uint8_t {
-  GET = 0,
-  PUT = 1,
-  DELETE = 2,
-};
-
-enum class response_t : uint8_t {
-  SUCCESS,
-  FAILURE,
-};
-
-struct [[gnu::packed]] kv_packet_base {
-  packet_t pt;
-  uint64_t id;
-};
-
-struct [[gnu::packed]] kv_request {
-  request_t op;
-  int64_t key;
-  int64_t val;
-};
-
-struct [[gnu::packed]] kv_completion {
-  response_t reponse;
-  int64_t key;
-  int64_t val;
-};
-
-template <typename T> struct [[gnu::packed]] kv_packet : public kv_packet_base {
-  T payload;
-};
-
-template <typename T> struct [[gnu::packed]] kv_batch : public kv_packet_base {
-  uint32_t elems;
-  T elements[];
-};
+#include "kv_protocol.h"
 
 inline void create_put_request(message *msg, int64_t key, int64_t val) {
   auto *kv_req = static_cast<kv_packet<kv_request> *>(msg->data());
@@ -66,9 +25,6 @@ inline void create_get_request(message *msg, int64_t key, int64_t id) {
   kv_req->payload.op = request_t::GET;
   kv_req->payload.key = key;
 }
-
-struct transaction_proxy;
-class transaction_store;
 
 class kv_proxy {
 public:
