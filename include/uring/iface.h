@@ -77,7 +77,7 @@ struct buffer_pool {
   void *alloc() {
     if (next == nullptr)
       return nullptr;
-    auto *area = reinterpret_cast<header *>(&base[next]);
+    auto *area = next;
     next = area->next;
     return area;
   }
