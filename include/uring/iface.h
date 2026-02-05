@@ -261,7 +261,6 @@ struct client_iface : iface_base {
 
   int setup(int port_arg) {
     return setup_base(port_arg, fd);
-    ;
   }
 
   int handle_cqe(struct io_uring_cqe *cqe, auto &&f) {
@@ -325,8 +324,8 @@ struct server_iface : iface_base {
 
   int handle_accept(struct io_uring_cqe *cqe) {
     if (cqe->res > 0) {
-      auto idx = free_slots.back();
-      free_slots.pop_back();
+      auto idx = free_slots.front();
+      free_slots.pop_front();
       clients[idx] = cqe->res;
       con_state[idx] = {};
       add_recv(this, cqe->res, idx);
@@ -366,7 +365,7 @@ template <typename T> int add_recv(T *iface, int fd, int idx) {
 
   sqe->flags |= IOSQE_BUFFER_SELECT;
   sqe->buf_group = 0;
-  io_uring_sqe_set_data64(sqe, tag_recv(idx));
+  io_uring_sqe_set_data64(sqe, tag_recv(idx + 1));
   return 0;
 }
 
