@@ -20,10 +20,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <utility>
-#include <liburing.h>
 
-#include <tlx/container/btree_map.hpp>
 #include "uring/iface.h"
+#include <tlx/container/btree_map.hpp>
 
 static constexpr uint32_t kDefaultTXN = 10000;
 static constexpr uint16_t kDefaultSQBatch = 8;
@@ -45,11 +44,11 @@ static void prepare() {
   }
 }
 
-static int handle_request(uring::server_iface *sock,
-                           kv_packet<kv_request> *req, int idx) {
-  auto* sqe = sock->ctx->get_slot();  
-  if(!sqe)
-      return -1;
+static int handle_request(uring::server_iface *sock, kv_packet<kv_request> *req,
+                          int idx) {
+  auto *sqe = sock->ctx->get_slot();
+  if (!sqe)
+    return -1;
   auto key = req->payload.key;
   auto it = store.find(key);
   auto *completion =
@@ -72,38 +71,42 @@ static int handle_request(uring::server_iface *sock,
 
 static uint64_t request_batch(uring::client_iface *st, uint64_t t, uint8_t bs) {
   for (auto i = 0u; i < bs; ++i) {
-    auto* sqe = st->ctx->get_slot();
-    if(!sqe)
-        break;
+    auto *sqe = st->ctx->get_slot();
+    if (!sqe)
+      break;
     uint8_t *buf = static_cast<uint8_t *>(st->pool.alloc());
     if (!buf)
       break;
     create_kv_request(buf, t++, dist(rng));
     auto tx_idx = st->ctx->next_free_tx_buffer(buf);
-    st->prepare_send(buf, sizeof(kv_packet<kv_request>), tx_idx,
-                     st->fd, sqe);
+    st->prepare_send(buf, sizeof(kv_packet<kv_request>), tx_idx, st->fd, sqe);
   }
   return t;
 }
 
 static uint64_t process_completions(uring::client_iface *st) {
-  unsigned head = 0;  
+  unsigned head = 0;
   unsigned c = 0;
+  int ret;
   struct io_uring_cqe *cqe;
-  st->uring_submit_and_wait(&cqe);;
-  io_uring_for_each_cqe(&st->ctx->ring, head, cqe){
-    st->handle_cqe(cqe,
-                      [&](void *buf, size_t size, unsigned sidx) {
-                        (void)size, (void)sidx, (void)buf;
-                      });
-    if(cqe->user_data & 1)
-        ++c;
+  ret = st->uring_submit_and_wait(&cqe);
+  if (ret < 0) {
+    fprintf(stderr, "submission failed %s\n", strerror(-ret));
+    return ret;
+  }
+  io_uring_for_each_cqe(&st->ctx->ring, head, cqe) {
+    st->handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {
+      (void)size, (void)sidx, (void)buf;
+    });
+    if (cqe->user_data & 1)
+      ++c;
   }
   io_uring_cq_advance(&st->ctx->ring, head);
   return c;
 }
 
-static void parse(uring::server_iface *st, uint8_t *data, size_t size, unsigned idx) {
+static void parse(uring::server_iface *st, uint8_t *data, size_t size,
+                  unsigned idx) {
   unsigned i = 0;
   for (; i < size;) {
     auto *req = reinterpret_cast<kv_packet<kv_request> *>(data + i);
@@ -115,70 +118,72 @@ static void parse(uring::server_iface *st, uint8_t *data, size_t size, unsigned 
   std::memmove(data, data + i, size - i);
 }
 
-static int client_fun(struct sockaddr_in* addr){
-    uring::client_iface iface{};
-    struct io_uring_cqe *cqe;
-    iface.ctx->setup();
-    iface.setup(0);
-    uint64_t t = 0, c = 0;
-    iface.uring_connect(addr);
-    iface.uring_submit_and_wait();
-    io_uring_peek_cqe(&iface.ctx->ring, &cqe);
-    io_uring_cq_advance(&iface.ctx->ring, 1);
-    if(cqe->res < 0){
-        fprintf(stderr, "Failed to connect: %d\n", cqe->res);
-        return cqe->res;
-    }
-    while (kDefaultTXN > t) {
-         c += process_completions(&iface);
-         t = request_batch(&iface, t, kDefaultSQBatch);
-    }
+static int client_fun(struct sockaddr_in *addr) {
+  uring::client_iface iface{};
+  struct io_uring_cqe *cqe;
+  iface.ctx->setup();
+  iface.setup(0);
+  uint64_t t = 0, c = 0;
+  iface.uring_connect(addr);
+  iface.uring_submit_and_wait();
+  io_uring_peek_cqe(&iface.ctx->ring, &cqe);
+  io_uring_cq_advance(&iface.ctx->ring, 1);
+  if (cqe->res < 0) {
+    fprintf(stderr, "Failed to connect: %d\n", cqe->res);
+    return cqe->res;
+  }
+  while (kDefaultTXN > t) {
+    c += process_completions(&iface);
+    t = request_batch(&iface, t, kDefaultSQBatch);
+  }
 
-    while (c < kDefaultTXN)
-        c += process_completions(&iface);
-    return 0;
+  while (c < kDefaultTXN)
+    c += process_completions(&iface);
+  return 0;
 }
 
+static int server_fun(int port_arg) {
+  int ret;
+  prepare();
+  struct io_uring_cqe *cqe;
+  uring::server_iface iface{};
+  iface.ctx->setup();
+  iface.setup(port_arg);
+  unsigned head = 0;
+  ret = iface.uring_prepare_listen();
+  if (ret) {
+    fprintf(stderr, "Set listen failed: %s\n", strerror(-ret));
+    return ret;
+  }
 
-static int server_fun(int port_arg){
-    int ret;
-    prepare();
-    struct io_uring_cqe *cqe;
-    uring::server_iface iface{};
-    iface.ctx->setup();
-    iface.setup(port_arg);
-    unsigned head = 0;
-    ret = iface.uring_prepare_listen();
-    if(ret){
-        fprintf(stderr, "Set listen failed: %s\n", strerror(-ret));
-        return ret;
-    }
+  ret = iface.uring_prepare_accept();
+  if (ret) {
+    fprintf(stderr, "Prepare accept failed: %s\n", strerror(-ret));
+    return ret;
+  }
 
-    ret = iface.uring_prepare_accept();
-    if(ret){
-        fprintf(stderr, "Prepare accept failed: %s\n", strerror(-ret));
-        return ret;
+  while (true) {
+    ret = iface.uring_submit_and_wait(&cqe);
+    if (ret == -ETIME)
+      continue;
+    if (ret < 0) {
+      fprintf(stderr, "submission failed %s\n", strerror(-ret));
+      return ret;
     }
-
-    while (true) {
-      ret = iface.uring_submit_and_wait(&cqe);
-      if(ret == -ETIME)
-          continue;
-      head = 0;
-      io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
-        ret = iface.handle_cqe(
-            cqe, [&](void *buf, size_t size, unsigned sidx) {
-              auto &slt = iface.connection_state(sidx);
-              std::memcpy(slt.reassemble_buffer.data() + slt.off, buf, size);
-              slt.off += size;
-              parse(&iface, slt.reassemble_buffer.data(), slt.off, sidx);
-            }); 
-        if(ret)
-            break;
-      }
-      io_uring_cq_advance(&iface.ctx->ring, head);
+    head = 0;
+    io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
+      ret = iface.handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {
+        auto &slt = iface.connection_state(sidx);
+        std::memcpy(slt.reassemble_buffer.data() + slt.off, buf, size);
+        slt.off += size;
+        parse(&iface, slt.reassemble_buffer.data(), slt.off, sidx);
+      });
+      if (ret)
+        break;
     }
-    return 0;
+    io_uring_cq_advance(&iface.ctx->ring, head);
+  }
+  return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -208,9 +213,9 @@ int main(int argc, char *argv[]) {
   }
   addr.sin_port = htons(port_arg);
   addr.sin_family = AF_INET;
-  if(is_client)
-      ret = client_fun(&addr);
+  if (is_client)
+    ret = client_fun(&addr);
   else
-      ret = server_fun(port_arg);
+    ret = server_fun(port_arg);
   return ret;
 }
