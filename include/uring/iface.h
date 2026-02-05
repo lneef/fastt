@@ -326,7 +326,7 @@ struct server_iface : iface_base {
     if (cqe->res > 0) {
       auto idx = free_slots.front();
       free_slots.pop_front();
-      clients[idx] = cqe->res;
+      clients[idx + 1] = cqe->res;
       con_state[idx] = {};
       add_recv(this, cqe->res, idx);
       return 0;
