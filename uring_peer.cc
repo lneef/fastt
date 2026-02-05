@@ -87,17 +87,20 @@ static uint64_t request_batch(uring::client_iface *st, uint64_t t, uint8_t bs) {
 }
 
 template <typename T>
-static size_t parse(uint8_t *data, size_t size, unsigned idx, auto &&handler) {
+static std::pair<size_t, int> parse(uint8_t *data, size_t size, unsigned idx, auto &&handler) {
+  int ret = 0;  
   unsigned i = 0;
   for (; i < size;) {
     auto *req = reinterpret_cast<T *>(data + i);
     if (size - i < sizeof(T))
       break;
+    ret = handler(req, idx);
+    if(ret)
+        break;
     i += sizeof(T);
-    handler(req, idx);
   }
   std::memmove(data, data + i, size - i);
-  return size - i;
+  return {size - i, ret};
 }
 
 static uint64_t process_completions(uring::client_iface *st) {
@@ -117,12 +120,14 @@ static uint64_t process_completions(uring::client_iface *st) {
     st->handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {
       std::memcpy(st->reassembly.data() + st->off, buf, size);
       st->off += size;
-      st->off = parse<kv_packet<kv_completion>>(
+      auto [off, ret] = parse<kv_packet<kv_completion>>(
           st->reassembly.data(), st->off, sidx,
           [&](kv_packet<kv_completion> *, unsigned) {
             ++c;
             return 0;
           });
+      st->off = off;
+      return ret;
     });
     ++cnt;
   }
@@ -192,11 +197,13 @@ static int server_fun(int port_arg) {
         auto &slt = iface.connection_state(sidx);
         std::memcpy(slt.reassemble_buffer.data() + slt.off, buf, size);
         slt.off += size;
-        slt.off = parse<kv_packet<kv_request>>(
+        auto[off, ret] = parse<kv_packet<kv_request>>(
             slt.reassemble_buffer.data(), slt.off, sidx,
             [&](kv_packet<kv_request> *req, unsigned sidx) {
               return handle_request(&iface, req, sidx);
             });
+        slt.off = off;
+        return ret;
       });
       if (ret)
         break;
