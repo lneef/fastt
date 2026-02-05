@@ -25,8 +25,6 @@
 #include <tlx/container/btree_map.hpp>
 #include "uring/iface.h"
 
-
-
 static constexpr uint32_t kDefaultTXN = 10000;
 static constexpr uint16_t kDefaultSQBatch = 8;
 
@@ -81,8 +79,8 @@ static uint64_t request_batch(uring::client_iface *st, uint64_t t, uint8_t bs) {
     if (!buf)
       break;
     create_kv_request(buf, t++, dist(rng));
-    st->ctx->next_free_tx_buffer(buf);
-    st->prepare_send(buf, sizeof(kv_packet<kv_request>), 0,
+    auto tx_idx = st->ctx->next_free_tx_buffer(buf);
+    st->prepare_send(buf, sizeof(kv_packet<kv_request>), tx_idx,
                      st->fd, sqe);
   }
   return t;
