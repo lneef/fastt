@@ -281,7 +281,7 @@ struct client_iface : iface_base {
       break;
     }
     case 1: {          
-      return process_cqe_recv(this, cqe, fd, 0, f);
+      return process_cqe_recv(this, cqe, fd, tag_recv(0), f);
       break;
     }
     }
