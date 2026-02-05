@@ -196,7 +196,7 @@ int main(int argc, char *argv[]) {
       exit(-1);
     }
   }
-  addr.sin_port = port_arg;
+  addr.sin_port = htons(port_arg);
   addr.sin_family = AF_INET;
   if(is_client)
       ret = client_fun(&addr);
