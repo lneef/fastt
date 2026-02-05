@@ -87,6 +87,7 @@ static uint64_t request_batch(uring::client_iface *st, uint64_t t, uint8_t bs) {
 static uint64_t process_completions(uring::client_iface *st) {
   unsigned head = 0;
   unsigned c = 0;
+  unsigned cnt = 0;
   int ret;
   struct io_uring_cqe *cqe;
   ret = st->uring_submit_and_wait(&cqe);
@@ -102,8 +103,9 @@ static uint64_t process_completions(uring::client_iface *st) {
     });
     if (cqe->user_data & 1)
       ++c;
+    ++cnt;
   }
-  io_uring_cq_advance(&st->ctx->ring, head);
+  io_uring_cq_advance(&st->ctx->ring, cnt);
   return c;
 }
 
@@ -172,9 +174,9 @@ static int server_fun(int port_arg) {
       fprintf(stderr, "submission failed %s\n", strerror(-ret));
       return ret;
     }
-    head = 0;
+    unsigned cnt = 0;
     io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
-      ret = iface.handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {
+      ret = iface.handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {     
         auto &slt = iface.connection_state(sidx);
         std::memcpy(slt.reassemble_buffer.data() + slt.off, buf, size);
         slt.off += size;
@@ -182,8 +184,9 @@ static int server_fun(int port_arg) {
       });
       if (ret)
         break;
+      ++cnt;
     }
-    io_uring_cq_advance(&iface.ctx->ring, head);
+    io_uring_cq_advance(&iface.ctx->ring, cnt);
   }
   return 0;
 }
