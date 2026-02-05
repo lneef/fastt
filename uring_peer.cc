@@ -70,7 +70,7 @@ static int handle_request(uring::server_iface *sock, kv_packet<kv_request> *req,
 }
 
 static uint64_t request_batch(uring::client_iface *st, uint64_t t, uint8_t bs) {
-  for (auto i = 0u; i < bs; ++i) {
+  for (auto i = 0u; i < std::min<unsigned>(bs, kDefaultTXN - t); ++i) {
     auto *sqe = st->ctx->get_slot();
     if (!sqe)
       break;
@@ -84,16 +84,15 @@ static uint64_t request_batch(uring::client_iface *st, uint64_t t, uint8_t bs) {
   return t;
 }
 
-template <typename T, typename I>
-static size_t parse(I *st, uint8_t *data, size_t size, unsigned idx,
-                    auto &&handler) {
+template <typename T>
+static size_t parse(uint8_t *data, size_t size, unsigned idx, auto &&handler) {
   unsigned i = 0;
   for (; i < size;) {
     auto *req = reinterpret_cast<T *>(data + i);
     if (size - i < sizeof(*req))
       break;
     i += sizeof(*req);
-    handler(st, req, idx);
+    handler(req, idx);
   }
   std::memmove(data, data + i, size - i);
   return size - i;
@@ -116,11 +115,9 @@ static uint64_t process_completions(uring::client_iface *st) {
     st->handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {
       std::memcpy(st->reassembly.data() + st->off, buf, size);
       st->off += size;
-      st->off = parse<kv_packet<kv_completion>, uring::client_iface>(
-          st, st->reassembly.data(), st->off, sidx,
-          [&](uring::client_iface *, kv_packet<kv_completion> *, unsigned) {
-            ++c;
-          });
+      st->off = parse<kv_packet<kv_completion>>(
+          st->reassembly.data(), st->off, sidx,
+          [&](kv_packet<kv_completion> *, unsigned) { ++c; });
     });
     ++cnt;
   }
@@ -188,9 +185,11 @@ static int server_fun(int port_arg) {
         auto &slt = iface.connection_state(sidx);
         std::memcpy(slt.reassemble_buffer.data() + slt.off, buf, size);
         slt.off += size;
-        slt.off = parse<kv_packet<kv_request>, uring::server_iface>(
-            &iface, slt.reassemble_buffer.data(), slt.off, sidx,
-            handle_request);
+        slt.off = parse<kv_packet<kv_request>>(
+            slt.reassemble_buffer.data(), slt.off, sidx,
+            [&](kv_packet<kv_request> *req, unsigned sidx) {
+              handle_request(&iface, req, sidx);
+            });
       });
       if (ret)
         break;
