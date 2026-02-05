@@ -137,10 +137,20 @@ static int server_fun(int port_arg){
     iface.ctx->setup();
     iface.setup(port_arg);
     unsigned head = 0;
-    iface.uring_prepare_listen();
-    iface.uring_prepare_accept();
+    ret = iface.uring_prepare_listen();
+    if(ret){
+        fprintf(stderr, "Set listen failed: %s\n", strerror(-ret));
+        return ret;
+    }
+
+    ret = iface.uring_prepare_accept();
+    if(ret){
+        fprintf(stderr, "Prepare accept failed: %s\n", strerror(-ret));
+        return ret;
+    }
+
     while (true) {
-      iface.uring_submit_and_wait(&cqe);
+      ret = iface.uring_submit_and_wait(&cqe);
       head = 0;
       io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
         ret = iface.handle_cqe(
