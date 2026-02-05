@@ -415,7 +415,9 @@ int process_cqe_recv(T *st, struct io_uring_cqe *cqe, int fd, unsigned sidx,
   }
   idx = cqe->flags >> 16; // 16 bits is bid
   auto *buf = st->ctx->get_buffer(idx);
-  f(buf, cqe->res, sidx);
+  ret = f(buf, cqe->res, sidx);
+  if(ret)
+      return -1;
   recycle_buffer(st->ctx.get(), idx);
   return 0;
 }

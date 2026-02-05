@@ -48,11 +48,13 @@ static int handle_request(uring::server_iface *sock, kv_packet<kv_request> *req,
                           int idx) {
   auto *sqe = sock->ctx->get_slot();
   if (!sqe)
-    return -1;
+    return -EAGAIN;
   auto key = req->payload.key;
   auto it = store.find(key);
   auto *completion =
       static_cast<kv_packet<kv_completion> *>(sock->pool.alloc());
+  if (!completion)
+    return -EAGAIN;
   completion->id = req->id;
   completion->pt = req->pt;
   completion->payload.key = req->payload.key;
@@ -89,9 +91,9 @@ static size_t parse(uint8_t *data, size_t size, unsigned idx, auto &&handler) {
   unsigned i = 0;
   for (; i < size;) {
     auto *req = reinterpret_cast<T *>(data + i);
-    if (size - i < sizeof(*req))
+    if (size - i < sizeof(T))
       break;
-    i += sizeof(*req);
+    i += sizeof(T);
     handler(req, idx);
   }
   std::memmove(data, data + i, size - i);
@@ -117,7 +119,10 @@ static uint64_t process_completions(uring::client_iface *st) {
       st->off += size;
       st->off = parse<kv_packet<kv_completion>>(
           st->reassembly.data(), st->off, sidx,
-          [&](kv_packet<kv_completion> *, unsigned) { ++c; });
+          [&](kv_packet<kv_completion> *, unsigned) {
+            ++c;
+            return 0;
+          });
     });
     ++cnt;
   }
@@ -146,8 +151,10 @@ static int client_fun(struct sockaddr_in *addr) {
     t = request_batch(&iface, t, kDefaultSQBatch);
   }
 
-  while (c < kDefaultTXN)
+  while (c < kDefaultTXN) {
     c += process_completions(&iface);
+    printf("%lu\n", c);
+  }
   return 0;
 }
 
@@ -188,7 +195,7 @@ static int server_fun(int port_arg) {
         slt.off = parse<kv_packet<kv_request>>(
             slt.reassemble_buffer.data(), slt.off, sidx,
             [&](kv_packet<kv_request> *req, unsigned sidx) {
-              handle_request(&iface, req, sidx);
+              return handle_request(&iface, req, sidx);
             });
       });
       if (ret)
