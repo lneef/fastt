@@ -109,7 +109,6 @@ static int client_fun(struct sockaddr_in* addr){
     uring::client_iface iface{};
     struct io_uring_cqe *cqe;
     iface.ctx->setup();
-    iface.ctx->setup_buffer_pool();
     iface.setup(0);
     uint64_t t = 0, c = 0;
     iface.uring_connect(addr);
@@ -136,7 +135,6 @@ static int server_fun(int port_arg){
     struct io_uring_cqe *cqe;
     uring::server_iface iface{};
     iface.ctx->setup();
-    iface.ctx->setup_buffer_pool();
     iface.setup(port_arg);
     unsigned head = 0;
     iface.uring_prepare_listen();

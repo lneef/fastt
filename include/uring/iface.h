@@ -60,7 +60,7 @@ struct buffer_pool {
   size_t next;
   buffer_pool(size_t n) {
     auto psize = sysconf(_SC_PAGE_SIZE);
-    size = (elemsize * n + psize + sizeof(header) - 1) & (psize - 1);
+    size = (elemsize * n + psize + sizeof(header) - 1) & ~(psize - 1);
     base = static_cast<uint8_t *>(mmap(nullptr, size,
                                        PROT_READ | PROT_WRITE,
                                        MAP_PRIVATE | MAP_ANON, -1, 0));
