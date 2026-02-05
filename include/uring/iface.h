@@ -267,6 +267,10 @@ struct client_iface : iface_base {
           fprintf(stderr, "Setting up socket failed %s\n", strerror(-ret));
           return ret;
       }
+      return 0;
+  }
+
+  int prepare_recv(){
       return add_recv(this, fd, tag_recv(0));
   }
 

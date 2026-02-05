@@ -136,6 +136,8 @@ static int client_fun(struct sockaddr_in *addr) {
     fprintf(stderr, "Failed to connect: %d\n", cqe->res);
     return cqe->res;
   }
+
+  iface.prepare_recv();
   while (kDefaultTXN > t) {
     c += process_completions(&iface);
     t = request_batch(&iface, t, kDefaultSQBatch);
