@@ -115,6 +115,7 @@ static int client_fun(struct sockaddr_in* addr){
     iface.uring_connect(addr);
     iface.uring_submit_and_wait();
     io_uring_peek_cqe(&iface.ctx->ring, &cqe);
+    io_uring_cq_advance(&iface.ctx->ring, 1);
     if(cqe->res < 0){
         fprintf(stderr, "Failed to connect: %d\n", cqe->res);
         return cqe->res;
