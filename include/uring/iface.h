@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -12,7 +13,6 @@
 #include <netinet/in.h>
 #include <sys/mman.h>
 #include <vector>
-#include <cassert>
 
 namespace uring {
 static constexpr int kQueueDepth = 128;
@@ -54,38 +54,35 @@ struct slot {
 template <size_t elemsize>
   requires(elemsize >= 64)
 struct buffer_pool {
-  struct header {
-    size_t next;
+  struct [[gnu::packed]] header {
+    header *next;
   };
   uint8_t *base;
   size_t size;
-  size_t next;
+  header *next = nullptr;
   buffer_pool(size_t n) {
     auto psize = sysconf(_SC_PAGE_SIZE);
-    size = (elemsize * n + psize + sizeof(header) - 1) & ~(psize - 1);
-    base = static_cast<uint8_t *>(mmap(nullptr, size,
-                                       PROT_READ | PROT_WRITE,
+    size = (elemsize * n + psize - 1) & ~(psize - 1);
+    base = static_cast<uint8_t *>(mmap(nullptr, size, PROT_READ | PROT_WRITE,
                                        MAP_PRIVATE | MAP_ANON, -1, 0));
     for (auto i = 0u; i < n; ++i) {
-      new (base + i * elemsize) header{(i + 1) * elemsize};
+      auto *next_ptr =
+          (i + 1 < n) ? reinterpret_cast<header *>(base + (i + 1) * elemsize)
+                      : nullptr;
+      new (base + i * elemsize) header{next_ptr};
     }
-    next = 0;
+    next = reinterpret_cast<header *>(base);
   }
 
   void *alloc() {
-    if (next >= size)
+    if (next == nullptr)
       return nullptr;
     auto *area = reinterpret_cast<header *>(&base[next]);
     next = area->next;
     return area;
   }
 
-  void free(void *data) {
-    auto *area = reinterpret_cast<uint8_t *>(data);
-    size_t off = area - base;
-    new (area) header{next};
-    next = off;
-  }
+  void free(void *data) { next = new (data) header{next}; }
 };
 
 struct uring_context {
@@ -108,7 +105,7 @@ struct uring_context {
     *sqe = io_uring_get_sqe(&ring);
 
     if (!*sqe) {
-      io_uring_submit(&ring);  
+      io_uring_submit(&ring);
       *sqe = io_uring_get_sqe(&ring);
     }
     if (!*sqe) {
@@ -146,8 +143,11 @@ struct uring_context {
   int setup_buffer_pool() {
     int ret, i;
     void *mapped;
-    struct io_uring_buf_reg reg = {
-        .ring_addr = 0, .ring_entries = kNumBuffer, .bgid = 0, . flags = 0, .resv = {0} };
+    struct io_uring_buf_reg reg = {.ring_addr = 0,
+                                   .ring_entries = kNumBuffer,
+                                   .bgid = 0,
+                                   .flags = 0,
+                                   .resv = {0}};
 
     buf_ring_size = (sizeof(struct io_uring_buf) + buffer_size()) * kNumBuffer;
     mapped = mmap(NULL, buf_ring_size, PROT_READ | PROT_WRITE,
@@ -162,7 +162,9 @@ struct uring_context {
 
     reg = (struct io_uring_buf_reg){.ring_addr = (unsigned long)buf_ring,
                                     .ring_entries = kNumBuffer,
-                                    .bgid = 0, .flags = 0, .resv = {0} };
+                                    .bgid = 0,
+                                    .flags = 0,
+                                    .resv = {0}};
     buffer_base =
         (unsigned char *)buf_ring + sizeof(struct io_uring_buf) * kNumBuffer;
 
@@ -181,9 +183,7 @@ struct uring_context {
     return 0;
   }
 
-  struct io_uring_sqe* get_slot(){
-      return io_uring_get_sqe(&ring);
-  }
+  struct io_uring_sqe *get_slot() { return io_uring_get_sqe(&ring); }
 
   ~uring_context() {
     munmap(buf_ring, buf_ring_size);
@@ -201,13 +201,15 @@ struct iface_base {
 
   iface_base() : ctx(std::make_unique<uring_context>()), pool(512) {}
 
-  void prepare_send(void *buf, size_t len, unsigned idx, int peer_fd, struct io_uring_sqe* sqe) {
+  void prepare_send(void *buf, size_t len, unsigned idx, int peer_fd,
+                    struct io_uring_sqe *sqe) {
     assert(sqe && "No free sqe");
     io_uring_prep_send(sqe, peer_fd, buf, len, 0);
     io_uring_sqe_set_data64(sqe, tag_send(idx));
   }
 
-  void prepare_send_zc(void *buf, size_t len, unsigned idx, int peer_fd, struct io_uring_sqe *sqe) {
+  void prepare_send_zc(void *buf, size_t len, unsigned idx, int peer_fd,
+                       struct io_uring_sqe *sqe) {
     assert(sqe && "No free sqe");
     io_uring_prep_send_zc(sqe, peer_fd, buf, len, 0, 0);
     io_uring_sqe_set_data64(sqe, tag_send(idx));
@@ -219,8 +221,8 @@ struct iface_base {
     return io_uring_submit_and_wait_timeout(&ctx->ring, cqe, 1, &ts, nullptr);
   }
 
-  int uring_submit_and_wait(){
-      return io_uring_submit_and_wait(&ctx->ring, 1);
+  int uring_submit_and_wait() {
+    return io_uring_submit_and_wait(&ctx->ring, 1);
   }
 
   int uring_submit() { return io_uring_submit(&ctx->ring); }
@@ -259,9 +261,7 @@ struct client_iface : iface_base {
     return 0;
   }
 
-  int setup(int port_arg) {
-    return setup_base(port_arg, fd);
-  }
+  int setup(int port_arg) { return setup_base(port_arg, fd); }
 
   int handle_cqe(struct io_uring_cqe *cqe, auto &&f) {
     switch (cqe->user_data & 1) {
@@ -356,8 +356,8 @@ struct server_iface : iface_base {
 template <typename T> int add_recv(T *iface, int fd, int idx) {
   struct io_uring_sqe *sqe;
 
-  if (iface->ctx->get_sqe(&sqe)){
-    fprintf(stderr, "No free sqe\n");  
+  if (iface->ctx->get_sqe(&sqe)) {
+    fprintf(stderr, "No free sqe\n");
     return -1;
   }
 
