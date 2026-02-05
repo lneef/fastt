@@ -348,6 +348,7 @@ struct server_iface : iface_base {
       return process_cqe_recv(this, cqe, clients[idx], idx, f);
     }
     }
+    return 0;
   }
 };
 
