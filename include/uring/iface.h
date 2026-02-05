@@ -21,7 +21,6 @@ static constexpr int kBufShift = 12;
 static constexpr unsigned kCQEntries = kQueueDepth * 8;
 static constexpr int kMaxClientFd = 128;
 static constexpr int kDefaultBufferSize = 256;
-static constexpr uint64_t kAcceptTag = 2 * (kMaxClientFd + 1) + 1;
 
 static constexpr uint64_t tag_send(unsigned idx) {
   return static_cast<uint64_t>(idx) * 2;
@@ -318,9 +317,8 @@ struct server_iface : iface_base {
 
   int uring_prepare_accept() {
     auto sqe = io_uring_get_sqe(&ctx->ring);
-    add_recv(this, clients.front(), 0);
     io_uring_prep_multishot_accept(sqe, clients.front(), nullptr, nullptr, 0);
-    io_uring_sqe_set_data64(sqe, kAcceptTag);
+    io_uring_sqe_set_data64(sqe, tag_recv(0));
     return 0;
   }
 
@@ -337,15 +335,16 @@ struct server_iface : iface_base {
   }
 
   int handle_cqe(struct io_uring_cqe *cqe, auto &&f) {
-    if (cqe->user_data == kAcceptTag)
-        return handle_accept(cqe);  
     switch (cqe->user_data & 1) {
     case 0: {
       return process_cqe_send(cqe);
     }
     case 1: {
       auto idx = untag(cqe->user_data);
-      return process_cqe_recv(this, cqe, clients[idx], idx, f);
+      if(idx == 0)
+          return handle_accept(cqe);
+      else
+        return process_cqe_recv(this, cqe, clients[idx], idx, f);
     }
     }
     return 0;
