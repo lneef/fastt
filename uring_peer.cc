@@ -90,6 +90,7 @@ static uint64_t request_batch(uring::client_iface *st, uint64_t t, uint8_t bs) {
 
 static uint64_t process_completions(uring::client_iface *st) {
   unsigned head = 0;  
+  unsigned c = 0;
   struct io_uring_cqe *cqe;
   st->uring_submit_and_wait(&cqe);;
   io_uring_for_each_cqe(&st->ctx->ring, head, cqe){
@@ -97,9 +98,11 @@ static uint64_t process_completions(uring::client_iface *st) {
                       [&](void *buf, size_t size, unsigned sidx) {
                         (void)size, (void)sidx, (void)buf;
                       });
+    if(cqe->user_data & 1)
+        ++c;
   }
   io_uring_cq_advance(&st->ctx->ring, head);
-  return head;
+  return c;
 }
 
 static void parse(uring::server_iface *st, uint8_t *data, size_t size, unsigned idx) {
