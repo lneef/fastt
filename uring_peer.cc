@@ -90,6 +90,8 @@ static uint64_t process_completions(uring::client_iface *st) {
   int ret;
   struct io_uring_cqe *cqe;
   ret = st->uring_submit_and_wait(&cqe);
+  if(ret == -ETIME)
+      return 0;
   if (ret < 0) {
     fprintf(stderr, "submission failed %s\n", strerror(-ret));
     return ret;
