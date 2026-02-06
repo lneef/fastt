@@ -154,7 +154,6 @@ struct iface_base {
       return fd;
     }
 
-    ctx->register_napi();
     return 0;
   }
 

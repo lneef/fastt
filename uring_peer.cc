@@ -4,6 +4,7 @@
 #include <bit>
 #include <bits/getopt_core.h>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -216,6 +217,7 @@ static int client_fun(struct sockaddr_in *addr) {
   }
   slot_storage slt_strge(kNumSlots);
   iface.prepare_recv();
+  auto start = std::chrono::steady_clock::now();
   while (kDefaultTXN > t) {
     c += process_completions(&iface, slt_strge);
     t = request_batch(&iface, slt_strge, t, kDefaultSQBatch);
@@ -224,6 +226,8 @@ static int client_fun(struct sockaddr_in *addr) {
   while (c < kDefaultTXN) {
     c += process_completions(&iface, slt_strge);
   }
+  auto end = std::chrono::steady_clock::now();
+  printf("%f\n", std::chrono::duration<double, std::micro>(end - start).count());
   return 0;
 }
 

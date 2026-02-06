@@ -14,7 +14,6 @@ static constexpr int kQueueDepth = 256;
 static constexpr int kNumBuffer = kQueueDepth * 4;
 static constexpr int kBufShift = 8;
 static constexpr unsigned kCQEntries = kQueueDepth * 4;
-static constexpr unsigned kNAPIPollInterval = 1000;
 
 struct qpair {
   io_uring ring{};
@@ -22,7 +21,6 @@ struct qpair {
   unsigned char *buffer_base = nullptr;
   int buf_shift = kBufShift;
   size_t buf_ring_size = 0;
-  io_uring_napi napi{};
 
   static std::unique_ptr<qpair> create() {  
     auto qp = std::make_unique<qpair>();  
@@ -61,14 +59,6 @@ struct qpair {
       io_uring_queue_exit(&ring);
   }
 
-  int register_napi(){
-      return io_uring_register_napi(&ring, &napi);
-  }
-
-  int deregister_napi(){
-      return io_uring_unregister_napi(&ring, &napi);
-  }
-
   qpair() = default;
 
 private:
@@ -84,8 +74,6 @@ private:
       fprintf(stderr, "Queue init failed: %s\n", strerror(-ret));
       return ret;
     }
-    napi.prefer_busy_poll = true;
-    napi.busy_poll_to = kNAPIPollInterval;
     return 0;
   }
 
