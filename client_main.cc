@@ -90,8 +90,7 @@ static constexpr uint16_t dataSize = sizeof(kv_packet<kv_request>);
 static int lcore_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<std::mt19937::result_type> dist(INT64_MIN,
-                                                                INT64_MAX);
+  std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto *con = adapter->connections[me];

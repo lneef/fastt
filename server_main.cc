@@ -38,8 +38,7 @@ struct lcore_server_adapter {
 
 static std::random_device dev;
 static std::mt19937 rng(dev());
-static std::uniform_int_distribution<std::mt19937::result_type> dist(INT64_MIN,
-                                                                     INT64_MAX);
+static std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
 static constexpr uint32_t kStoreSize = 1024 * 1024;
 static tlx::btree_map<int64_t, int64_t> store;
 

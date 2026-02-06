@@ -32,8 +32,7 @@ static constexpr uint16_t kDefaultSQBatch = 8;
 
 static std::random_device dev;
 static std::mt19937 rng(dev());
-static std::uniform_int_distribution<std::mt19937::result_type> dist(INT64_MAX,
-                                                                     INT64_MIN);
+static std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
 static constexpr uint32_t kStoreSize = 1024 * 1024;
 static tlx::btree_map<int64_t, int64_t> store;
 
@@ -89,7 +88,8 @@ static uint64_t request_batch(uring::client_iface *st, slot_storage& slt_strge, 
     }
     auto slt_id = slt_strge.free_slots.front();
     slt_strge.free_slots.pop_front();
-    create_kv_request(buf, slt_id, dist(rng));
+    int64_t key = dist(rng);
+    create_kv_request(buf, slt_id, key);
     ++t;
     st->prepare_send(buf, sizeof(kv_packet<kv_request>), std::bit_cast<uint64_t>(buf),  st->fd, sqe);
   }

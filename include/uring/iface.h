@@ -193,14 +193,14 @@ struct client_iface : iface_base {
     return 0;
   }
 
-  int prepare_recv() { return add_recv(this, fd, tag_recv(0)); }
+  int prepare_recv() { return add_recv(this, fd, 0); }
 
   int handle_cqe(struct io_uring_cqe *cqe, auto &&f) {
     switch (cqe->user_data & 1) {
     case 0:
       return process_cqe_send(cqe);
     case 1:
-      return process_cqe_recv(this, cqe, fd, tag_recv(0), f);
+      return process_cqe_recv(this, cqe, fd, 0, f);
     }
     return 0;
   }
@@ -272,6 +272,7 @@ struct server_iface : iface_base {
       auto idx = free_slots.front();
       free_slots.pop_front();
       clients[idx] = cqe->res;
+      printf("%u\n", idx);
       con_state[idx] = {};
       add_recv(this, cqe->res, idx);
       disable_nagle(cqe->res);
@@ -306,6 +307,7 @@ template <typename T> int add_recv(T *iface, int fd, int idx) {
   struct io_uring_sqe *sqe;
   sqe = iface->ctx->get_sqe();
   if (!sqe) {
+    assert(0);  
     return -1;
   }
 
