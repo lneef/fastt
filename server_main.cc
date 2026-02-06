@@ -5,6 +5,7 @@
 #include "server.h"
 #include "slot.h"
 #include <arpa/inet.h>
+#include <atomic>
 #include <cstdint>
 #include <format>
 #include <getopt.h>
@@ -14,13 +15,13 @@
 #include <random>
 #include <ranges>
 #include <rte_ether.h>
+#include <rte_lcore.h>
 #include <rte_log.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
 #include <signal.h>
 #include <utility>
-#include <atomic>
 
 #include <tlx/container/btree_map.hpp>
 
@@ -28,6 +29,11 @@ struct netconfig {
   rte_ether_addr dmac;
   uint32_t sip, dip;
   uint16_t sport, dport;
+};
+
+struct lcore_server_adapter {
+  std::unique_ptr<server_iface> iface;
+  std::shared_ptr<message_allocator> allocator;
 };
 
 static std::random_device dev;
@@ -90,35 +96,47 @@ static void handler(int sig) {
   terminate = 1;
 }
 
-int run(netconfig &conf) {
-  prepare();
-  if (fastt::init())
-    return -1;
-  auto ifc = iface::configure_port(0, 1, 1);
-  if (!ifc)
-    return -1;
-  auto [port, txq, rxq, pool] = ifc->get_slice(0);
-  std::shared_ptr<message_allocator> allocator =
-      std::make_shared<message_allocator>("pool", 8095);
-  server_iface server(port, txq, rxq, con_config{conf.sip, conf.sport},
-                      allocator);
+int lcore_server_fun(void *arg) {
+  auto myid = rte_lcore_index(rte_lcore_id());
+  auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
+  auto *server = adapters[myid].iface.get();
+  auto &allocator = *adapters[myid].allocator;
+
   while (!terminate) {
-    server.poll([&](transaction_slot &slot) {
+    server->poll([&](transaction_slot &slot) {
       auto *msg = slot.rx_if.read();
-      auto *resp = serve(allocator.get(),
-                         rte_pktmbuf_mtod(msg, kv_packet<kv_request> *));
+      auto *resp =
+          serve(&allocator, rte_pktmbuf_mtod(msg, kv_packet<kv_request> *));
       slot.tx_if.send(resp, true);
       if (!slot.has_outstanding_messages())
         slot.finish();
       message_allocator::deallocate(msg);
     });
-    server.complete();
+    server->complete();
+  }
+  return 0;
+}
+
+int run(netconfig &conf) {
+  prepare();
+  if (fastt::init())
+    return -1;
+
+  auto nthreads = rte_lcore_count();
+  auto ifc = iface::configure_port(0, nthreads, nthreads);
+  if (!ifc)
+    return -1;
+  std::vector<lcore_server_adapter> adapters(nthreads);
+  unsigned i = 0;
+  for (auto &adapter : adapters) {
+    auto [port, txq, rxq, pool] = ifc->get_slice(i);
+    adapter.allocator = std::make_shared<message_allocator>("pool", 8095);
+    adapter.iface = std::make_unique<server_iface>(
+        port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator);
   }
 
-  auto stats = server.get_stats();
-  std::cout << std::format("total: {0}, no: {1}\n", stats.total_rx_polled,
-                           stats.no_rx)
-            << std::endl;
+  rte_eal_mp_remote_launch(lcore_server_fun, &adapters, CALL_MAIN);
+  rte_eal_mp_wait_lcore(); 
   ifc->stop();
   return 0;
 }
