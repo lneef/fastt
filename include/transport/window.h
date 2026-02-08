@@ -5,10 +5,11 @@
 #include "protocol.h"
 #include "util.h"
 
+#include <array>
 #include <bitset>
 #include <cstdint>
 #include <cstring>
-#include <rte_cycles.h>
+#include <generic/rte_cycles.h>
 #include <rte_branch_prediction.h>
 
 template <uint32_t width> struct window {
@@ -28,6 +29,7 @@ template <uint32_t width> struct window {
       ts = *msg->get_ts();
     }
     wd[i] = true;
+    messages[i] = msg;
     return true;
   }
 
@@ -38,14 +40,25 @@ template <uint32_t width> struct window {
 
   bool beyond_window(uint64_t seq) { return seq > least_in_window + mask; }
 
-  uint32_t advance() {
+  template <typename F> uint32_t advance(F &&f) {
     assert(mask + 1 == wd.size());
     uint32_t advanced = 0;
     while (wd[front]) {
       ++least_in_window;
+      if(likely(messages[front]))
+        f(messages[front]);
       wd[front] = false;
       front = (front + 1) & mask;
       ++advanced;
+    }
+
+    auto it = front;
+    auto head = least_in_window;
+    while(unlikely(head <= max_rx)){
+        if(wd[it] && messages[it])
+            messages[it] = f(messages[it]);
+        it = (it + 1) & mask;
+        ++head;
     }
     return advanced;
   }
@@ -91,6 +104,7 @@ template <uint32_t width> struct window {
   }
 
   std::bitset<N> wd;
+  std::array<message *, N> messages{};
   std::size_t front, mask;
   uint64_t least_in_window;
   uint64_t max_rx;
