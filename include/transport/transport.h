@@ -73,9 +73,12 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
 };
 
 class connection;
+struct transaction_slot;
+
 class transport {
   static constexpr uint16_t kOustandingMessages = 128;
   friend class connection;
+  friend struct transaction_slot;
   enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
 
 public:
@@ -184,7 +187,6 @@ public:
         return false;
       } else
         recv_wd.set(hdr->seq, pkt);
-      setup_after_init();
       cstate = connection_state::ESTABLISHED;
       break;
     }
@@ -197,7 +199,6 @@ public:
       } else {
         recv_wd.set(hdr->seq, pkt);
       }
-      setup_after_init();
       cstate = connection_state::ESTABLISHED;
       break;
     }
@@ -235,8 +236,8 @@ public:
 
   bool active() { return connection_state::ESTABLISHED == cstate; }
 
-  template <typename F> void receive_messages(F &&f) {
-    grant_returned += recv_wd.advance(f);
+  void receive_messages() {
+    grant_returned += recv_wd.advance();
     /* maybe we lost pkts */
     if (recv_wd.max_rx > recv_wd.least_in_window)
       grant_returned += recv_wd.max_rx - recv_wd.least_in_window;
@@ -247,13 +248,6 @@ public:
   }
 
 private:
-  void setup_after_init() {
-    recv_wd.advance([](message *msg) {
-      rte_pktmbuf_free(msg);
-      return nullptr;
-    });
-  }
-
   window<kOustandingMessages> recv_wd;
   con_config target;
   retransmission_handler rt_handler;

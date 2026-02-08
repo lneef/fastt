@@ -12,6 +12,7 @@ void connection::process_pkt(rte_mbuf *pkt) {
   auto *msg = static_cast<message*>(pkt);  
   if (!transport_impl->process_pkt(msg))
     return;
+  pv.pkts[pv.i++] = static_cast<message*>(pkt);
 } 
 
 void connection::acknowledge_all(){

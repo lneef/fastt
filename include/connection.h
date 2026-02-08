@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <generic/rte_cycles.h>
 #include <memory.h>
 #include <memory>
@@ -20,13 +22,16 @@
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
-#include "timer.h"
 #include "slot.h"
+#include "timer.h"
 #include "transport/transport.h"
 #include "util.h"
 
 class iface;
 class connection_manager;
+
+static constexpr uint16_t kdefaultBurstSize = 32;
+static constexpr uint16_t kdefaultFlowTableSize = 512;
 
 struct statistics {
   std::vector<transport_statistics> ts;
@@ -66,29 +71,29 @@ public:
   intrusive_list_t<transaction_slot> &get_inprogress() { return inprogress; }
 
   void process_incoming_server() {
-    transport_impl->receive_messages([&](message *msg) -> message * {
+    std::for_each(pv.begin(), pv.end(), [&](message *msg) -> void {
       auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
       slots[hdr->msg_id].update_execution_state(inprogress);
-      if (!slots[hdr->msg_id].handle_incoming_server(msg, hdr->sid, hdr->fini))
-        return msg;
+      slots[hdr->msg_id].handle_incoming_server(msg, hdr->sid, hdr->fini);
       msg->shrink_headroom(sizeof(protocol::ft_header));
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
-      return nullptr;
     });
+    pv.clear();
+    transport_impl->receive_messages();
   }
 
   void process_incoming_client(intrusive_list_t<transaction_slot> &ready) {
-    transport_impl->receive_messages([&](message *msg) -> message * {
+    std::for_each(pv.begin(), pv.end(), [&](message *msg) -> void {
       auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
-      if (!slots[hdr->msg_id].handle_incoming_client(msg, hdr->sid, hdr->fini,
-                                                     ready))
-        return msg;
+      slots[hdr->msg_id].handle_incoming_client(msg, hdr->sid, hdr->fini,
+                                                ready);
       msg->shrink_headroom(sizeof(protocol::ft_header));
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
-      return nullptr;
     });
+    pv.clear();
+    transport_impl->receive_messages();
   }
 
   transaction_slot *start_transaction() {
@@ -108,6 +113,7 @@ public:
 
 private:
   friend class connection_manager;
+  packet_vector<kdefaultBurstSize> pv;
   message_allocator *allocator;
   std::unique_ptr<transport> transport_impl;
   std::vector<transaction_slot> slots;
@@ -120,9 +126,6 @@ public:
 };
 
 class connection_manager {
-  static constexpr uint16_t kdefaultBurstSize = 32;
-  static constexpr uint16_t kdefaultFlowTableSize = 512;
-
 public:
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
                      uint32_t sip, std::shared_ptr<message_allocator> allocator,
