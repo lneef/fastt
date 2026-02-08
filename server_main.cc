@@ -1,17 +1,14 @@
 #include "connection.h"
 #include "iface.h"
-#include "kv.h"
+#include "kv_protocol.h"
 #include "message.h"
 #include "server.h"
 #include "slot.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdint>
-#include <format>
 #include <getopt.h>
-#include <iostream>
 #include <memory>
-#include <ostream>
 #include <random>
 #include <ranges>
 #include <rte_ether.h>
@@ -127,11 +124,13 @@ int run(netconfig &conf) {
     return -1;
   std::vector<lcore_server_adapter> adapters(nthreads);
   unsigned i = 0;
-  for (auto &adapter : adapters) {
+  uint16_t lcore_id;
+  RTE_LCORE_FOREACH(lcore_id){
+    auto& adapter = adapters[lcore_id];  
     auto [port, txq, rxq, pool] = ifc->get_slice(i);
     adapter.allocator = std::make_shared<message_allocator>("pool", 8095);
     adapter.iface = std::make_unique<server_iface>(
-        port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator);
+        port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator, lcore_id);
   }
 
   rte_eal_mp_remote_launch(lcore_server_fun, &adapters, CALL_MAIN);

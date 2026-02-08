@@ -27,7 +27,7 @@
 #include "uring/iface.h"
 #include <tlx/container/btree_map.hpp>
 
-static constexpr uint32_t kDefaultTXN = 500000;
+static constexpr uint32_t kDefaultTXN = 100;
 static constexpr uint16_t kDefaultSQBatch = 8;
 
 static std::random_device dev;
@@ -44,6 +44,7 @@ static void prepare() {
        })) {
     store[k] = v;
   }
+  assert(store.size() == kStoreSize);
 }
 
 struct slot_storage{
@@ -59,6 +60,7 @@ unsigned seen = 0;
 static int handle_request(kv_packet<kv_request> *req,
                           kv_packet<kv_completion> *completion) {
   auto key = req->payload.key;
+  printf("%ld\n", key);
   auto it = store.find(key);
   completion->id = req->id;
   completion->pt = req->pt;
@@ -89,6 +91,7 @@ static uint64_t request_batch(uring::client_iface *st, slot_storage& slt_strge, 
     auto slt_id = slt_strge.free_slots.front();
     slt_strge.free_slots.pop_front();
     int64_t key = dist(rng);
+    printf("%ld\n", key);
     create_kv_request(buf, slt_id, key);
     ++t;
     st->prepare_send(buf, sizeof(kv_packet<kv_request>), std::bit_cast<uint64_t>(buf),  st->fd, sqe);
@@ -163,6 +166,7 @@ static std::pair<size_t, unsigned> parse_completion(slot_storage& slt_strge, uin
 
     auto *resp = reinterpret_cast<packet_t *>(data + i);
     slt_strge.free_slots.push_back(resp->id);
+    printf("r: %ld\n", resp->payload.key);
     ++c;
     i += sizeof(packet_t);
   }

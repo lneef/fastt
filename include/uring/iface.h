@@ -1,6 +1,8 @@
 #pragma once
 
 #include "uring/qpair.h"
+#include "uring/tcp.h"
+
 #include "util.h"
 #include <bit>
 #include <cassert>
@@ -20,7 +22,7 @@
 
 namespace uring {
 static constexpr int kMaxClientFd = 128;
-static constexpr int kDefaultBufferSize = 1 << kBufShift;
+static constexpr int kDefaultBufferSize = 32;
 
 static constexpr uint64_t tag_send(unsigned idx) {
   return static_cast<uint64_t>(idx) * 2;
@@ -28,11 +30,6 @@ static constexpr uint64_t tag_send(unsigned idx) {
 
 static constexpr uint64_t tag_recv(unsigned idx) {
   return static_cast<uint64_t>(idx) * 2 + 1;
-}
-
-static int disable_nagle(int fd) {
-  int flag = 1;
-  return setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
 }
 
 static constexpr unsigned untag(uint64_t user_data) { return user_data >> 1; }
@@ -73,7 +70,6 @@ struct slot {
 };
 
 template <size_t elemsize>
-  requires(elemsize >= 64)
 struct buffer_pool {
   static constexpr size_t kElemSize = elemsize;
   struct [[gnu::packed]] header {
@@ -189,7 +185,7 @@ struct client_iface : iface_base {
       fprintf(stderr, "Setting up socket failed %s\n", strerror(-ret));
       return ret;
     }
-    disable_nagle(fd);
+    tcp::disable_nagle(fd);
     return 0;
   }
 
@@ -272,10 +268,9 @@ struct server_iface : iface_base {
       auto idx = free_slots.front();
       free_slots.pop_front();
       clients[idx] = cqe->res;
-      printf("%u\n", idx);
       con_state[idx] = {};
       add_recv(this, cqe->res, idx);
-      disable_nagle(cqe->res);
+      tcp::disable_nagle(cqe->res);
       active.push_front(con_state[idx]);
       return 0;
     }

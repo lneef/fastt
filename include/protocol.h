@@ -25,6 +25,14 @@ struct __rte_packed_begin ft_header{
   uint64_t ack;
 } __rte_packed_end;
 
+struct __rte_packed_begin ft_msg_header{
+    uint64_t tid : 16;
+    uint64_t sid : 16;
+    uint64_t len : 16;
+    uint64_t fini :1;
+    uint64_t rsvd :15;
+};
+
 static_assert(sizeof(ft_header) == 24, "");
 
 struct __rte_packed_begin ft_sack_payload{
