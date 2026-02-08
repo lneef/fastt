@@ -155,7 +155,7 @@ int run(netconfig &conf) {
   RTE_LCORE_FOREACH(lcore) {
     auto [port, txq, rxq, pool] = ifc->get_slice(i);
     adpater.allocator[i] = std::make_shared<message_allocator>(
-        ("mpool" + std::to_string(i)).c_str(), 8095);
+        ("mpool" + std::to_string(i)).c_str(), 8191);
     adpater.cifs[i] = std::make_unique<client_iface>(
         port, txq, rxq, adpater.allocator[i],
         con_config{conf.sip, conf.sports[i]}, lcore);
