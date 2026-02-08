@@ -128,7 +128,7 @@ int run(netconfig &conf) {
   RTE_LCORE_FOREACH(lcore_id){
     auto& adapter = adapters[lcore_id];  
     auto [port, txq, rxq, pool] = ifc->get_slice(i);
-    adapter.allocator = std::make_shared<message_allocator>("pool", 8095);
+    adapter.allocator = std::make_shared<message_allocator>(("mpool" + std::to_string(i)).c_str(),  8095);
     adapter.iface = std::make_unique<server_iface>(
         port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator, lcore_id);
   }
