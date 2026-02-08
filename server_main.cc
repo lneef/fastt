@@ -1,27 +1,24 @@
 #include "connection.h"
 #include "iface.h"
-#include "kv.h"
+#include "kv_protocol.h"
 #include "message.h"
 #include "server.h"
 #include "slot.h"
 #include <arpa/inet.h>
-#include <bits/getopt_core.h>
+#include <atomic>
 #include <cstdint>
 #include <getopt.h>
-#include <iostream>
 #include <memory>
-#include <ostream>
 #include <random>
 #include <ranges>
 #include <rte_ether.h>
+#include <rte_lcore.h>
 #include <rte_log.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
-#include <unordered_map>
-#include <utility>
 #include <signal.h>
-#include <format>
+#include <utility>
 
 #include <tlx/container/btree_map.hpp>
 
@@ -31,15 +28,19 @@ struct netconfig {
   uint16_t sport, dport;
 };
 
+struct lcore_server_adapter {
+  std::unique_ptr<server_iface> iface;
+  std::shared_ptr<message_allocator> allocator;
+};
+
 static std::random_device dev;
 static std::mt19937 rng(dev());
-static std::uniform_int_distribution<std::mt19937::result_type> dist(INT64_MIN,
-                                                                     INT64_MAX);
+static std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
 static constexpr uint32_t kStoreSize = 1024 * 1024;
 static tlx::btree_map<int64_t, int64_t> store;
 
 static void prepare() {
-  uint32_t size = kStoreSize;  
+  uint32_t size = kStoreSize;
   for (auto [k, v] :
        std::ranges::views::iota(0u, size) | std::views::transform([&](int) {
          return std::make_pair(dist(rng), dist(rng));
@@ -84,40 +85,57 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
   return conf;
 }
 
-static volatile int terminate = 0;
+static std::atomic<int> terminate = 0;
 
 static void handler(int sig) {
-(void)sig;
-terminate = 1;
+  (void)sig;
+  terminate = 1;
+}
+
+int lcore_server_fun(void *arg) {
+  auto myid = rte_lcore_index(rte_lcore_id());
+  auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
+  auto *server = adapters[myid].iface.get();
+  auto &allocator = *adapters[myid].allocator;
+
+  while (!terminate) {
+    server->poll([&](transaction_slot &slot) {
+      auto *msg = slot.rx_if.read();
+      auto *resp =
+          serve(&allocator, rte_pktmbuf_mtod(msg, kv_packet<kv_request> *));
+      slot.tx_if.send(resp, true);
+      if (!slot.has_outstanding_messages())
+        slot.finish();
+      message_allocator::deallocate(msg);
+    });
+    server->complete();
+  }
+  return 0;
 }
 
 int run(netconfig &conf) {
   prepare();
   if (fastt::init())
     return -1;
-  auto ifc = iface::configure_port(0, 1, 1);
+
+  auto nthreads = rte_lcore_count();
+  auto ifc = iface::configure_port(0, nthreads, nthreads);
   if (!ifc)
     return -1;
-  auto [port, txq, rxq, pool] = ifc->get_slice(0);
-  std::shared_ptr<message_allocator> allocator =
-      std::make_shared<message_allocator>("pool", 8095);
-  server_iface server(port, txq, rxq, con_config{conf.sip, conf.sport},
-                      allocator);
-  while (!terminate) {
-    server.poll([&](transaction_slot &slot) {
-      auto *msg = slot.rx_if.read();
-      auto *resp = serve(allocator.get(),
-                         rte_pktmbuf_mtod(msg, kv_packet<kv_request> *));
-      slot.tx_if.send(resp, true);
-      if (!slot.has_outstanding_messages())
-        slot.finish();
-      message_allocator::deallocate(msg);
-    });
-    server.complete();
+  std::vector<lcore_server_adapter> adapters(nthreads);
+  unsigned i = 0;
+  uint16_t lcore_id;
+  RTE_LCORE_FOREACH(lcore_id){
+    auto& adapter = adapters[lcore_id];  
+    auto [port, txq, rxq, pool] = ifc->get_slice(i);
+    adapter.allocator = std::make_shared<message_allocator>(("mpool" + std::to_string(i)).c_str(),  8191);
+    adapter.iface = std::make_unique<server_iface>(
+        port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator, lcore_id);
+    ++i;
   }
 
-  auto stats = server.get_stats();
-  std::cout << std::format("total: {0}, no: {1}\n", stats.total_rx_polled, stats.no_rx) << std::endl;
+  rte_eal_mp_remote_launch(lcore_server_fun, &adapters, CALL_MAIN);
+  rte_eal_mp_wait_lcore(); 
   ifc->stop();
   return 0;
 }
@@ -126,7 +144,7 @@ int main(int argc, char *argv[]) {
   struct sigaction sa = {};
   sa.sa_handler = handler;
   sigaction(SIGINT, &sa, NULL);
-  sigaction(SIGTERM, &sa, NULL);  
+  sigaction(SIGTERM, &sa, NULL);
   int dpdk_argc = rte_eal_init(argc, argv);
   auto conf = parse_cmdline(argc - dpdk_argc, argv + dpdk_argc);
   run(conf);

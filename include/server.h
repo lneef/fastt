@@ -15,9 +15,9 @@ class server_iface {
 public:
   server_iface(uint16_t port, uint16_t txq, uint16_t rxq,
                const con_config &scon_config,
-               std::shared_ptr<message_allocator> pool)
+               std::shared_ptr<message_allocator> pool, uint16_t lcore_id)
       : scon_config(scon_config),
-        manager(false, port, txq, rxq, scon_config.ip, pool, rte_lcore_id()) {}
+        manager(false, port, txq, rxq, scon_config.ip, pool, lcore_id) {}
 
   void complete() { manager.flush(); };
 

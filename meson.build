@@ -18,3 +18,5 @@ fastt_lib = static_library('fastt', sources, include_directories: include_direct
 
 executable('client', 'client_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep], link_with: fastt_lib, link_args: ['-lcap'])
 executable('server', 'server_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep, tlx_dep], link_with: fastt_lib, link_args: ['-lcap'])
+
+executable('uring', 'uring_peer.cc', include_directories: include_directories('include'), dependencies: [tlx_dep], link_args: ['-luring'])

@@ -27,7 +27,6 @@
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 alignas(RTE_CACHE_LINE_MIN_SIZE) std::atomic<double> lat = 0;
@@ -91,8 +90,7 @@ static constexpr uint16_t dataSize = sizeof(kv_packet<kv_request>);
 static int lcore_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<std::mt19937::result_type> dist(INT64_MIN,
-                                                                INT64_MAX);
+  std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto *con = adapter->connections[me];
@@ -107,7 +105,6 @@ static int lcore_fn(void *arg) {
       for(; done.size() > 0; done.pop_front()){
           auto &slot = done.front();
           auto* resp = slot.rx_if.read();
-          auto *kv_comp = rte_pktmbuf_mtod(resp, kv_packet<kv_completion>*);
           allocator->deallocate(resp);
           kv.finish_transaction(&slot);
           ++c;
@@ -158,7 +155,7 @@ int run(netconfig &conf) {
   RTE_LCORE_FOREACH(lcore) {
     auto [port, txq, rxq, pool] = ifc->get_slice(i);
     adpater.allocator[i] = std::make_shared<message_allocator>(
-        ("mpool" + std::to_string(i)).c_str(), 8095);
+        ("mpool" + std::to_string(i)).c_str(), 8191);
     adpater.cifs[i] = std::make_unique<client_iface>(
         port, txq, rxq, adpater.allocator[i],
         con_config{conf.sip, conf.sports[i]}, lcore);
