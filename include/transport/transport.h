@@ -177,7 +177,7 @@ public:
         mf.free();
         return false;
       } else
-        recv_wd.set(hdr->seq, mf);
+        recv_wd.set(hdr->seq, std::move(mf));
       break;
     }
     case protocol::pkt_type::FT_ACK: {
@@ -197,7 +197,7 @@ public:
         mf.free();
         return false;
       } else
-        recv_wd.set(hdr->seq, mf);
+        recv_wd.set(hdr->seq, std::move(mf));
       setup_after_init();
       cstate = connection_state::ESTABLISHED;
       break;
@@ -209,7 +209,7 @@ public:
         mf.free();
         return false;
       } else {
-        recv_wd.set(hdr->seq, mf);
+        recv_wd.set(hdr->seq, std::move(mf));
       }
       setup_after_init();
       cstate = connection_state::ESTABLISHED;

@@ -10,10 +10,12 @@ struct msg_fragment {
   msg_fragment() = default;
 
   template <typename T> T *data() {
+    assert(msg != nullptr);  
     return rte_pktmbuf_mtod_offset(msg, T *, off);
   }
 
   template<typename T> T* data_offset(uint16_t offset){
+      assert(msg != nullptr);
       return rte_pktmbuf_mtod_offset(msg, T *, off + offset);
   }
 

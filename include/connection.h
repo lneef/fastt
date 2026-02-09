@@ -73,6 +73,7 @@ public:
       slots[hdr->msg_id].update_execution_state(inprogress);
       if (!slots[hdr->msg_id].handle_incoming_server(mf, hdr->sid, hdr->fini))
         return mf.msg;
+
       mf.move_offset(sizeof(protocol::ft_header));  
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
       return nullptr;
@@ -86,6 +87,7 @@ public:
       if (!slots[hdr->msg_id].handle_incoming_client(mf, hdr->sid, hdr->fini,
                                                      ready))
         return mf.msg;
+
       mf.move_offset(sizeof(protocol::ft_header));  
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
       return nullptr;

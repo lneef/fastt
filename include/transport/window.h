@@ -19,7 +19,7 @@ template <uint32_t width> struct window {
 
   uint64_t get_last_acked_packet() const { return least_in_window - 1; }
 
-  bool set(uint64_t seq, auto &&mf) {
+  bool set(uint64_t seq, msg_fragment &&mf) {
     auto i = index(seq);
     if (beyond_window(seq) || wd[i])
       return false;
@@ -28,7 +28,7 @@ template <uint32_t width> struct window {
       ts = *mf.msg->get_ts();
     }
     wd[i] = true;
-    messages[i] = mf;
+    messages[i] = std::move(mf);
     return true;
   }
 
