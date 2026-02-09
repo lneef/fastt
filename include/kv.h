@@ -11,19 +11,12 @@
 
 #include "kv_protocol.h"
 
-inline void create_put_request(message *msg, int64_t key, int64_t val) {
-  auto *kv_req = static_cast<kv_packet<kv_request> *>(msg->data());
-  kv_req->payload.op = request_t::PUT;
-  kv_req->payload.key = key;
-  kv_req->payload.val = val;
+inline void create_get_request(message *msg, int64_t key, int64_t id) {
+    kv::create_kv_request(static_cast<uint8_t*>(msg->data()), id, key);
 }
 
-inline void create_get_request(message *msg, int64_t key, int64_t id) {
-  auto *kv_req = static_cast<kv_packet<kv_request> *>(msg->data());
-  kv_req->pt = packet_t::SINGLE;
-  kv_req->id = id;
-  kv_req->payload.op = request_t::GET;
-  kv_req->payload.key = key;
+inline void create_scan_request(message *msg, int64_t low, int64_t high, int64_t id){
+    kv::create_kv_scan(msg->data<uint8_t>(), id, low, high);
 }
 
 class kv_proxy {
@@ -35,6 +28,7 @@ public:
 
   transaction_slot* start_transaction(connection *con);
   void lookup(int64_t key, message *msg, int64_t id) { create_get_request(msg, key, id); };
+  void scan(int64_t low, int64_t high, message* msg, int64_t id){ create_scan_request(msg, low, high, id); }
   void acknowledge() { con->acknowledge_all(); }
   void finish_transaction(transaction_slot *slot);
 

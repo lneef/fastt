@@ -45,6 +45,10 @@ public:
   retransmission_handler(uint32_t queued_packets, uint32_t budget = 1)
       : unacked_packets(2 * queued_packets), budget(budget), seq(min_seq), rtt() {}
 
+  unsigned get_current_wnd() const{
+      return budget;
+  }
+
   uint64_t cleanup_acked_pkts(uint64_t seq) {
     uint64_t burst_rtt = 0;
     while (!unacked_packets.empty() && unacked_packets.front()->seq <= seq) {

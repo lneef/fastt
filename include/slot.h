@@ -135,6 +135,30 @@ struct transaction_slot {
     bool send(message *msg, bool last = false) {
       return slot->transport_impl->send_pkt(msg, slot->tx_sid++, slot->tid, last);
     }
+
+    bool send_streaming(message* msg, bool last = false){
+        assert(registered && "Streaming not registered");
+        if(!budget)
+            return false;
+        --budget;
+        return slot->transport_impl->send_pkt(msg, slot->tx_sid++, slot->tid, last);
+    }
+
+    void alloc_budget(){
+        if(!registered){
+            slot->transport_impl->register_bulk_stream();
+            registered = true;
+        }
+        budget = slot->transport_impl->alloc_budget();
+    }
+
+    void finish_streaming(){
+        registered = false;
+        slot->transport_impl->deregister_bulk_stream();
+    }
+
     transaction_slot *slot;
+    unsigned budget : 31 = 0;
+    unsigned registered : 1 = false;
   } tx_if{this};
 };

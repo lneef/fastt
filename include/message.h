@@ -17,6 +17,8 @@ struct message : public rte_mbuf {
   void inc_refcnt() { return rte_pktmbuf_refcnt_update(this, 1); }
 
 
+  template<typename T>
+  T* data() { return rte_pktmbuf_mtod(this, T*); }    
   void *data() { return rte_pktmbuf_mtod(this, void *); }
   uint16_t len() { return data_len; }
 

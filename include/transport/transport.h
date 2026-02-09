@@ -45,6 +45,22 @@ template <typename D> struct seq_observer {
   }
 };
 
+struct control_path{
+    unsigned bulk_streams = 0;
+
+    void register_bulk_stream(){
+        bulk_streams++;
+    }
+
+    void deregister_bulk_stream(){
+        --bulk_streams;
+    }
+
+    unsigned alloc_budget(unsigned space){
+        return std::max((space) / (1u + bulk_streams), 1u);
+    }
+};
+
 struct ack_scheduler : public seq_observer<ack_scheduler> {
   uint64_t last_acked;
   uint64_t last_sack;
@@ -246,6 +262,18 @@ public:
     }
   }
 
+  void register_bulk_stream(){
+      cp.register_bulk_stream();
+  }
+
+  void deregister_bulk_stream(){
+      cp.deregister_bulk_stream();
+  }
+
+  unsigned alloc_budget(){
+      return cp.alloc_budget(rt_handler.get_current_wnd());
+  }
+
 private:
   void setup_after_init() {
     recv_wd.advance([](message *msg) {
@@ -254,6 +282,7 @@ private:
     });
   }
 
+  control_path cp;
   window<kOustandingMessages> recv_wd;
   con_config target;
   retransmission_handler rt_handler;

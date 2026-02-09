@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "uring/iface.h"
+#include "uring/tcp.h"
 #include <tlx/container/btree_map.hpp>
 
 static constexpr uint32_t kDefaultTXN = 100;
@@ -230,6 +231,9 @@ static int client_fun(struct sockaddr_in *addr) {
   while (c < kDefaultTXN) {
     c += process_completions(&iface, slt_strge);
   }
+  struct tcp_info info;
+  uring::tcp::get_tcp_stats(iface.fd, &info);
+  uring::tcp::print_tcp_info(stdout, &info);
   auto end = std::chrono::steady_clock::now();
   printf("%f\n", std::chrono::duration<double, std::micro>(end - start).count());
   return 0;
