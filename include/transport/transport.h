@@ -20,6 +20,7 @@
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
+#include "transport/msg_fragment.h"
 #include "window.h"
 
 #include "retransmission_handler.h"
@@ -45,20 +46,16 @@ template <typename D> struct seq_observer {
   }
 };
 
-struct control_path{
-    unsigned bulk_streams = 0;
+struct control_path {
+  unsigned bulk_streams = 0;
 
-    void register_bulk_stream(){
-        bulk_streams++;
-    }
+  void register_bulk_stream() { bulk_streams++; }
 
-    void deregister_bulk_stream(){
-        --bulk_streams;
-    }
+  void deregister_bulk_stream() { --bulk_streams; }
 
-    unsigned alloc_budget(unsigned space){
-        return std::max((space) / (1u + bulk_streams), 1u);
-    }
+  unsigned alloc_budget(unsigned space) {
+    return std::max((space) / (1u + bulk_streams), 1u);
+  }
 };
 
 struct ack_scheduler : public seq_observer<ack_scheduler> {
@@ -122,7 +119,7 @@ public:
         scheduler.ack_callback(ack);
       }
       protocol::prepare_ft_header(pkt, seq, ack, sid, msg_id,
-                                  recv_wd.capacity(kOustandingMessages), fini,
+                                  recv_wd.capacity(kOustandingMessages), pkt->pkt_len, fini,
                                   ts);
     };
 
@@ -161,14 +158,15 @@ public:
     }
     protocol::prepare_ack_pkt(msg, ack, recv_wd.capacity(kOustandingMessages),
                               recv_wd.get_ts(), is_sack);
-    FASTT_LOG_DEBUG("Return %u capacity to peer\n", recv_wd.capacity(kOustandingMessages));
+    FASTT_LOG_DEBUG("Return %u capacity to peer\n",
+                    recv_wd.capacity(kOustandingMessages));
     pkt_if->consume_pkt(msg, sport, target);
     return true;
   }
 
-  bool process_pkt(message *pkt) {
-    auto *hdr = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
-    auto ts = *pkt->get_ts() - hdr->ts;
+  bool process_pkt(msg_fragment &&mf) {
+    auto *hdr = mf.data<protocol::ft_header>();
+    auto ts = *mf.msg->get_ts() - hdr->ts;
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
       if (hdr->ack)
@@ -176,30 +174,30 @@ public:
       scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
         ++stats.retransmissions;
-        rte_pktmbuf_free(pkt);
+        mf.free();
         return false;
       } else
-        recv_wd.set(hdr->seq, pkt);
+        recv_wd.set(hdr->seq, mf);
       break;
     }
     case protocol::pkt_type::FT_ACK: {
       rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
       if (hdr->sack) {
-        auto *sack_payload = rte_pktmbuf_mtod_offset(
-            pkt, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
+        auto *sack_payload = mf.data_offset<protocol::ft_sack_payload>(
+            sizeof(protocol::ft_header));
         rt_handler.acknowledge_sack(
             sack_payload, hdr->wnd, ts,
             [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
       }
-      rte_pktmbuf_free(pkt);
+      mf.free();
       break;
     }
     case protocol::pkt_type::FT_INIT: {
       if (recv_wd.is_set(hdr->seq)) {
-        rte_pktmbuf_free(pkt);
+        mf.free();
         return false;
       } else
-        recv_wd.set(hdr->seq, pkt);
+        recv_wd.set(hdr->seq, mf);
       setup_after_init();
       cstate = connection_state::ESTABLISHED;
       break;
@@ -208,17 +206,17 @@ public:
       rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
       scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
-        rte_pktmbuf_free(pkt);
+        mf.free();
         return false;
       } else {
-        recv_wd.set(hdr->seq, pkt);
+        recv_wd.set(hdr->seq, mf);
       }
       setup_after_init();
       cstate = connection_state::ESTABLISHED;
       break;
     }
     default:
-      rte_pktmbuf_free(pkt);
+      mf.free();
       break;
     }
     return true;
@@ -262,22 +260,18 @@ public:
     }
   }
 
-  void register_bulk_stream(){
-      cp.register_bulk_stream();
-  }
+  void register_bulk_stream() { cp.register_bulk_stream(); }
 
-  void deregister_bulk_stream(){
-      cp.deregister_bulk_stream();
-  }
+  void deregister_bulk_stream() { cp.deregister_bulk_stream(); }
 
-  unsigned alloc_budget(){
-      return cp.alloc_budget(rt_handler.get_current_wnd());
+  unsigned alloc_budget() {
+    return cp.alloc_budget(rt_handler.get_current_wnd());
   }
 
 private:
   void setup_after_init() {
-    recv_wd.advance([](message *msg) {
-      rte_pktmbuf_free(msg);
+    recv_wd.advance([](msg_fragment &msg) {
+      rte_pktmbuf_free(msg.msg);
       return nullptr;
     });
   }

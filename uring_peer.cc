@@ -58,8 +58,8 @@ struct slot_storage{
 
 
 unsigned seen = 0;
-static int handle_request(kv_packet<kv_request> *req,
-                          kv_packet<kv_completion> *completion) {
+static int handle_request(kv::kv_packet<kv::kv_request> *req,
+                          kv::kv_packet<kv::kv_completion> *completion) {
   auto key = req->payload.key;
   printf("%ld\n", key);
   auto it = store.find(key);
@@ -67,10 +67,10 @@ static int handle_request(kv_packet<kv_request> *req,
   completion->pt = req->pt;
   completion->payload.key = req->payload.key;
   if (it == store.end()) {
-    completion->payload.reponse = response_t::FAILURE;
+    completion->payload.reponse = kv::response_t::FAILURE;
     completion->payload.val = 0;
   } else {
-    completion->payload.reponse = response_t::SUCCESS;
+    completion->payload.reponse = kv::response_t::SUCCESS;
     completion->payload.val = it->second;
   }
   ++seen;
@@ -93,9 +93,9 @@ static uint64_t request_batch(uring::client_iface *st, slot_storage& slt_strge, 
     slt_strge.free_slots.pop_front();
     int64_t key = dist(rng);
     printf("%ld\n", key);
-    create_kv_request(buf, slt_id, key);
+    kv::create_kv_request(buf, slt_id, key);
     ++t;
-    st->prepare_send(buf, sizeof(kv_packet<kv_request>), std::bit_cast<uint64_t>(buf),  st->fd, sqe);
+    st->prepare_send(buf, sizeof(kv::kv_packet<kv::kv_request>), std::bit_cast<uint64_t>(buf),  st->fd, sqe);
   }
   return t;
 }
@@ -104,8 +104,8 @@ unsigned prsd = 0;
 static std::pair<size_t, int> parse_request(uring::server_iface &iface,
                                             uint8_t *data, size_t size,
                                             unsigned idx) {
-  using kv_request_t = kv_packet<kv_request>;
-  using kv_response_t = kv_packet<kv_completion>;
+  using kv_request_t = kv::kv_packet<kv::kv_request>;
+  using kv_response_t = kv::kv_packet<kv::kv_completion>;
   int ret = 0;
   unsigned i = 0;
   struct io_uring_sqe *sqe = nullptr;
@@ -158,7 +158,7 @@ end:
 
 static std::pair<size_t, unsigned> parse_completion(slot_storage& slt_strge, uint8_t *data,
                                                     size_t size) {
-  using packet_t = kv_packet<kv_completion>;
+  using packet_t = kv::kv_packet<kv::kv_completion>;
   unsigned i = 0;
   unsigned c = 0;
   for (; i < size;) {

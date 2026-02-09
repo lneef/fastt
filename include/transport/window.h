@@ -1,8 +1,7 @@
 #pragma once
 
-#include "debug.h"
-#include "message.h"
 #include "protocol.h"
+#include "transport/msg_fragment.h"
 #include "util.h"
 
 #include <array>
@@ -20,16 +19,16 @@ template <uint32_t width> struct window {
 
   uint64_t get_last_acked_packet() const { return least_in_window - 1; }
 
-  bool set(uint64_t seq, message *msg) {
+  bool set(uint64_t seq, auto&& mf) {
     auto i = index(seq);
     if (beyond_window(seq) || wd[i])
       return false;
     if (seq > max_rx) {
       max_rx = seq;
-      ts = *msg->get_ts();
+      ts = *mf.msg->get_ts();
     }
     wd[i] = true;
-    messages[i] = msg;
+    messages[i] = mf;
     return true;
   }
 
@@ -45,7 +44,7 @@ template <uint32_t width> struct window {
     uint32_t advanced = 0;
     while (wd[front]) {
       ++least_in_window;
-      if(likely(messages[front]))
+      if(likely(messages[front].ready()))
         f(messages[front]);
       wd[front] = false;
       front = (front + 1) & mask;
@@ -55,8 +54,8 @@ template <uint32_t width> struct window {
     auto it = front;
     auto head = least_in_window;
     while(unlikely(head <= max_rx)){
-        if(wd[it] && messages[it])
-            messages[it] = f(messages[it]);
+        if(wd[it] && messages[it].ready())
+            messages[it].set(f(messages[it]));
         it = (it + 1) & mask;
         ++head;
     }
@@ -104,7 +103,7 @@ template <uint32_t width> struct window {
   }
 
   std::bitset<N> wd;
-  std::array<message *, N> messages{};
+  std::array<msg_fragment, N> messages{};
   std::size_t front, mask;
   uint64_t least_in_window;
   uint64_t max_rx;

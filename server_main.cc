@@ -50,20 +50,20 @@ static void prepare() {
 }
 
 static message *serve(message_allocator *allocator,
-                      kv_packet<kv_request> *packet) {
+                      kv::kv_packet<kv::kv_request> *packet) {
   auto key = packet->payload.key;
   auto it = store.find(key);
 
-  message *msg = allocator->alloc_message(sizeof(kv_packet<kv_completion>));
-  auto *completion = rte_pktmbuf_mtod(msg, kv_packet<kv_completion> *);
+  message *msg = allocator->alloc_message(sizeof(kv::kv_packet<kv::kv_completion>));
+  auto *completion = msg->data<kv::kv_packet<kv::kv_completion>>();
   completion->id = packet->id;
   completion->pt = packet->pt;
   completion->payload.key = packet->payload.key;
   if (it == store.end()) {
-    completion->payload.reponse = response_t::FAILURE;
+    completion->payload.reponse = kv::response_t::FAILURE;
     completion->payload.val = 0;
   } else {
-    completion->payload.reponse = response_t::SUCCESS;
+    completion->payload.reponse = kv::response_t::SUCCESS;
     completion->payload.val = it->second;
   }
   return msg;
@@ -100,13 +100,13 @@ int lcore_server_fun(void *arg) {
 
   while (!terminate) {
     server->poll([&](transaction_slot &slot) {
-      auto *msg = slot.rx_if.read();
+      auto msg = slot.rx_if.read();
       auto *resp =
-          serve(&allocator, rte_pktmbuf_mtod(msg, kv_packet<kv_request> *));
+          serve(&allocator, msg->data<kv::kv_packet<kv::kv_request>>());
       slot.tx_if.send(resp, true);
       if (!slot.has_outstanding_messages())
         slot.finish();
-      message_allocator::deallocate(msg);
+      msg->free();  
     });
     server->complete();
   }

@@ -2,11 +2,13 @@
 
 #include "message.h"
 #include "timer.h"
+#include "transport/msg_fragment.h"
 #include "transport/transport.h"
 #include "util.h"
 #include "timer.h"
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <rte_cycles.h>
 #include <rte_eal.h>
 #include <rte_lcore.h>
@@ -18,7 +20,7 @@ enum class slot_state {
 
 struct transaction_slot {
   static constexpr uint32_t kOutStandingMsg = 64;
-  std::deque<message *> incoming;
+  std::deque<msg_fragment> incoming;
   list_hook link;
   transport *transport_impl;
   uint64_t incoming_pkts = 0;
@@ -50,7 +52,7 @@ struct transaction_slot {
     return has_outstanding_msgs || incoming.size() > 0;
   }
 
-  bool handle_incoming_server(message *msg, uint8_t msid, bool fini) {
+  bool handle_incoming_server(msg_fragment& msg, uint8_t msid, bool fini) {
     if(msid != sid)
         return false;
     ++sid;
@@ -60,7 +62,7 @@ struct transaction_slot {
     return true;
   }
 
-  bool handle_incoming_client(message *msg, uint8_t msid, bool fini, intrusive_list_t<transaction_slot>& ready) {
+  bool handle_incoming_client(msg_fragment& msg, uint8_t msid, bool fini, intrusive_list_t<transaction_slot>& ready) {
     if(msid != sid)
         return false;
     ++sid;
@@ -118,12 +120,12 @@ struct transaction_slot {
   }
 
   struct {
-    message *read() {
+    std::optional<msg_fragment> read() {  
       if (slot->incoming.empty())
-        return nullptr;
-      auto *msg = slot->incoming.front();
+        return std::nullopt;
+      auto mf = slot->incoming.front();
       slot->incoming.pop_front();
-      return msg;
+      return mf;
     }
 
     bool has_incoming_messages() { return slot->incoming.size() > 0; }

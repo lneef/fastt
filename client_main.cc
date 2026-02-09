@@ -104,8 +104,8 @@ static int lcore_fn(void *arg) {
       auto &done = kv.completions();
       for(; done.size() > 0; done.pop_front()){
           auto &slot = done.front();
-          auto* resp = slot.rx_if.read();
-          allocator->deallocate(resp);
+          auto resp = slot.rx_if.read();
+          resp->free();
           kv.finish_transaction(&slot);
           ++c;
       }
@@ -123,8 +123,8 @@ static int lcore_fn(void *arg) {
       auto &done = kv.completions();
       for(; done.size() > 0; done.pop_front()){
           auto& slot = done.front();
-          auto* resp = slot.rx_if.read();
-          allocator->deallocate(resp);
+          auto resp = slot.rx_if.read();
+          resp->free();
           ++c;
       }
   }

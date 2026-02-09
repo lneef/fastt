@@ -18,22 +18,15 @@ struct __rte_packed_begin ft_header{
   uint64_t wnd :12;
   uint64_t fini: 1;
   uint64_t sack: 1;
-  uint64_t msg_id : 10;  
-  uint64_t sid :8;
-  uint64_t ts : 30;
+  uint64_t ts : 48;
   uint64_t seq;
   uint64_t ack;
+  uint64_t msg_id : 16;
+  uint64_t sid :8;
+  uint64_t len: 40;
 } __rte_packed_end;
 
-struct __rte_packed_begin ft_msg_header{
-    uint64_t tid : 16;
-    uint64_t sid : 16;
-    uint64_t len : 16;
-    uint64_t fini :1;
-    uint64_t rsvd :15;
-};
-
-static_assert(sizeof(ft_header) == 24, "");
+static_assert(sizeof(ft_header) == 32, "");
 
 struct __rte_packed_begin ft_sack_payload{
     static constexpr uint16_t kBitMapLen = 2;
@@ -42,7 +35,7 @@ struct __rte_packed_begin ft_sack_payload{
 }__rte_packed_end;
 
 
-void prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint8_t sid, uint64_t msg_id, uint16_t wnd, bool fini = false, uint32_t us = 0);
+void prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint8_t sid, uint64_t msg_id, uint16_t wnd, uint16_t len, bool fini = false, uint32_t us = 0);
 void prepare_ack_pkt(message* msg, uint64_t ack, uint16_t wnd, uint32_t us, bool is_sack = false);
 void prepare_init_header(message* msg, uint64_t seq);
 void prepare_init_ack_header(message* msg, uint64_t seq, uint64_t ack, uint16_t wnd);

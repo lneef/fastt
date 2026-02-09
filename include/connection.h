@@ -22,6 +22,7 @@
 #include "protocol.h"
 #include "timer.h"
 #include "slot.h"
+#include "transport/msg_fragment.h"
 #include "transport/transport.h"
 #include "util.h"
 
@@ -66,26 +67,26 @@ public:
   intrusive_list_t<transaction_slot> &get_inprogress() { return inprogress; }
 
   void process_incoming_server() {
-    transport_impl->receive_messages([&](message *msg) -> message * {
-      auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
+    transport_impl->receive_messages([&](msg_fragment& mf) -> message* {
+      auto* hdr = mf.data<protocol::ft_header>();
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
       slots[hdr->msg_id].update_execution_state(inprogress);
-      if (!slots[hdr->msg_id].handle_incoming_server(msg, hdr->sid, hdr->fini))
-        return msg;
-      msg->shrink_headroom(sizeof(protocol::ft_header));
+      if (!slots[hdr->msg_id].handle_incoming_server(mf, hdr->sid, hdr->fini))
+        return mf.msg;
+      mf.move_offset(sizeof(protocol::ft_header));  
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
       return nullptr;
     });
   }
 
   void process_incoming_client(intrusive_list_t<transaction_slot> &ready) {
-    transport_impl->receive_messages([&](message *msg) -> message * {
-      auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
+    transport_impl->receive_messages([&](msg_fragment& mf) -> message * {
+      auto *hdr = mf.data<protocol::ft_header>();
       FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
-      if (!slots[hdr->msg_id].handle_incoming_client(msg, hdr->sid, hdr->fini,
+      if (!slots[hdr->msg_id].handle_incoming_client(mf, hdr->sid, hdr->fini,
                                                      ready))
-        return msg;
-      msg->shrink_headroom(sizeof(protocol::ft_header));
+        return mf.msg;
+      mf.move_offset(sizeof(protocol::ft_header));  
       FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
       return nullptr;
     });
@@ -198,11 +199,22 @@ public:
 
   void fetch_from_device() {
     std::array<flow_tuple, kdefaultBurstSize> fts;
-    uint16_t i = 0;
+    uint16_t valid = 0, i = 0;
     assert(vec.i == 0);
     dev.rx_burst(vec);
-    for (auto &msg : vec)
-      msg = pkt_if.consume_pkt(msg, fts[i++]);
+    for(uint16_t i = 0; i < vec.i; ++i){
+        auto *pkt = pkt_if.consume_pkt(vec.pkts[i]);
+        if(!pkt)
+            continue;
+        vec.pkts[valid++] = pkt;
+
+    }
+    vec.i = valid;
+    vec.i = pkt_if.run_gro(vec.pkts.data(), valid);
+
+    for(auto *msg : vec)
+        pkt_if.strip_header(msg, fts[i++]);
+
     for (auto [msg, ft] : std::ranges::zip_view(vec, fts)) {
       if (likely(msg))
         handle_pkt(msg, ft);
