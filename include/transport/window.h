@@ -12,14 +12,14 @@
 #include <rte_branch_prediction.h>
 
 template <uint32_t width> struct window {
-  // reserve some headroom  
-  static constexpr uint32_t N = 2 * width;  
+  // reserve some headroom
+  static constexpr uint32_t N = 2 * width;
   window(uint64_t min_seq)
       : wd(), front(0), mask(N - 1), least_in_window(min_seq), max_rx(0) {}
 
   uint64_t get_last_acked_packet() const { return least_in_window - 1; }
 
-  bool set(uint64_t seq, auto&& mf) {
+  bool set(uint64_t seq, auto &&mf) {
     auto i = index(seq);
     if (beyond_window(seq) || wd[i])
       return false;
@@ -44,7 +44,7 @@ template <uint32_t width> struct window {
     uint32_t advanced = 0;
     while (wd[front]) {
       ++least_in_window;
-      if(likely(messages[front].ready()))
+      if (likely(messages[front].ready()))
         f(messages[front]);
       wd[front] = false;
       front = (front + 1) & mask;
@@ -53,11 +53,11 @@ template <uint32_t width> struct window {
 
     auto it = front;
     auto head = least_in_window;
-    while(unlikely(head <= max_rx)){
-        if(wd[it] && messages[it].ready())
-            messages[it].set(f(messages[it]));
-        it = (it + 1) & mask;
-        ++head;
+    while (unlikely(head <= max_rx)) {
+      if (wd[it] && messages[it].ready())
+        messages[it].set(f(messages[it]));
+      it = (it + 1) & mask;
+      ++head;
     }
     return advanced;
   }
@@ -66,7 +66,9 @@ template <uint32_t width> struct window {
     return seq >= least_in_window && seq <= least_in_window + mask;
   }
 
-  uint32_t capacity(uint32_t min_capacity) const { return std::min<uint32_t>(least_in_window + mask - max_rx, min_capacity); }
+  uint32_t capacity(uint32_t min_capacity) const {
+    return std::min<uint32_t>(least_in_window + mask - max_rx, min_capacity);
+  }
 
   std::size_t __inline index(std::size_t i) {
     assert(i >= least_in_window);

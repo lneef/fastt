@@ -6,7 +6,7 @@
 struct msg_fragment {
   message *msg = nullptr;
   uint16_t off;
-  msg_fragment(message *msg, uint16_t off) : msg(msg), off(off) {}
+  msg_fragment(message *msg, uint16_t off = 0) : msg(msg), off(off) {}
   msg_fragment() = default;
 
   template <typename T> T *data() {

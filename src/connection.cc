@@ -4,7 +4,8 @@
 #include "protocol.h"
 
 #include <cassert>
-#include <cstdint>
+#include <cstdlib>
+#include <rte_branch_prediction.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
 #include <rte_mbuf.h>
@@ -12,18 +13,19 @@
 #include <rte_memcpy.h>
 
 void connection::process_pkt(rte_mbuf *pkt) {
-  assert(pkt->pkt_len == pkt->data_len);  
-  uint16_t pkts = 0;
-  auto *msg = static_cast<message*>(pkt);  
-  for(auto off = 0u; off < msg->pkt_len;){
-      auto* hdr = rte_pktmbuf_mtod_offset(msg, protocol::ft_header*, off);
-      off += hdr->len;
-      msg->inc_refcnt();
-      transport_impl->process_pkt(msg_fragment(static_cast<message*>(pkt), off));
-      ++pkts;
-  }
-  assert(rte_mbuf_refcnt_read(pkt) == pkts);
-  rte_pktmbuf_free(msg);
+  for(auto* msg = pkt; msg; ){
+      auto* hdr = static_cast<message*>(pkt)->data<protocol::ft_header>();
+      if(unlikely(hdr->len > RTE_ETHER_MAX_LEN)){
+          assert(0 && "Jumbo Frames not supported");
+          std::abort();
+      }
+      auto *tpkt = msg;
+      msg = msg->next;
+      tpkt->next = nullptr;
+      tpkt->nb_segs = 1;
+      tpkt->pkt_len = tpkt->data_len;
+      transport_impl->process_pkt(msg_fragment(static_cast<message*>(tpkt)));
+  }   
 } 
 
 void connection::acknowledge_all(){
