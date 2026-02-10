@@ -236,14 +236,14 @@ static int client_fun(struct sockaddr_in *addr) {
   return 0;
 }
 
-static int server_fun(int port_arg) {
+static int server_fun(int port_arg, in_addr_t addr) {
   int ret;
   prepare();
   struct io_uring_cqe *cqe;
   uring::server_iface iface{};
   iface.setup(port_arg);
   unsigned head = 0;
-  ret = iface.uring_prepare_listen();
+  ret = iface.uring_prepare_listen(addr);
   if (ret) {
     fprintf(stderr, "Set listen failed: %s\n", strerror(-ret));
     return ret;
@@ -291,6 +291,7 @@ int main(int argc, char *argv[]) {
   uint16_t port_arg = 0;
   int opt, ret = 0;
   bool is_client = false;
+  bool did_init_addr = false;
   struct sockaddr_in addr;
 
   while ((opt = getopt(argc, argv, "p:ca:")) != -1) {
@@ -303,6 +304,7 @@ int main(int argc, char *argv[]) {
       break;
     case 'a':
       inet_aton(optarg, &addr.sin_addr);
+      did_init_addr = true;
       break;
     default:
       fprintf(stderr,
@@ -317,6 +319,6 @@ int main(int argc, char *argv[]) {
   if (is_client)
     ret = client_fun(&addr);
   else
-    ret = server_fun(port_arg);
+    ret = server_fun(port_arg, did_init_addr ? addr.sin_addr.s_addr : INADDR_ANY);
   return ret;
 }

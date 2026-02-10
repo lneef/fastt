@@ -271,7 +271,7 @@ struct server_iface : iface_base {
 
   int setup(int port_arg) { return setup_base(port_arg, clients.front()); }
 
-  int uring_prepare_listen() {
+  int uring_prepare_listen( in_addr_t s_addr) {
     int enable = 1;
     int ret = setsockopt(clients.front(), SOL_SOCKET, SO_REUSEADDR, &enable,
                          sizeof(enable));
@@ -281,7 +281,7 @@ struct server_iface : iface_base {
     }
     struct sockaddr_in addr = {.sin_family = AF_INET,
                                .sin_port = port,
-                               .sin_addr = {INADDR_ANY},
+                               .sin_addr = { s_addr },
                                .sin_zero = {0}};
     ret = bind(clients.front(), reinterpret_cast<struct sockaddr *>(&addr),
                sizeof(addr));
