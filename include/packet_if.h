@@ -50,7 +50,7 @@ public:
     auto *ipv4 = msg->move_headroom<rte_ipv4_hdr>();
     ipv4->src_addr = source;
     ipv4->dst_addr = target;
-    ipv4->fragment_offset = 0;
+    ipv4->fragment_offset = rte_cpu_to_be_16(RTE_IPV4_HDR_DF_FLAG);
     ipv4->next_proto_id = IPPROTO_UDP;
     ipv4->time_to_live = kdefaultTTL;
     ipv4->total_length = rte_cpu_to_be_16(msg->pkt_len);
