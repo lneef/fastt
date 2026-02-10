@@ -51,6 +51,10 @@ static constexpr uint16_t kipOffset = sizeof(rte_ether_hdr);
 static constexpr uint16_t kudpOffset = kipOffset + sizeof(rte_ipv4_hdr);
 static constexpr uint16_t kftOffset = kudpOffset + sizeof(rte_udp_hdr);
 static constexpr uint16_t kuserDataOffset = kftOffset + sizeof(ft_header);
+
+static constexpr uint16_t kL2len = sizeof(rte_ether_hdr);
+static constexpr uint16_t kL3len = sizeof(rte_ipv4_hdr);
+static constexpr uint16_t kL4len = sizeof(rte_udp_hdr);
 }; // namespace defs
 
 } // namespace protocol
