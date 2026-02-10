@@ -31,10 +31,6 @@ public:
     gro_param.max_item_per_flow = kMaxPktPerFlow;
   }
 
-  uint16_t run_gro(message** msgs, uint16_t cnt){ 
-      return rte_gro_reassemble_burst(reinterpret_cast<rte_mbuf**>(msgs), cnt, &gro_param);
-  }
-
   rte_udp_hdr *udp_header(message *msg, uint16_t sport, uint16_t dport) {
     auto *udp = msg->move_headroom<rte_udp_hdr>();
     udp->src_port = rte_cpu_to_be_16(sport);

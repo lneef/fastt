@@ -209,22 +209,14 @@ public:
         if(!pkt)
             continue;
         vec.pkts[valid++] = pkt;
-        pkt->l2_len = protocol::defs::kL2len;
-        pkt->l3_len = protocol::defs::kL3len;
-        pkt->l4_len = protocol::defs::kL4len;
-
     }
     vec.i = valid;
-    vec.i = pkt_if.run_gro(vec.pkts.data(), valid);
-
     assert(i == 0);
     for(auto *msg : vec)
         pkt_if.strip_header(msg, fts[i++]);
 
-    for (auto [msg, ft] : std::ranges::zip_view(vec, fts)) {
-      if (likely(msg))
+    for (auto [msg, ft] : std::ranges::zip_view(vec, fts))
         handle_pkt(msg, ft);
-    }
     vec.clear();
     assert(vec.i == 0);
   }
