@@ -337,10 +337,9 @@ int main(int argc, char *argv[]) {
   threads.reserve(nt);
   uint16_t pidx = 0;
   if (is_client) {
-    threads.emplace_back(client_fun, sockaddr_in{.sin_addr = {ip_addr},
-                                                 .sin_port = htons(port_arg),
-                                                 .sin_family = AF_INET,
-                                                 .sin_zero = {}});
+     threads.emplace_back(client_fun, sockaddr_in{.sin_family = AF_INET,
+                                              .sin_port = htons(port_arg),
+                                              .sin_addr = {ip_addr}, .sin_zero = {}}); 
   } else {
     threads.emplace_back(server_fun, port_arg + pidx++,
                          did_init_addr ? ip_addr.s_addr : INADDR_ANY);
