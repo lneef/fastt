@@ -114,6 +114,7 @@ struct iface_base {
   int flag;  
   uint16_t port;
   struct tcp_info info;
+  struct io_uring_napi napi{};
   std::unique_ptr<qpair> ctx;
 
   buffer_pool<kDefaultBufferSize> pool;
@@ -157,6 +158,10 @@ struct iface_base {
       fprintf(stderr, "sock init failed %s\n", strerror(errno));
       return fd;
     }
+
+    napi.prefer_busy_poll = true;
+    napi.busy_poll_to = 1;
+    io_uring_register_napi(&ctx->ring, &napi);
 
     return 0;
   }
@@ -318,6 +323,7 @@ struct server_iface : iface_base {
       clients[idx] = cqe->res;
       con_state[idx] = {};
       add_recv(this, cqe->res, idx);
+      io_uring_register_napi(&ctx->ring, &napi);
       tcp::disable_nagle(cqe->res);
       tcp::change_congestion_control(cqe->res, tcp::bbr_congestion);
       active.push_front(con_state[idx]);
