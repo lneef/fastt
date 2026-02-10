@@ -204,7 +204,7 @@ static uint64_t process_completions(uring::client_iface *st, slot_storage& slt_s
 }
 
 static int client_fun(struct sockaddr_in *addr) {
-  static constexpr uint16_t kNumSlots = 64;  
+  static constexpr uint16_t kNumSlots = 128;  
   uring::client_iface iface{};
   struct io_uring_cqe *cqe;
   iface.setup(0);
