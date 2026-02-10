@@ -138,7 +138,7 @@ struct iface_base {
   }
 
   int uring_submit_and_wait(struct io_uring_cqe **cqe) {
-    static constexpr unsigned kDefaultTimeout = 1000;
+    static constexpr unsigned kDefaultTimeout = 10000;
     struct __kernel_timespec ts = {.tv_sec = 0, .tv_nsec = kDefaultTimeout};
     return io_uring_submit_and_wait_timeout(&ctx->ring, cqe, 1, &ts, nullptr);
   }
