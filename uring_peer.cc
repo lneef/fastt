@@ -50,7 +50,8 @@ static void prepare() {
 
 struct slot_storage{
     std::deque<unsigned> free_slots;
-    slot_storage(unsigned n){
+    std::vector<int64_t> elems;
+    slot_storage(unsigned n): elems(n){
         for(unsigned i = 0; i < n; ++i)
             free_slots.push_back(i);
     }
@@ -91,6 +92,7 @@ static uint64_t request_batch(uring::client_iface *st, slot_storage& slt_strge, 
     auto slt_id = slt_strge.free_slots.front();
     slt_strge.free_slots.pop_front();
     int64_t key = dist(rng);
+    slt_strge.elems[slt_id] = key;
     kv::create_kv_request(buf, slt_id, key);
     ++t;
     st->prepare_send(buf, sizeof(kv::kv_packet<kv::kv_request>), std::bit_cast<uint64_t>(buf),  st->fd, sqe);
@@ -165,6 +167,7 @@ static std::pair<size_t, unsigned> parse_completion(slot_storage& slt_strge, uin
 
     auto *resp = reinterpret_cast<packet_t *>(data + i);
     slt_strge.free_slots.push_back(resp->id);
+    assert(resp->payload.key == slt_strge.elems[resp->id]);
     ++c;
     i += sizeof(packet_t);
   }
