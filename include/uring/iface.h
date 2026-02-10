@@ -165,8 +165,10 @@ struct iface_base {
   }
 
   int process_cqe_send(struct io_uring_cqe *cqe) {
-    if (cqe->res < 0)
+    if (cqe->res < 0){
       fprintf(stderr, "bad send %s\n", strerror(-cqe->res));
+      return cqe->res;
+    }
     if (cqe->flags & IORING_CQE_F_MORE)
       return 0;
     auto *buf = std::bit_cast<void *>(cqe->user_data);
@@ -274,7 +276,7 @@ struct server_iface : iface_base {
 
   int setup(int port_arg) { return setup_base(port_arg, clients.front()); }
 
-  int uring_prepare_listen( in_addr_t s_addr) {
+  int prepare_listen( in_addr_t s_addr) {
     int enable = 1;
     int ret = setsockopt(clients.front(), SOL_SOCKET, SO_REUSEADDR, &enable,
                          sizeof(enable));
