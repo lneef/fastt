@@ -179,7 +179,7 @@ static uint64_t process_completions(uring::client_iface *st, slot_storage& slt_s
   unsigned cnt = 0;
   int ret;
   struct io_uring_cqe *cqe;
-  ret = st->uring_submit();
+  ret = st->uring_submit_and_wait(&cqe);
   if (ret == -ETIME)
     return 0;
   if (ret < 0) {
