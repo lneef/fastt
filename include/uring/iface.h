@@ -170,7 +170,7 @@ struct iface_base {
     if (cqe->flags & IORING_CQE_F_MORE)
       return 0;
     auto *buf = std::bit_cast<void *>(cqe->user_data);
-    assert(cqe->flags & IORING_CQE_F_NOTIF);
+    assert(cqe->flags == 0 || cqe->flags & IORING_CQE_F_NOTIF);
     pool.free(buf);
     return 0;
   }
