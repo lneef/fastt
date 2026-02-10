@@ -1,7 +1,5 @@
 #pragma once
 
-#include "client.h"
-#include "server.h"
 #include "uring/qpair.h"
 #include "uring/tcp.h"
 
@@ -136,7 +134,7 @@ struct iface_base {
     assert(sqe && "No free sqe");
     io_uring_prep_send_zc(sqe, peer_fd, buf, len, MSG_WAITALL, 0);
     assert((idx & 1) == 0);
-    io_uring_sqe_set_data64(sqe, tag_send(idx));
+    io_uring_sqe_set_data64(sqe, idx);
   }
 
   int uring_submit_and_wait(struct io_uring_cqe **cqe) {

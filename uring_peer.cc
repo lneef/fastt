@@ -93,7 +93,7 @@ static uint64_t request_batch(uring::client_iface *st, slot_storage& slt_strge, 
     int64_t key = dist(rng);
     kv::create_kv_request(buf, slt_id, key);
     ++t;
-    st->prepare_send(buf, sizeof(kv::kv_packet<kv::kv_request>), std::bit_cast<uint64_t>(buf),  st->fd, sqe);
+    st->prepare_send_zc(buf, sizeof(kv::kv_packet<kv::kv_request>), std::bit_cast<uint64_t>(buf),  st->fd, sqe);
   }
   return t;
 }
@@ -136,7 +136,7 @@ static std::pair<size_t, int> parse_request(uring::server_iface &iface,
     handle_request(req, new (sbuf + resp_off) kv_response_t);
     resp_off += sizeof(kv_response_t);
     if (iface.pool.kElemSize - resp_off < sizeof(kv_response_t)) {
-      iface.prepare_send(sbuf, resp_off, std::bit_cast<uint64_t>(sbuf),
+      iface.prepare_send_zc(sbuf, resp_off, std::bit_cast<uint64_t>(sbuf),
                          iface.clients[idx], sqe);
       resp_off = 0;
       sbuf = nullptr;
