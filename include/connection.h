@@ -210,7 +210,7 @@ public:
 
   ~connection_manager() {
     flush_timer.stop();
-    ;
+    
   }
 
 private:

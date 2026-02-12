@@ -107,6 +107,7 @@ static int lcore_fn(void *arg) {
   while (t < dur) {
     kv.poll_tx_completion([&](message *msg, connection*) {
       auto *hdr = msg->data<kv::kv_packet<kv::kv_completion>>();
+      msg->free();
       kv.finish(hdr->id);
       ++c;
     });
