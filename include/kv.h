@@ -12,6 +12,13 @@
 #include <rte_timer.h>
 
 #include "kv_protocol.h"
+#include <random>
+
+inline uint16_t random_port() {
+  thread_local std::mt19937 rng(std::random_device{}());
+  std::uniform_int_distribution<uint16_t> dist(1024, 65535);
+  return dist(rng);
+}
 
 inline void create_get_request(message *msg, int64_t key, uint64_t id) {
   kv::create_kv_request(static_cast<uint8_t *>(msg->data()), id, key);
@@ -34,14 +41,13 @@ public:
     cons.reserve(n);
     mask = n - 1;
     for (uint16_t i = 0; i < n; ++i) {
+        cfg.port = random_port();
       auto *con = ifc->open_connection(cfg, dmac);
       if (!con)
         return -1;
       while (!ifc->probe_connection_setup_done(con))
         ;
       con->acknowledge_all();
-
-      cfg.port = cfg.port + 1;
       cons.emplace_back(con);
     }
     return 0;
