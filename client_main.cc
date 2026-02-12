@@ -125,6 +125,7 @@ static int lcore_fn(void *arg) {
       ++c;
     });
   }
+  kv.acknowledge_all();
   auto end = rte_get_timer_cycles();
   std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
   return 0;

@@ -63,6 +63,11 @@ public:
     create_scan_request(msg, low, high, id);
   }
 
+  void acknowledge_all(){
+      for(auto* c : cons)
+          c->acknowledge_all();
+  }
+
   void finish(uint16_t id) { free_slots.push_back(id); }
 
   template <typename F> void poll_tx_completion(F &&cb) {
@@ -78,5 +83,4 @@ private:
   std::vector<slot> slots;
   uint16_t i = 0;
   uint16_t mask = 0;
-  uint64_t completion_timeout;
 };

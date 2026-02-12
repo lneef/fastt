@@ -3,7 +3,6 @@
 #include "kv_protocol.h"
 #include "message.h"
 #include "server.h"
-#include "slot.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdint>
