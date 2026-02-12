@@ -52,6 +52,7 @@ public:
       return nullptr;
     auto *con = cons[i];
     auto slot_num = free_slots.front();
+    free_slots.pop_front();
     i = (i + 1) & mask;
     new (&slots[slot_num]) slot{slot_num, con};
     return &slots[slot_num];
