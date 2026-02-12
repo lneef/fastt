@@ -70,6 +70,7 @@ public:
 
 private:
   message *prepare(rte_mbuf *mbuf, uint16_t data_size) {
+    assert(mbuf);  
     if constexpr(RTE_PKTMBUF_HEADROOM < kRequiredHeadRoom)  
         rte_pktmbuf_adj(mbuf, kRequiredHeadRoom - RTE_PKTMBUF_HEADROOM);
     auto *msg = static_cast<message *>(mbuf);

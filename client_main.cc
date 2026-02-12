@@ -115,7 +115,8 @@ static int lcore_fn(void *arg) {
       continue;
     auto *req = allocator->alloc_message(dataSize);
     kv.lookup(dist(rng), req, t);
-    tx->tx_if.send(req);
+    bool sent = tx->tx_if.send(req);
+    assert(sent);
     ++t;
   }
   while (c < t) {
