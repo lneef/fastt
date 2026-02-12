@@ -13,11 +13,11 @@
 
 #include "kv_protocol.h"
 
-inline void create_get_request(message *msg, int64_t key, int64_t id) {
+inline void create_get_request(message *msg, int64_t key, uint64_t id) {
   kv::create_kv_request(static_cast<uint8_t *>(msg->data()), id, key);
 }
 
-inline void create_scan_request(message *msg, int64_t low, int64_t high,
+inline void create_scan_request(message *msg, int64_t low, uint64_t high,
                                 int64_t id) {
   kv::create_kv_scan(msg->data<uint8_t>(), id, low, high);
 }
@@ -58,10 +58,10 @@ public:
     return &slots[slot_num];
   }
 
-  void lookup(int64_t key, message *msg, int64_t id) {
+  void lookup(int64_t key, message *msg, uint64_t id) {
     create_get_request(msg, key, id);
   };
-  void scan(int64_t low, int64_t high, message *msg, int64_t id) {
+  void scan(int64_t low, int64_t high, message *msg,  uint64_t id) {
     create_scan_request(msg, low, high, id);
   }
 
