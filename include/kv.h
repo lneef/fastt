@@ -24,7 +24,7 @@ inline void create_scan_request(message *msg, int64_t low, int64_t high,
 
 class kv_proxy {
 public:
-  kv_proxy(client_iface *ifc, uint16_t n) : ifc(ifc), slots(n), mask(n - 1) {
+  kv_proxy(client_iface *ifc, uint16_t n) : ifc(ifc), slots(n) {
     for (uint16_t i = 0; i < n; ++i)
       free_slots.push_back(i);
   }
@@ -32,6 +32,7 @@ public:
   int connect(const con_config &con, uint16_t n, rte_ether_addr &dmac) {
     con_config cfg = con;
     cons.reserve(n);
+    mask = n - 1;
     for (uint16_t i = 0; i < n; ++i) {
       auto *con = ifc->open_connection(cfg, dmac);
       if (!con)
