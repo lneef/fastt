@@ -53,7 +53,9 @@ public:
     auto *con = cons[i];
     auto slot_num = free_slots.front();
     free_slots.pop_front();
-    i = (i + 1) & mask;
+    if(con->capacity() == 0)
+        i = (i + 1) & mask;
+    con = cons[i];
     new (&slots[slot_num]) slot{slot_num, con};
     return &slots[slot_num];
   }
@@ -68,6 +70,11 @@ public:
   void acknowledge_all(){
       for(auto* c : cons)
           c->acknowledge_all();
+  }
+
+  void try_next(slot* slt){
+      slt->con = cons[i];
+      i = (i + 1) & mask;
   }
 
   void finish(uint16_t id) { free_slots.push_back(id); }

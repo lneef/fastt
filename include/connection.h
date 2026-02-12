@@ -51,6 +51,10 @@ public:
   uint16_t receive_message(message **msgs, uint16_t cnt);
   void open_connection();
 
+  unsigned capacity(){
+      return transport_impl->capacity();
+  }
+
   bool send_pkt(message *msg, bool first, bool last) {
     return transport_impl->send_pkt(msg, first, last);
   }

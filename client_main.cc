@@ -88,7 +88,7 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
   return conf;
 }
 
-static constexpr auto dur = 10000;
+static constexpr auto dur = 1e6;
 static constexpr uint16_t dataSize = sizeof(kv::kv_packet<kv::kv_request>);
 
 static int lcore_fn(void *arg) {

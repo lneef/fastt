@@ -114,7 +114,7 @@ public:
     };
 
     if(rt_handler.all_acked())
-        timer.reset(rto + rte_get_timer_cycles(), timer_cb, rte_lcore_id(), this);
+        timer.reset(rto, timer_cb, rte_lcore_id(), this);
     auto inserted = rt_handler.record_pkt(pkt, ctor);
     if (inserted)
       pkt_if->consume_pkt(pkt, sport, target);
@@ -131,7 +131,7 @@ public:
     (void)timer;
     auto *this_ptr = static_cast<transport *>(arg);
     this_ptr->probe_timeout();
-    this_ptr->timer.reset(this_ptr->rto + rte_get_timer_cycles(), timer_cb, rte_lcore_id(), this_ptr);
+    this_ptr->timer.reset(this_ptr->rto, timer_cb, rte_lcore_id(), this_ptr);
   }
 
   bool acknowledge() {
@@ -170,7 +170,7 @@ public:
     case protocol::pkt_type::FT_MSG: {
       if (hdr->ack) {
         rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
-        timer.reset(rto + rte_get_timer_cycles(), timer_cb, rte_lcore_id(), this);
+        timer.reset(rto, timer_cb, rte_lcore_id(), this);
       }
       scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
@@ -190,7 +190,7 @@ public:
             sack_payload, hdr->wnd, ts,
             [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
       }
-      timer.reset(rto + rte_get_timer_cycles(), timer_cb, rte_lcore_id(), this);
+      timer.reset(rto, timer_cb, rte_lcore_id(), this);
       mf.free();
       break;
     }
@@ -259,6 +259,10 @@ public:
       acknowledge();
       grant_returned = 0;
     }
+  }
+
+  unsigned capacity(){
+      return rt_handler.get_current_wnd();
   }
 
 private:
