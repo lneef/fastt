@@ -45,6 +45,7 @@ template <uint32_t width> struct window {
     uint32_t advanced = 0;
     while (wd[front]) {
       ++least_in_window;  
+      mwd[front]->move_headroom<protocol::ft_header>();
       f(mwd[front]);
       wd[front] = false;
       mwd[front] = nullptr;
