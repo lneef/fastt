@@ -99,13 +99,10 @@ int lcore_server_fun(void *arg) {
   auto &allocator = *adapters[myid].allocator;
 
   while (!terminate) {
-    server->poll([&](transaction_slot &slot) {
-      auto msg = slot.rx_if.read();
+    server->poll([&](message* msg, connection* con) {
       auto *resp =
           serve(&allocator, msg->data<kv::kv_packet<kv::kv_request>>());
-      slot.tx_if.send(resp, true);
-      if (!slot.has_outstanding_messages())
-        slot.finish();
+      con->send_pkt(resp, true, true);
       msg->free();  
     });
     server->complete();

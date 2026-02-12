@@ -129,11 +129,8 @@ static std::pair<size_t, int> parse_request(uring::server_iface &iface,
 
     if (!sbuf) {
       sbuf = static_cast<uint8_t *>(iface.pool.alloc());
-      if (!sbuf) {
-        assert(0);
-        ret = -1;
-        goto end;
-      }
+      if (!sbuf) 
+          std::abort();
     }
 
     if (!sqe) {

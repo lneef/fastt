@@ -1,21 +1,22 @@
 #pragma once
 
+#include "message.h"
 #include "protocol.h"
 #include "transport/msg_fragment.h"
 #include "util.h"
 
-#include <array>
 #include <bitset>
 #include <cstdint>
 #include <cstring>
 #include <generic/rte_cycles.h>
 #include <rte_branch_prediction.h>
+#include <rte_mbuf.h>
 
 template <uint32_t width> struct window {
   // reserve some headroom
   static constexpr uint32_t N = 2 * width;
   window(uint64_t min_seq)
-      : wd(), front(0), mask(N - 1), least_in_window(min_seq), max_rx(0) {}
+      : wd(), mwd(N), buffered(nullptr), front(0), mask(N - 1), least_in_window(min_seq), max_rx(0) {}
 
   uint64_t get_last_acked_packet() const { return least_in_window - 1; }
 
@@ -28,7 +29,7 @@ template <uint32_t width> struct window {
       ts = *mf.msg->get_ts();
     }
     wd[i] = true;
-    messages[i] = std::move(mf);
+    mwd[i] = std::move(mf.msg);
     return true;
   }
 
@@ -39,28 +40,64 @@ template <uint32_t width> struct window {
 
   bool beyond_window(uint64_t seq) { return seq > least_in_window + mask; }
 
+  message* fuse_message(message*& first){
+      message* start = nullptr;
+      message* end = nullptr;
+
+      if(buffered){
+          start = buffered;
+          end = static_cast<message*>(rte_pktmbuf_lastseg(buffered));
+          buffered = nullptr;
+      } else {
+          if(!first)
+              return nullptr;
+          auto *hdr = first->data<protocol::ft_header>();
+          assert(hdr->start);
+          start = first;
+          end = first;
+          wd[front] = false;
+          mwd[front] = nullptr;
+          front = (front + 1) & mask;
+          ++least_in_window;
+          if(hdr->end)
+              return start;
+      }
+
+      while(wd[front]){
+          auto* next = mwd[front];
+          end->next = next;
+          auto len = next->pkt_len;
+          auto segs = next->nb_segs;
+          end = static_cast<message*>(rte_pktmbuf_lastseg(next));
+          start->nb_segs += segs;
+          start->pkt_len += len;
+          wd[front] = false;
+          mwd[front] = nullptr;
+          auto* hdr = next->data<protocol::ft_header>();
+          front = (front + 1) & mask;
+          ++least_in_window;
+          if(hdr->end)
+              return start;
+      }
+
+      buffered = start;
+      return nullptr;
+  }
+
   template <typename F> uint32_t advance(F &&f) {
     assert(mask + 1 == wd.size());
     uint32_t advanced = 0;
     while (wd[front]) {
-      ++least_in_window;
-      if (likely(messages[front].ready()))
-        f(messages[front]);
-      wd[front] = false;
-      front = (front + 1) & mask;
-      ++advanced;
-    }
-
-    auto it = front;
-    auto head = least_in_window;
-    while (unlikely(head <= max_rx)) {
-      if (wd[it] && messages[it].ready())
-        messages[it].set(f(messages[it]));
-      it = (it + 1) & mask;
-      ++head;
+      auto* msg = fuse_message(mwd[front]);
+      if(likely(msg)){
+        f(msg);
+        ++advanced;
+      } else 
+        break;
     }
     return advanced;
   }
+
 
   bool inside(uint64_t seq) {
     return seq >= least_in_window && seq <= least_in_window + mask;
@@ -105,7 +142,8 @@ template <uint32_t width> struct window {
   }
 
   std::bitset<N> wd;
-  std::array<msg_fragment, N> messages{};
+  std::vector<message*> mwd;
+  message* buffered;
   std::size_t front, mask;
   uint64_t least_in_window;
   uint64_t max_rx;

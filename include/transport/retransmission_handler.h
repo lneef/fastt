@@ -17,12 +17,11 @@ struct sender_entry {
   list_hook link;
   message *packet;
   uint64_t seq;
-  uint16_t tid : 14;
-  uint16_t sacked : 1;
-  uint16_t retransmitted : 1;
+  bool sacked : 4;
+  bool retransmitted : 4;
   sender_entry() : packet(nullptr), seq(0), retransmitted(false) {}
-  sender_entry(message *packet, uint64_t seq, uint16_t tid, bool retransmitted)
-      : packet(packet), seq(seq), tid(tid), sacked(false),
+  sender_entry(message *packet, uint64_t seq, bool retransmitted)
+      : packet(packet), seq(seq),  sacked(false),
         retransmitted(retransmitted) {}
 
   bool requires_retry(uint64_t now, uint64_t rto) {
@@ -61,25 +60,25 @@ public:
     return burst_rtt;
   }
 
-  template <typename F> bool record_pkt(uint16_t tid, message *msg, F &&ctor) {
+  template <typename F> bool record_pkt(message *msg, F &&ctor) {
     if (unacked_packets.full() || budget == 0)
       return false;
     --budget;
     ctor(msg, seq);
     msg->inc_refcnt();
     *msg->get_ts() = 0;
-    auto *entry = unacked_packets.enqueue(msg, seq++, tid, false);
+    auto *entry = unacked_packets.enqueue(msg, seq++, false);
     send_list.push_front(*entry);
     FASTT_LOG_DEBUG("Enqueue pkt with %lu new budget %u\n", seq - 1, budget);
     return true;
   }
 
-  template <typename F> void probe_retransmit(F &&cb, uint16_t tid) {
+  template <typename F> void probe_retransmit(F &&cb) {
     for (auto &entry : send_list) {
       auto *msg = entry.packet;
       if (*msg->get_ts() == 0)
         break;
-      if (entry.tid != tid || entry.sacked)
+      if (entry.sacked)
         continue;
       FASTT_LOG_DEBUG("Retransmitting packet: %lu\n", entry.seq);
       prepare_retransmit(&entry);

@@ -4,16 +4,14 @@
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 
-void protocol::prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint8_t sid, uint64_t msg_id, uint16_t wnd, uint16_t len, bool fini, uint32_t us){
+void protocol::prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint16_t wnd, bool start, bool end, uint32_t us){
     auto *ft = msg->move_headroom<protocol::ft_header>();
     ft->ack = ack;
     ft->seq = seq;
-    ft->msg_id = msg_id;
     ft->wnd = wnd;
-    ft->fini = fini;
-    ft->sid = sid;
+    ft->start = start;
+    ft->end = end;
     ft->ts = us;
-    ft->len = len + sizeof(ft_header);
     ft->sack = 0;
     ft->type = protocol::pkt_type::FT_MSG;
 }
@@ -25,7 +23,6 @@ void protocol::prepare_ack_pkt(message* msg, uint64_t ack, uint16_t wnd, uint32_
     ft->seq = 0;
     ft->wnd = wnd;
     ft->ts = us;
-    ft->len = sizeof(ft_header) + (is_sack ? sizeof(ft_sack_payload) : 0);
     ft->type = protocol::pkt_type::FT_ACK;
 }
 
@@ -33,10 +30,10 @@ void protocol::prepare_ack_pkt(message* msg, uint64_t ack, uint16_t wnd, uint32_
 void protocol::prepare_init_header(message* msg, uint64_t seq){
     auto *ft = static_cast<ft_header*>(msg->data());
     ft->seq = seq;
-    ft->msg_id = 0;
     ft->ts = 0;
     ft->sack = 0;
-    ft->len = sizeof(ft_header);
+    ft->start = true;
+    ft->end = true;
     ft->type = protocol::pkt_type::FT_INIT;
 }
 
@@ -48,6 +45,7 @@ void protocol::prepare_init_ack_header(message* msg, uint64_t seq, uint64_t ack,
     ft->seq = seq;
     ft->ts = 0;
     ft->sack = 0;
-    ft->len = sizeof(ft_header);
+    ft->start = true;
+    ft->end = true;
     ft->type = protocol::pkt_type::FT_INIT_ACK;
 }

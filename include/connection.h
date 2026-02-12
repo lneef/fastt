@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <generic/rte_cycles.h>
 #include <memory.h>
 #include <memory>
@@ -14,6 +15,7 @@
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 #include <rte_udp.h>
+#include <utility>
 
 #include "debug.h"
 #include "dev.h"
@@ -21,8 +23,6 @@
 #include "packet_if.h"
 #include "protocol.h"
 #include "timer.h"
-#include "slot.h"
-#include "transport/msg_fragment.h"
 #include "transport/transport.h"
 #include "util.h"
 
@@ -41,22 +41,23 @@ class connection {
 public:
   connection(message_allocator *allocator, packet_if *pkt_if,
              const con_config &target, uint16_t sport,
-             connection_manager *manager, bool is_client)
+             connection_manager *manager)
       : allocator(allocator), transport_impl(std::make_unique<transport>(
                                   allocator, pkt_if, sport, target)),
-        manager(manager) {
-    slots.reserve(kMaxTransactionPerConnection);
-    for (uint16_t i = 0; i < kMaxTransactionPerConnection; ++i) {
-      slots.emplace_back(i, transport_impl.get(), is_client);
-      if (is_client)
-        free_slots.push_back(i);
-    }
-  }
+        manager(manager) {}
   void process_pkt(rte_mbuf *pkt);
   void acknowledge_all();
   void accept();
   uint16_t receive_message(message **msgs, uint16_t cnt);
   void open_connection();
+
+  bool send_pkt(message *msg, bool first, bool last) {
+    return transport_impl->send_pkt(msg, first, last);
+  }
+
+  template <typename F> void handle_incoming(F &&f) {
+    transport_impl->receive_messages([&](message *msg) { f(msg, this); });
+  }
 
   transport_statistics get_transport_stats() const {
     return transport_impl->get_stats();
@@ -64,58 +65,12 @@ public:
 
   bool active() { return transport_impl->active(); }
 
-  intrusive_list_t<transaction_slot> &get_inprogress() { return inprogress; }
-
-  void process_incoming_server() {
-    transport_impl->receive_messages([&](msg_fragment& mf) -> message* {
-      auto* hdr = mf.data<protocol::ft_header>();
-      FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
-      slots[hdr->msg_id].update_execution_state(inprogress);
-      if (!slots[hdr->msg_id].handle_incoming_server(mf, hdr->sid, hdr->fini))
-        return mf.msg;
-
-      mf.move_offset(sizeof(protocol::ft_header));  
-      FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
-      return nullptr;
-    });
-  }
-
-  void process_incoming_client(intrusive_list_t<transaction_slot> &ready) {
-    transport_impl->receive_messages([&](msg_fragment& mf) -> message * {
-      auto *hdr = mf.data<protocol::ft_header>();
-      FASTT_LOG_DEBUG("Got new data for slot %u\n", hdr->msg_id);
-      if (!slots[hdr->msg_id].handle_incoming_client(mf, hdr->sid, hdr->fini,
-                                                     ready))
-        return mf.msg;
-
-      mf.move_offset(sizeof(protocol::ft_header));  
-      FASTT_LOG_DEBUG("Got message of size %u\n", msg->pkt_len);
-      return nullptr;
-    });
-  }
-
-  transaction_slot *start_transaction() {
-    if (free_slots.empty())
-      return nullptr;
-    auto slot_id = free_slots.front();
-    free_slots.pop_front();
-    slots[slot_id].update_execution();
-    return &slots[slot_id];
-  }
-
-  void finish_transaction(transaction_slot *slot) {
-    free_slots.push_front(slot->tid);
-  }
-
   connection_manager *get_manager() { return manager; }
 
 private:
   friend class connection_manager;
   message_allocator *allocator;
   std::unique_ptr<transport> transport_impl;
-  std::vector<transaction_slot> slots;
-  intrusive_list_t<transaction_slot, &transaction_slot::link> inprogress;
-  std::deque<uint16_t> free_slots;
   connection_manager *manager;
 
 public:
@@ -166,7 +121,7 @@ public:
                     rte_be_to_cpu_16(ft.sport));
     auto [it, inserted] = flows.emplace(
         ft, std::make_unique<connection>(allocator.get(), &pkt_if, target,
-                                         source.port, this, is_client));
+                                         source.port, this));
     if (!inserted)
       return nullptr;
     it->get()->open_connection();
@@ -178,24 +133,10 @@ public:
 
   template <typename F> void poll(F &&cb) {
     fetch_from_device();
-    accept_connection();
-    for (auto &con : active) {
-      con.process_incoming_server();
-      auto &inprogress_list = con.inprogress;
-      auto it = inprogress_list.begin();
-      auto end = inprogress_list.end();
-      for (; it != end;) {
-        auto ts = it++;
-        cb(*ts);
-      }
-    }
-    con_timer_manager.manage();
-  }
-
-  void poll_single_connection(connection *con,
-                              intrusive_list_t<transaction_slot> &ready) {
-    fetch_from_device();
-    con->process_incoming_client(ready);
+    if (!is_client)
+      accept_connection();
+    for (auto &con : active)
+      con.handle_incoming(std::forward<F>(cb));
     con_timer_manager.manage();
   }
 
@@ -204,19 +145,19 @@ public:
     uint16_t valid = 0, i = 0;
     assert(vec.i == 0);
     dev.rx_burst(vec);
-    for(uint16_t i = 0; i < vec.i; ++i){
-        auto *pkt = pkt_if.consume_pkt(vec.pkts[i]);
-        if(!pkt)
-            continue;
-        vec.pkts[valid++] = pkt;
+    for (uint16_t i = 0; i < vec.i; ++i) {
+      auto *pkt = pkt_if.consume_pkt(vec.pkts[i]);
+      if (!pkt)
+        continue;
+      vec.pkts[valid++] = pkt;
     }
     vec.i = valid;
     assert(i == 0);
-    for(auto *msg : vec)
-        pkt_if.strip_header(msg, fts[i++]);
+    for (auto *msg : vec)
+      pkt_if.strip_header(msg, fts[i++]);
 
     for (auto [msg, ft] : std::ranges::zip_view(vec, fts))
-        handle_pkt(msg, ft);
+      handle_pkt(msg, ft);
     vec.clear();
     assert(vec.i == 0);
   }
@@ -242,10 +183,10 @@ public:
   std::pair<connection *, bool> add_connection(const flow_tuple &tuple,
                                                uint16_t port) {
     auto [it, inserted] = flows.emplace(
-        tuple, std::make_unique<connection>(
-                   allocator.get(), &pkt_if,
-                   con_config{tuple.sip, rte_be_to_cpu_16(tuple.sport)}, port,
-                   this, is_client));
+        tuple,
+        std::make_unique<connection>(
+            allocator.get(), &pkt_if,
+            con_config{tuple.sip, rte_be_to_cpu_16(tuple.sport)}, port, this));
     if (inserted) {
       active.push_front(*it->get());
       ++open_connections;

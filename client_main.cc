@@ -1,7 +1,10 @@
 #include "client.h"
+#include "connection.h"
 #include "iface.h"
 #include "kv.h"
+#include "kv_protocol.h"
 #include "message.h"
+#include "util.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <bits/getopt_core.h>
@@ -12,13 +15,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <generic/rte_cycles.h>
-#include <rte_cycles.h>
 #include <getopt.h>
 #include <iostream>
 #include <memory>
 #include <random>
 #include <ranges>
 #include <rte_common.h>
+#include <rte_cycles.h>
 #include <rte_eal.h>
 #include <rte_ether.h>
 #include <rte_launch.h>
@@ -40,11 +43,12 @@ struct netconfig {
 
 struct lcore_adapter {
   std::vector<std::unique_ptr<client_iface>> cifs;
-  std::vector<connection *> connections;
   std::vector<std::shared_ptr<message_allocator>> allocator;
+  con_config cfg;
+  rte_ether_addr dmac;
 
-  lcore_adapter(std::size_t n)
-      : cifs(n), connections(n), allocator(n, nullptr) {}
+  lcore_adapter(std::size_t n, con_config cfg)
+      : cifs(n), allocator(n, nullptr), cfg(cfg) {}
 };
 
 static netconfig parse_cmdline(int argc, char *argv[]) {
@@ -93,46 +97,36 @@ static int lcore_fn(void *arg) {
   std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
-  auto *con = adapter->connections[me];
   auto &allocator = adapter->allocator[me];
   auto &cif = *adapter->cifs[me];
-  kv_proxy kv(&cif, con);
+  kv_proxy kv(&cif, 128);
+  kv.connect(adapter->cfg, 4, adapter->dmac);
   uint64_t t = 0;
   uint64_t c = 0;
   auto now = rte_get_timer_cycles();
-  while(t < dur){
-      auto &done = kv.completions();
-      for(; done.size() > 0; done.pop_front()){
-          auto &slot = done.front();
-          auto resp = slot.rx_if.read();
-          resp->free();
-          kv.finish_transaction(&slot);
-          ++c;
-      }
-      kv.poll_tx_completion();
-      auto *tx = kv.start_transaction(con);
-      if(!tx)
-          continue;
-      auto* req = allocator->alloc_message(dataSize);
-      kv.lookup(dist(rng), req, t);
-      tx->tx_if.send(req, true);
-      ++t;
+  while (t < dur) {
+    kv.poll_tx_completion([&](message *msg, connection*) {
+      auto *hdr = msg->data<kv::kv_packet<kv::kv_completion>>();
+      kv.finish(hdr->id);
+      ++c;
+    });
+    auto *tx = kv.start();
+    if (!tx)
+      continue;
+    auto *req = allocator->alloc_message(dataSize);
+    kv.lookup(dist(rng), req, t);
+    tx->tx_if.send(req);
+    ++t;
   }
-  while(c < t){
-      kv.poll_tx_completion();
-      auto &done = kv.completions();
-      for(; done.size() > 0; done.pop_front()){
-          auto& slot = done.front();
-          auto resp = slot.rx_if.read();
-          resp->free();
-          ++c;
-      }
+  while (c < t) {
+    kv.poll_tx_completion([&](message *msg, connection*) {
+      auto *hdr = msg->data<kv::kv_packet<kv::kv_completion>>();
+      kv.finish(hdr->id);
+      ++c;
+    });
   }
-  kv.acknowledge();
   auto end = rte_get_timer_cycles();
-  auto stats = con->get_transport_stats();
-  std::cerr << (end - now)  / (rte_get_timer_hz() / 1e6) << std::endl;
-  std::cerr << stats.rtt << ", " << stats.acked << std::endl;
+  std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
   return 0;
 }
 
@@ -151,7 +145,7 @@ int run(netconfig &conf) {
 
   uint16_t i = 0;
   uint16_t lcore;
-  lcore_adapter adpater(rte_lcore_count());
+  lcore_adapter adpater(rte_lcore_count(), {conf.dip, conf.sports[i]});
   RTE_LCORE_FOREACH(lcore) {
     auto [port, txq, rxq, pool] = ifc->get_slice(i);
     adpater.allocator[i] = std::make_shared<message_allocator>(
@@ -159,14 +153,7 @@ int run(netconfig &conf) {
     adpater.cifs[i] = std::make_unique<client_iface>(
         port, txq, rxq, adpater.allocator[i],
         con_config{conf.sip, conf.sports[i]}, lcore);
-    auto &cif = adpater.cifs[i];
-    auto *con = cif->open_connection({conf.dip, conf.dport}, conf.dmac);
-    if (!con)
-      return -1;
-    while (!cif->probe_connection_setup_done(con))
-      ;
-    con->acknowledge_all();
-    adpater.connections[i] = con;
+    adpater.dmac = conf.dmac;
     ++i;
   }
   run(lcore_fn, &adpater);

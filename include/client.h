@@ -34,5 +34,6 @@ public:
 
 private:
   con_config scon_config;
+public:
   connection_manager manager;
 };

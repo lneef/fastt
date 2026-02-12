@@ -29,6 +29,10 @@ struct message : public rte_mbuf {
     return rte_pktmbuf_mtod(this, T *);
   }
 
+  void free(){
+      rte_pktmbuf_free(this);
+  }
+
   void shrink_headroom(uint16_t len) { rte_pktmbuf_adj(this, len); }
 };
 
