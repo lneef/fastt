@@ -40,60 +40,16 @@ template <uint32_t width> struct window {
 
   bool beyond_window(uint64_t seq) { return seq > least_in_window + mask; }
 
-  message* fuse_message(message*& first){
-      message* start = nullptr;
-      message* end = nullptr;
-
-      if(buffered){
-          start = buffered;
-          end = static_cast<message*>(rte_pktmbuf_lastseg(buffered));
-          buffered = nullptr;
-      } else {
-          if(!first)
-              return nullptr;
-          auto *hdr = first->data<protocol::ft_header>();
-          assert(hdr->start);
-          start = first;
-          end = first;
-          wd[front] = false;
-          mwd[front] = nullptr;
-          front = (front + 1) & mask;
-          ++least_in_window;
-          if(hdr->end)
-              return start;
-      }
-
-      while(wd[front]){
-          auto* next = mwd[front];
-          end->next = next;
-          auto len = next->pkt_len;
-          auto segs = next->nb_segs;
-          end = static_cast<message*>(rte_pktmbuf_lastseg(next));
-          start->nb_segs += segs;
-          start->pkt_len += len;
-          wd[front] = false;
-          mwd[front] = nullptr;
-          auto* hdr = next->data<protocol::ft_header>();
-          front = (front + 1) & mask;
-          ++least_in_window;
-          if(hdr->end)
-              return start;
-      }
-
-      buffered = start;
-      return nullptr;
-  }
-
   template <typename F> uint32_t advance(F &&f) {
     assert(mask + 1 == wd.size());
     uint32_t advanced = 0;
     while (wd[front]) {
-      auto* msg = fuse_message(mwd[front]);
-      if(likely(msg)){
-        f(msg);
-        ++advanced;
-      } else 
-        break;
+      ++least_in_window;  
+      f(mwd[front]);
+      wd[front] = false;
+      mwd[front] = nullptr;
+      front = (front + 1) & mask;
+      ++advanced;
     }
     return advanced;
   }
@@ -144,6 +100,7 @@ template <uint32_t width> struct window {
   std::bitset<N> wd;
   std::vector<message*> mwd;
   message* buffered;
+  message *msg_start = nullptr, *msg_end = nullptr;
   std::size_t front, mask;
   uint64_t least_in_window;
   uint64_t max_rx;
