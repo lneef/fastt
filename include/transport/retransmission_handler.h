@@ -1,6 +1,7 @@
 #pragma once
 #include <cassert>
 #include <cstdint>
+#include <generic/rte_cycles.h>
 #include <message.h>
 #include <rte_cycles.h>
 
@@ -21,7 +22,7 @@ struct sender_entry {
   bool retransmitted : 4;
   sender_entry() : packet(nullptr), seq(0), retransmitted(false) {}
   sender_entry(message *packet, uint64_t seq, bool retransmitted)
-      : packet(packet), seq(seq),  sacked(false),
+      : packet(packet), seq(seq), sacked(false), 
         retransmitted(retransmitted) {}
 
   bool requires_retry(uint64_t now, uint64_t rto) {
@@ -48,6 +49,12 @@ public:
       return budget;
   }
 
+  bool check_timeout(uint64_t now) {
+      if(now > timeout)
+          return true;
+      return false;
+  }
+
   uint64_t cleanup_acked_pkts(uint64_t seq) {
     uint64_t burst_rtt = 0;
     while (!unacked_packets.empty() && unacked_packets.front()->seq <= seq) {
@@ -70,6 +77,9 @@ public:
     auto *entry = unacked_packets.enqueue(msg, seq++, false);
     send_list.push_front(*entry);
     FASTT_LOG_DEBUG("Enqueue pkt with %lu new budget %u\n", seq - 1, budget);
+    if(all_acked()){
+        timeout = rte_get_timer_cycles() + rto;
+    }
     return true;
   }
 
@@ -105,6 +115,7 @@ public:
     if (!is_sack) {
       update_srtt(seq, now);
       update_budget(budget, seq);
+      timeout = now * rto;
     }
     cleanup_acked_pkts(seq);
     least_unacked_pkt = seq + 1;
@@ -120,18 +131,19 @@ public:
     assert(unacked_packets.front()->seq == least_unacked_pkt);
     for (auto i = 0u; i < payload->bit_map_len; ++i, ++pkt_seq) {
       auto ind = get_bit_indices_64(i);
-      auto val = payload->bit_map[ind.first] & (1 << ind.second);
+      auto val = payload->bit_map[ind.first] & (1ull << ind.second);
       auto &desc = unacked_packets[i];
 
       if (!val) {
         prepare_retransmit(&desc);
         retransmit_cb(desc.packet);
-      } else if (!desc.sacked)
+      } else if (!desc.sacked){
         /* we want the largest seq not acked yet */
         largest_acked = pkt_seq;
-
-      desc.sacked = true;
+        desc.sacked = true;
+      }
     }
+    timeout = now + rto;
     FASTT_LOG_DEBUG("Largest set seq num %lu\n", largest_acked);
     update_srtt(largest_acked, now);
     update_budget(budget, largest_acked);
@@ -177,4 +189,6 @@ private:
   uint64_t seq;
   uint64_t least_unacked_pkt = min_seq;
   uint64_t rtt;
+  uint64_t rto = rte_get_timer_hz() / get_ticks_ms() * 5;
+  uint64_t timeout;
 };

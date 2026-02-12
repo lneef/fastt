@@ -91,11 +91,19 @@ public:
             const con_config &target)
       : recv_wd(min_seq), target(target), rt_handler(kOustandingMessages),
         scheduler(), allocator(allocator), pkt_if(pkt_sink),
-        timer(timertype::SINGLE), sport(sport) {}
+        sport(sport) {}
 
   void probe_timeout() {
     rt_handler.probe_retransmit(
         [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
+  }
+
+
+  void check_timeout(uint64_t now){
+      if(rt_handler.all_acked())
+          return;
+      if(rt_handler.check_timeout(now))
+          probe_timeout();
   }
 
   bool send_pkt(message *pkt, bool start, bool end) {
@@ -113,8 +121,6 @@ public:
           pkt, seq, ack, recv_wd.capacity(kOustandingMessages), start, end, ts);
     };
 
-    if(rt_handler.all_acked())
-        timer.reset(rto, timer_cb, rte_lcore_id(), this);
     auto inserted = rt_handler.record_pkt(pkt, ctor);
     if (inserted)
       pkt_if->consume_pkt(pkt, sport, target);
@@ -131,7 +137,6 @@ public:
     (void)timer;
     auto *this_ptr = static_cast<transport *>(arg);
     this_ptr->probe_timeout();
-    this_ptr->timer.reset(this_ptr->rto, timer_cb, rte_lcore_id(), this_ptr);
   }
 
   bool acknowledge() {
@@ -170,7 +175,6 @@ public:
     case protocol::pkt_type::FT_MSG: {
       if (hdr->ack) {
         rt_handler.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
-        timer.reset(rto, timer_cb, rte_lcore_id(), this);
       }
       scheduler.process_seq(hdr->seq);
       if (recv_wd.is_set(hdr->seq)) {
@@ -190,7 +194,6 @@ public:
             sack_payload, hdr->wnd, ts,
             [&](message *msg) { pkt_if->consume_for_retransmission(msg); });
       }
-      timer.reset(rto, timer_cb, rte_lcore_id(), this);
       mf.free();
       break;
     }
@@ -279,7 +282,6 @@ private:
   ack_scheduler scheduler;
   message_allocator *allocator;
   packet_if *pkt_if;
-  dpdk_timer timer;
   uint16_t sport;
   uint32_t grant_returned = 0;
   uint64_t rto = rte_get_timer_hz() / get_ticks_ms() * 5;

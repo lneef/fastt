@@ -55,6 +55,10 @@ public:
       return transport_impl->capacity();
   }
 
+  void check_timeout(uint64_t now){
+      transport_impl->check_timeout(now);
+  }
+
   bool send_pkt(message *msg, bool first, bool last) {
     return transport_impl->send_pkt(msg, first, last);
   }
@@ -113,6 +117,12 @@ public:
     }
   }
 
+  void check_timeouts(){
+      auto now = rte_get_timer_cycles();
+      for(auto& con: active)
+          con.check_timeout(now);
+  }
+
   void add_mac(uint32_t ip, rte_ether_addr &mac) {
     pkt_if.add_mapping(ip, mac);
   }
@@ -141,6 +151,7 @@ public:
       accept_connection();
     for (auto &con : active)
       con.handle_incoming(std::forward<F>(cb));
+    check_timeouts();
     con_timer_manager.manage();
   }
 
