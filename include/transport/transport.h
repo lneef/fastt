@@ -77,7 +77,7 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
 
 class connection;
 class transport {
-  static constexpr uint16_t kOustandingMessages = 64;
+  static constexpr uint16_t kOustandingMessages = 128;
   friend class connection;
   enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
 
