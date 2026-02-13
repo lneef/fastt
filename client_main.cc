@@ -106,6 +106,8 @@ static int lcore_fn(void *arg) {
   uint64_t c = 0;
   auto completion_handler = [&](slot &slt) {
       auto *msg = slt.get();
+      if(!slt.get())
+          return;
       slt.take();
       msg->free();
       slt.con->put_slot(&slt);

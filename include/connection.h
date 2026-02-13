@@ -46,6 +46,7 @@ public:
       : allocator(allocator), transport_impl(std::make_unique<transport>(
                                   allocator, pkt_if, sport, target)),
         manager(manager), is_client(is_client) {
+
     slots.reserve(kMaxSlotsPerConnection);
     for (auto i = 0u; i < kMaxSlotsPerConnection; ++i) {
       slots.emplace_back(i, this);

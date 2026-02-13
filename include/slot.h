@@ -23,6 +23,7 @@ struct slot {
   }
 
   void move_to_active(intrusive_list_t<slot> &active) {
+    assert(!link.is_linked());  
     active.push_front(*this);
   }
 
