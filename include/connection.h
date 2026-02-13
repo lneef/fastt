@@ -22,6 +22,7 @@
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
+#include "slot.h"
 #include "timer.h"
 #include "transport/transport.h"
 #include "util.h"
@@ -35,43 +36,62 @@ struct statistics {
 };
 
 class connection {
-  static constexpr uint16_t kMaxTransactionPerConnection =
+  static constexpr uint16_t kMaxSlotsPerConnection =
       transport::kOustandingMessages;
 
 public:
   connection(message_allocator *allocator, packet_if *pkt_if,
              const con_config &target, uint16_t sport,
-             connection_manager *manager)
+             connection_manager *manager, bool is_client)
       : allocator(allocator), transport_impl(std::make_unique<transport>(
                                   allocator, pkt_if, sport, target)),
-        manager(manager) {}
+        manager(manager), is_client(is_client) {
+    slots.reserve(kMaxSlotsPerConnection);
+    for (auto i = 0u; i < kMaxSlotsPerConnection; ++i) {
+      slots.emplace_back(i, this);
+      free_list.emplace_back(i);
+    }
+  }
   void process_pkt(rte_mbuf *pkt);
   void acknowledge_all();
   void accept();
   uint16_t receive_message(message **msgs, uint16_t cnt);
   void open_connection();
 
-  unsigned capacity(){
-      return transport_impl->capacity();
+  unsigned capacity() { return transport_impl->capacity(); }
+
+  void check_timeout(uint64_t now) { transport_impl->check_timeout(now); }
+
+  bool send_pkt(message *msg, uint16_t sid, bool first, bool last) {
+    return transport_impl->send_pkt(msg, sid, first, last);
   }
 
-  void check_timeout(uint64_t now){
-      transport_impl->check_timeout(now);
-  }
-
-  bool send_pkt(message *msg, bool first, bool last) {
-    return transport_impl->send_pkt(msg, first, last);
-  }
-
-  template <typename F> void handle_incoming(F &&f) {
-    transport_impl->receive_messages([&](message *msg) { f(msg, this); });
+  void handle_incoming() {
+    transport_impl->receive_messages([&](message *msg) {
+      auto *hdr = msg->data<protocol::ft_header>();
+      slots[hdr->sid].handle_incoming(msg);
+      if(hdr->end && !is_client)
+        slots[hdr->sid].move_to_active(active);
+      msg->shrink_headroom(sizeof(protocol::ft_header));
+    });
   }
 
   transport_statistics get_transport_stats() const {
     return transport_impl->get_stats();
   }
 
-  bool active() { return transport_impl->active(); }
+  slot *get_slot() {
+    if (capacity() == 0 || free_list.empty())
+      return nullptr;
+    auto slt_num = free_list.front();
+    free_list.pop_front();
+    slots[slt_num].move_to_active(active);
+    return &slots[slt_num];
+  }
+
+  void put_slot(slot *slt) { free_list.push_front(slt->id); }
+
+  bool up() const { return transport_impl->active(); }
 
   connection_manager *get_manager() { return manager; }
 
@@ -79,7 +99,11 @@ private:
   friend class connection_manager;
   message_allocator *allocator;
   std::unique_ptr<transport> transport_impl;
+  std::vector<slot> slots;
+  std::deque<unsigned> free_list;
   connection_manager *manager;
+  intrusive_list_t<slot> active;
+  bool is_client;
 
 public:
   list_hook link;
@@ -117,10 +141,10 @@ public:
     }
   }
 
-  void check_timeouts(){
-      auto now = rte_get_timer_cycles();
-      for(auto& con: active)
-          con.check_timeout(now);
+  void check_timeouts() {
+    auto now = rte_get_timer_cycles();
+    for (auto &con : active)
+      con.check_timeout(now);
   }
 
   void add_mac(uint32_t ip, rte_ether_addr &mac) {
@@ -135,7 +159,7 @@ public:
                     rte_be_to_cpu_16(ft.sport));
     auto [it, inserted] = flows.emplace(
         ft, std::make_unique<connection>(allocator.get(), &pkt_if, target,
-                                         source.port, this));
+                                         source.port, this, is_client));
     if (!inserted)
       return nullptr;
     it->get()->open_connection();
@@ -145,12 +169,19 @@ public:
     return it->get();
   }
 
-  template <typename F> void poll(F &&cb) {
+  template<typename F>
+  void poll(F&& handler) {
     fetch_from_device();
     if (!is_client)
       accept_connection();
-    for (auto &con : active)
-      con.handle_incoming(std::forward<F>(cb));
+    for (auto &con : active){
+      con.handle_incoming();
+      for(auto it = con.active.begin(), end = con.active.end(); it != end; ){
+          auto& slt = *it;
+          ++it;
+          handler(slt);
+      }
+    }
     check_timeouts();
     con_timer_manager.manage();
   }
@@ -201,7 +232,7 @@ public:
         tuple,
         std::make_unique<connection>(
             allocator.get(), &pkt_if,
-            con_config{tuple.sip, rte_be_to_cpu_16(tuple.sport)}, port, this));
+            con_config{tuple.sip, rte_be_to_cpu_16(tuple.sport)}, port, this, is_client));
     if (inserted) {
       active.push_front(*it->get());
       ++open_connections;
@@ -223,10 +254,7 @@ public:
 
   void flush() { scheduler.flush(); }
 
-  ~connection_manager() {
-    flush_timer.stop();
-    
-  }
+  ~connection_manager() { flush_timer.stop(); }
 
 private:
   static void flush_cb(rte_timer *timer, void *arg) {

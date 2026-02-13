@@ -98,10 +98,14 @@ int lcore_server_fun(void *arg) {
   auto &allocator = *adapters[myid].allocator;
 
   while (!terminate) {
-    server->poll([&](message* msg, connection* con) {      
+    server->poll([&](slot& slt) {      
+      if(!slt.can_send())
+        return;
+      auto* msg = slt.get();
+      slt.take();
       auto *resp =
           serve(&allocator, msg->data<kv::kv_packet<kv::kv_request>>());
-      con->send_pkt(resp, true, true);
+      slt.send(resp);    
       msg->free();  
     });
     server->complete();

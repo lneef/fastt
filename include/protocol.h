@@ -18,11 +18,12 @@ enum pkt_type : uint8_t {
 
 struct __rte_packed_begin ft_header {
   pkt_type type : 3;
-  uint64_t wnd : 26;
+  uint64_t wnd : 16;
   uint64_t start :1;
   uint64_t end : 1;
   uint64_t sack : 1;
   uint64_t ts : 32;
+  uint64_t sid :10;
   uint64_t seq;
   uint64_t ack;
 } __rte_packed_end;
@@ -35,7 +36,7 @@ struct __rte_packed_begin ft_sack_payload {
   uint16_t bit_map_len;
 } __rte_packed_end;
 
-void prepare_ft_header(message *msg, uint64_t seq, uint64_t ack,  uint16_t wnd, 
+void prepare_ft_header(message *msg, uint64_t seq, uint64_t ack,  uint16_t sid, uint16_t wnd, 
                        bool start, bool fini, uint32_t us = 0);
 void prepare_ack_pkt(message *msg, uint64_t ack, uint16_t wnd, uint32_t us,
                      bool is_sack = false);

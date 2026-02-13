@@ -100,16 +100,16 @@ static int lcore_fn(void *arg) {
   auto me = rte_lcore_index(rte_lcore_id());
   auto &allocator = adapter->allocator[me];
   auto &cif = *adapter->cifs[me];
-  kv_proxy kv(&cif, 128);
-  kv.connect(adapter->cfg, 4, adapter->dmac);
+  kv_proxy kv(&cif);
+  kv.connect(adapter->cfg, 1, adapter->dmac);
   uint64_t t = 0;
   uint64_t c = 0;
   auto completion_handler = [&](slot &slt) {
-      auto *msg = slt.rx_if.get();
-      auto *hdr = msg->data<kv::kv_packet<kv::kv_completion>>();
-      slt.rx_if.take();
+      auto *msg = slt.get();
+      slt.take();
       msg->free();
-      kv.finish(hdr->id);
+      slt.con->put_slot(&slt);
+      slt.unlink();
       ++c;
     };
   auto now = rte_get_timer_cycles();
@@ -119,14 +119,14 @@ static int lcore_fn(void *arg) {
     if (!tx)
       continue;
     auto *req = allocator->alloc_message(dataSize);
-    kv.lookup(dist(rng), req, tx->id);
-    bool sent = tx->tx_if.send(req);
+    kv.lookup(dist(rng), req, t);
+    auto sent = tx->send(req);
     assert(sent);
     ++t;
   }
-  while (c < t) {
+  while (c < t) 
     kv.handle_active(completion_handler);  
-  }
+  
   kv.acknowledge_all();
   auto end = rte_get_timer_cycles();
   std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;

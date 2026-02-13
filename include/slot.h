@@ -1,6 +1,5 @@
 #pragma once
 
-#include "connection.h"
 #include "message.h"
 #include "transport/transport.h"
 #include "util.h"
@@ -10,10 +9,7 @@
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
 
-enum class slot_state {
-  COMPLETED,
-  RUNNING,
-};
+class connection;
 
 struct slot {
   uint32_t id;
@@ -21,13 +17,13 @@ struct slot {
   message *buffered = nullptr;
   list_hook link;
 
-  void move_to_active(intrusive_list_t<slot> &active) {
-    active.push_front(*this);
-  }
-
   void unlink() {
     if (link.is_linked())
       link.unlink();
+  }
+
+  void move_to_active(intrusive_list_t<slot>& active){
+      active.push_front(*this);
   }
 
   void handle_incoming(message *msg) {
@@ -44,21 +40,10 @@ struct slot {
   slot(uint32_t id, connection *con) : id(id), con(con) {}
   slot() = default;
 
-  struct {
-    bool send(message *msg) { return slt->con->send_pkt(msg, true, true); }
+    bool send(message *msg); 
+    bool can_send();
 
-    bool can_send(){
-        return slt->con->capacity() > 0;
-    }
+    message *get() { return buffered; }
 
-    slot *slt;
-  } tx_if{this};
-
-  struct {
-    message *get() { return slt->buffered; }
-
-    void take() { slt->buffered = nullptr; }
-
-    slot *slt;
-  } rx_if{this};
+    void take() { buffered = nullptr; }
 };

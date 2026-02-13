@@ -31,10 +31,7 @@ inline void create_scan_request(message *msg, int64_t low, uint64_t high,
 
 class kv_proxy {
 public:
-  kv_proxy(client_iface *ifc, uint16_t n) : ifc(ifc), slots(n) {
-    for (uint16_t i = 0; i < n; ++i)
-      free_slots.push_back(i);
-  }
+  kv_proxy(client_iface *ifc) : ifc(ifc) {}
 
   int connect(const con_config &con, uint16_t n, rte_ether_addr &dmac) {
     con_config cfg = con;
@@ -57,13 +54,13 @@ public:
     if (free_slots.empty())
       return nullptr;
     auto *con = cons[i];
-    auto slot_num = free_slots.front();
+    auto *slt = con->get_slot();
     free_slots.pop_front();
-    if (con->capacity() == 0)
+    if (!slt)
       i = (i + 1) & mask;
     con = cons[i];
-    new (&slots[slot_num]) slot{slot_num, con};
-    return &slots[slot_num];
+    slt = con->get_slot();
+    return slt;
   }
 
   void lookup(int64_t key, message *msg, uint64_t id) {
@@ -78,33 +75,7 @@ public:
       c->acknowledge_all();
   }
 
-  void try_next(slot *slt) {
-    slt->con = cons[i];
-    i = (i + 1) & mask;
-  }
-
-  void finish(uint16_t id) { 
-      slots[id].unlink();
-      free_slots.push_back(id); 
-
-  }
-
-  void poll_tx_completion() {
-    ifc->manager.poll([&](message *msg) {
-      auto *hdr = msg->data<kv::kv_packet_base>();
-      slots[hdr->id].handle_incoming(msg);
-    });
-  }
-
-  template<typename F>
-  void handle_active(F&& fun){
-      poll_tx_completion();
-      for(auto it = active.begin(), end = active.end(); it != end; ){
-          auto& slt = *it;
-          ++it;
-          fun(slt);
-      }
-  }
+  template <typename F> void handle_active(F &&fun) { ifc->manager.poll(fun); }
 
   void flush() { ifc->flush(); }
 
@@ -112,8 +83,7 @@ private:
   std::deque<uint16_t> free_slots;
   client_iface *ifc;
   std::vector<connection *> cons;
-  intrusive_list_t<slot> active;
-  std::vector<slot> slots;
+
   uint16_t i = 0;
   uint16_t mask = 0;
 };

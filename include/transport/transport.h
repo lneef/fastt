@@ -105,7 +105,7 @@ public:
           probe_timeout();
   }
 
-  bool send_pkt(message *pkt, bool start, bool end) {
+  bool send_pkt(message *pkt, uint16_t sid, bool start, bool end) {
     assert(cstate == connection_state::ESTABLISHED);
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
@@ -117,7 +117,7 @@ public:
         scheduler.ack_callback(ack);
       }
       protocol::prepare_ft_header(
-          pkt, seq, ack, recv_wd.capacity(kOustandingMessages), start, end, ts);
+          pkt, seq, ack, sid, recv_wd.capacity(kOustandingMessages), start, end, ts);
     };
 
     auto inserted = rt_handler.record_pkt(pkt, ctor);
@@ -134,7 +134,7 @@ public:
 
   bool acknowledge() {
     message *msg;
-    bool is_sack = recv_wd.has_holes();
+    bool is_sack = false;
     uint64_t ack = recv_wd.get_last_acked_packet();
     if (is_sack) {
       if (!scheduler.sack_pending(ack))

@@ -24,7 +24,7 @@ public:
     manager.fetch_from_device();  
     if constexpr (flush)
       manager.flush();
-    return con->active();
+    return con->up();
   }
 
   message *recv_message(connection *con);
