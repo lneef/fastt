@@ -72,6 +72,7 @@ public:
   }
 
   template <typename F> bool record_pkt(message *msg, F &&ctor) {
+    assert(!unacked_packets.full());  
     if (unacked_packets.full() || budget == 0)
       return false;
     --budget;
