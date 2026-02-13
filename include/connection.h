@@ -89,7 +89,10 @@ public:
     return &slots[slt_num];
   }
 
-  void put_slot(slot *slt) { free_list.push_front(slt->id); }
+  void put_slot(slot *slt) { 
+      free_list.push_front(slt->id); 
+      slt->unlink();
+  }
 
   bool up() const { return transport_impl->active(); }
 

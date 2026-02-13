@@ -107,6 +107,7 @@ int lcore_server_fun(void *arg) {
           serve(&allocator, msg->data<kv::kv_packet<kv::kv_request>>());
       slt.send(resp);    
       msg->free();  
+      slt.unlink();
     });
     server->complete();
   }

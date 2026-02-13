@@ -51,15 +51,13 @@ public:
   }
 
   slot *start() {
-    if (free_slots.empty())
-      return nullptr;
     auto *con = cons[i];
     auto *slt = con->get_slot();
-    free_slots.pop_front();
-    if (!slt)
+    if (!slt) {
       i = (i + 1) & mask;
-    con = cons[i];
-    slt = con->get_slot();
+      con = cons[i];
+      slt = con->get_slot();
+    }
     return slt;
   }
 
@@ -80,7 +78,6 @@ public:
   void flush() { ifc->flush(); }
 
 private:
-  std::deque<uint16_t> free_slots;
   client_iface *ifc;
   std::vector<connection *> cons;
 
