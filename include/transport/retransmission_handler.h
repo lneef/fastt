@@ -55,6 +55,10 @@ public:
       return false;
   }
 
+  void rearm(uint64_t now){
+      timeout = now + rto;
+  }
+
   uint64_t cleanup_acked_pkts(uint64_t seq) {
     uint64_t burst_rtt = 0;
     while (!unacked_packets.empty() && unacked_packets.front()->seq <= seq) {
@@ -117,7 +121,7 @@ public:
     if (!is_sack) {
       update_srtt(seq, now);
       update_budget(budget, seq);
-      timeout = now * rto;
+      timeout = now + rto;
     }
     cleanup_acked_pkts(seq);
     least_unacked_pkt = seq + 1;

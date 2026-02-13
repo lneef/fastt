@@ -101,8 +101,10 @@ public:
   void check_timeout(uint64_t now){
       if(rt_handler.all_acked())
           return;
-      if(rt_handler.check_timeout(now))
+      if(rt_handler.check_timeout(now)){
           probe_timeout();
+          rt_handler.rearm(now);
+      }
   }
 
   bool send_pkt(message *pkt, uint16_t sid, bool start, bool end) {
