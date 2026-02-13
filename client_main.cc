@@ -130,6 +130,7 @@ static int lcore_fn(void *arg) {
     kv.handle_active(completion_handler);  
   
   kv.acknowledge_all();
+  kv.flush();
   auto stats = kv.con_at(0).get_transport_stats();
   std::cerr << stats.retransmitted << ", " << stats.retransmissions << std::endl;
   auto end = rte_get_timer_cycles();

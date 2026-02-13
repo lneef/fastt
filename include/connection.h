@@ -100,6 +100,11 @@ public:
     slt->unlink();
   }
 
+  
+  void check_ack_necessary(){
+      transport_impl->maybe_acknowledge();
+  }
+
   bool up() const { return transport_impl->active(); }
 
   connection_manager *get_manager() { return manager; }
@@ -152,8 +157,10 @@ public:
 
   void check_timeouts() {
     auto now = rte_get_timer_cycles();
-    for (auto &con : active)
+    for (auto &con : active){
+      con.check_ack_necessary();  
       con.check_timeout(now);
+    }
   }
 
   void add_mac(uint32_t ip, rte_ether_addr &mac) {
@@ -234,6 +241,7 @@ public:
     }
     return con;
   }
+
   std::pair<connection *, bool> add_connection(const flow_tuple &tuple,
                                                uint16_t port) {
     auto [it, inserted] = flows.emplace(
