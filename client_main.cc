@@ -109,7 +109,6 @@ static int lcore_fn(void *arg) {
       slt.take();
       msg->free();
       slt.con->put_slot(&slt);
-      slt.unlink();
       ++c;
     };
   auto now = rte_get_timer_cycles();

@@ -22,8 +22,8 @@ struct slot {
       link.unlink();
   }
 
-  void move_to_active(intrusive_list_t<slot>& active){
-      active.push_front(*this);
+  void move_to_active(intrusive_list_t<slot> &active) {
+    active.push_front(*this);
   }
 
   void handle_incoming(message *msg) {
@@ -40,10 +40,10 @@ struct slot {
   slot(uint32_t id, connection *con) : id(id), con(con) {}
   slot() = default;
 
-    bool send(message *msg); 
-    bool can_send();
+  bool send(message *msg);
+  bool can_send();
 
-    message *get() { return buffered; }
+  message *get() { return buffered; }
 
-    void take() { buffered = nullptr; }
+  void take() { buffered = nullptr; }
 };
