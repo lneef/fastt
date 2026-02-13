@@ -152,9 +152,7 @@ public:
         desc.sacked = true;
       }
     }
-    for(auto i = 0u; i< 4; ++i){
-        std::cout << std::format("{:b}", payload->bit_map[i]) << "\n"; 
-    }
+
     timeout = rte_get_timer_cycles() + rto;
     FASTT_LOG_DEBUG("Largest set seq num %lu\n", largest_acked);
     if(largest_acked){

@@ -68,6 +68,7 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
 
   void sack_callback(uint64_t seq) {
     last_acked = seq;
+    last_sack = seq;
     pending_from_retry = false;
   }
 
