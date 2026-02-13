@@ -136,7 +136,7 @@ public:
 
   bool acknowledge() {
     message *msg;
-    bool is_sack = false;
+    bool is_sack = recv_wd.has_holes();
     uint64_t ack = recv_wd.get_last_acked_packet();
     if (is_sack) {
       if (!scheduler.sack_pending(ack))
