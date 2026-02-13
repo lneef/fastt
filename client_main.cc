@@ -23,6 +23,7 @@
 #include <rte_common.h>
 #include <rte_cycles.h>
 #include <rte_eal.h>
+#include <rte_ethdev.h>
 #include <rte_ether.h>
 #include <rte_launch.h>
 #include <rte_lcore.h>
@@ -103,14 +104,17 @@ static int lcore_fn(void *arg) {
   kv.connect(adapter->cfg, 4, adapter->dmac);
   uint64_t t = 0;
   uint64_t c = 0;
-  auto now = rte_get_timer_cycles();
-  while (t < dur) {
-    kv.poll_tx_completion([&](message *msg, connection*) {
+  auto completion_handler = [&](slot &slt) {
+      auto *msg = slt.rx_if.get();
       auto *hdr = msg->data<kv::kv_packet<kv::kv_completion>>();
+      slt.rx_if.take();
       msg->free();
       kv.finish(hdr->id);
       ++c;
-    });
+    };
+  auto now = rte_get_timer_cycles();
+  while (t < dur) {
+    kv.handle_active(completion_handler);
     auto *tx = kv.start();
     if (!tx)
       continue;
@@ -121,11 +125,7 @@ static int lcore_fn(void *arg) {
     ++t;
   }
   while (c < t) {
-    kv.poll_tx_completion([&](message *msg, connection*) {
-      auto *hdr = msg->data<kv::kv_packet<kv::kv_completion>>();
-      kv.finish(hdr->id);
-      ++c;
-    });
+    kv.handle_active(completion_handler);  
   }
   kv.acknowledge_all();
   auto end = rte_get_timer_cycles();

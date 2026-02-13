@@ -41,7 +41,7 @@ public:
     cons.reserve(n);
     mask = n - 1;
     for (uint16_t i = 0; i < n; ++i) {
-        cfg.port = random_port();
+      cfg.port = random_port();
       auto *con = ifc->open_connection(cfg, dmac);
       if (!con)
         return -1;
@@ -59,8 +59,8 @@ public:
     auto *con = cons[i];
     auto slot_num = free_slots.front();
     free_slots.pop_front();
-    if(con->capacity() == 0)
-        i = (i + 1) & mask;
+    if (con->capacity() == 0)
+      i = (i + 1) & mask;
     con = cons[i];
     new (&slots[slot_num]) slot{slot_num, con};
     return &slots[slot_num];
@@ -69,24 +69,41 @@ public:
   void lookup(int64_t key, message *msg, uint64_t id) {
     create_get_request(msg, key, id);
   };
-  void scan(int64_t low, int64_t high, message *msg,  uint64_t id) {
+  void scan(int64_t low, int64_t high, message *msg, uint64_t id) {
     create_scan_request(msg, low, high, id);
   }
 
-  void acknowledge_all(){
-      for(auto* c : cons)
-          c->acknowledge_all();
+  void acknowledge_all() {
+    for (auto *c : cons)
+      c->acknowledge_all();
   }
 
-  void try_next(slot* slt){
-      slt->con = cons[i];
-      i = (i + 1) & mask;
+  void try_next(slot *slt) {
+    slt->con = cons[i];
+    i = (i + 1) & mask;
   }
 
-  void finish(uint16_t id) { free_slots.push_back(id); }
+  void finish(uint16_t id) { 
+      slots[id].unlink();
+      free_slots.push_back(id); 
 
-  template <typename F> void poll_tx_completion(F &&cb) {
-    ifc->manager.poll(cb);
+  }
+
+  void poll_tx_completion() {
+    ifc->manager.poll([&](message *msg) {
+      auto *hdr = msg->data<kv::kv_packet_base>();
+      slots[hdr->id].handle_incoming(msg);
+    });
+  }
+
+  template<typename F>
+  void handle_active(F&& fun){
+      poll_tx_completion();
+      for(auto it = active.begin(), end = active.end(); it != end; ){
+          auto& slt = *it;
+          ++it;
+          fun(slt);
+      }
   }
 
   void flush() { ifc->flush(); }
@@ -95,6 +112,7 @@ private:
   std::deque<uint16_t> free_slots;
   client_iface *ifc;
   std::vector<connection *> cons;
+  intrusive_list_t<slot> active;
   std::vector<slot> slots;
   uint16_t i = 0;
   uint16_t mask = 0;

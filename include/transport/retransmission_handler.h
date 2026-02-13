@@ -43,7 +43,7 @@ public:
     statistics() : acked(0), retransmitted(0) {}
   };
   retransmission_handler(uint32_t queued_packets, uint32_t budget = 1)
-      : unacked_packets(2 * queued_packets), budget(budget), seq(min_seq), rtt() {}
+      : unacked_packets(4 * queued_packets), budget(budget), seq(min_seq), rtt() {}
 
   unsigned get_current_wnd() const{
       return budget;
@@ -84,12 +84,14 @@ public:
   }
 
   template <typename F> void probe_retransmit(F &&cb) {
-    for (auto &entry : send_list) {
+      
+    for (unsigned i = 0, end = unacked_packets.size(); i < end; ++i) {
+      auto& entry = unacked_packets[i];  
       auto *msg = entry.packet;
       if (*msg->get_ts() == 0)
         break;
-      if (entry.sacked)
-        continue;
+      if(entry.sacked)
+          continue;
       FASTT_LOG_DEBUG("Retransmitting packet: %lu\n", entry.seq);
       prepare_retransmit(&entry);
       cb(msg);

@@ -21,7 +21,6 @@
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
-#include "timer.h"
 #include "transport/msg_fragment.h"
 #include "window.h"
 
@@ -131,12 +130,6 @@ public:
     auto &rt_stats = rt_handler.get_stats();
     return {rt_stats.retransmitted, rt_stats.acked, stats.sent,
             stats.retransmissions, rt_stats.rtt};
-  }
-
-  static void timer_cb(rte_timer *timer, void *arg) {
-    (void)timer;
-    auto *this_ptr = static_cast<transport *>(arg);
-    this_ptr->probe_timeout();
   }
 
   bool acknowledge() {
@@ -258,10 +251,14 @@ public:
     /* maybe we lost pkts */
     if (recv_wd.max_rx > recv_wd.least_in_window)
       grant_returned += recv_wd.max_rx - recv_wd.least_in_window;
+  }
+
+  void maybe_acknowledge(){
     if (grant_returned >= kOustandingMessages / 4 || recv_wd.has_holes()) {
       acknowledge();
       grant_returned = 0;
     }
+
   }
 
   unsigned capacity(){

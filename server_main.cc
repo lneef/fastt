@@ -98,7 +98,7 @@ int lcore_server_fun(void *arg) {
   auto &allocator = *adapters[myid].allocator;
 
   while (!terminate) {
-    server->poll([&](message* msg, connection* con) {
+    server->poll([&](message* msg, connection* con) {      
       auto *resp =
           serve(&allocator, msg->data<kv::kv_packet<kv::kv_request>>());
       con->send_pkt(resp, true, true);
