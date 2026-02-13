@@ -151,8 +151,10 @@ public:
     }
     timeout = now + rto;
     FASTT_LOG_DEBUG("Largest set seq num %lu\n", largest_acked);
-    update_srtt(largest_acked, now);
-    update_budget(budget, largest_acked);
+    if(largest_acked){
+        update_srtt(largest_acked, now);
+        update_budget(budget, largest_acked);
+    }
   }
 
   auto size() { return unacked_packets.size(); }
@@ -195,6 +197,6 @@ private:
   uint64_t seq;
   uint64_t least_unacked_pkt = min_seq;
   uint64_t rtt;
-  uint64_t rto = rte_get_timer_hz() / get_ticks_ms() * 5;
+  uint64_t rto = get_ticks_ms() * 5;
   uint64_t timeout;
 };
