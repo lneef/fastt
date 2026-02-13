@@ -70,8 +70,10 @@ public:
     transport_impl->receive_messages([&](message *msg) {
       auto *hdr = msg->data<protocol::ft_header>();
       slots[hdr->sid].handle_incoming(msg);
-      if(hdr->end && !is_client)
+      if (hdr->end && !is_client) {
+        assert(!slots[hdr->sid].link.is_linked());
         slots[hdr->sid].move_to_active(active);
+      }
       msg->shrink_headroom(sizeof(protocol::ft_header));
     });
   }
@@ -81,6 +83,7 @@ public:
   }
 
   slot *get_slot() {
+    assert(is_client);
     if (capacity() == 0 || free_list.empty())
       return nullptr;
     auto slt_num = free_list.front();
@@ -89,9 +92,10 @@ public:
     return &slots[slt_num];
   }
 
-  void put_slot(slot *slt) { 
-      free_list.push_front(slt->id); 
-      slt->unlink();
+  void put_slot(slot *slt) {
+    assert(slt->link.is_linked());
+    free_list.push_front(slt->id);
+    slt->unlink();
   }
 
   bool up() const { return transport_impl->active(); }
@@ -172,17 +176,16 @@ public:
     return it->get();
   }
 
-  template<typename F>
-  void poll(F&& handler) {
+  template <typename F> void poll(F &&handler) {
     fetch_from_device();
     if (!is_client)
       accept_connection();
-    for (auto &con : active){
+    for (auto &con : active) {
       con.handle_incoming();
-      for(auto it = con.active.begin(), end = con.active.end(); it != end; ){
-          auto& slt = *it;
-          ++it;
-          handler(slt);
+      for (auto it = con.active.begin(), end = con.active.end(); it != end;) {
+        auto &slt = *it;
+        ++it;
+        handler(slt);
       }
     }
     check_timeouts();
@@ -232,10 +235,10 @@ public:
   std::pair<connection *, bool> add_connection(const flow_tuple &tuple,
                                                uint16_t port) {
     auto [it, inserted] = flows.emplace(
-        tuple,
-        std::make_unique<connection>(
-            allocator.get(), &pkt_if,
-            con_config{tuple.sip, rte_be_to_cpu_16(tuple.sport)}, port, this, is_client));
+        tuple, std::make_unique<connection>(
+                   allocator.get(), &pkt_if,
+                   con_config{tuple.sip, rte_be_to_cpu_16(tuple.sport)}, port,
+                   this, is_client));
     if (inserted) {
       active.push_front(*it->get());
       ++open_connections;
