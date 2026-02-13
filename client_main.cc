@@ -110,7 +110,8 @@ static int lcore_fn(void *arg) {
           return;
       slt.take();
       msg->free();
-      slt.con->put_slot(&slt);
+      if(slt.complete())
+        slt.con->put_slot(&slt);
       ++c;
     };
   auto now = rte_get_timer_cycles();

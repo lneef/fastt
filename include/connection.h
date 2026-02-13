@@ -75,6 +75,7 @@ public:
         assert(!slots[hdr->sid].link.is_linked());
         slots[hdr->sid].move_to_active(active);
       }
+      slots[hdr->sid].outstanding = hdr->end;
       msg->shrink_headroom(sizeof(protocol::ft_header));
     });
   }

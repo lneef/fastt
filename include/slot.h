@@ -15,11 +15,17 @@ struct slot {
   uint32_t id;
   connection *con;
   message *buffered = nullptr;
+  bool outstanding = false;
   list_hook link;
 
   void unlink() {
     if (link.is_linked())
       link.unlink();
+    outstanding = true;
+  }
+
+  bool complete(){
+      return outstanding;
   }
 
   void move_to_active(intrusive_list_t<slot> &active) {
