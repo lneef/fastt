@@ -283,6 +283,6 @@ private:
   packet_if *pkt_if;
   uint16_t sport;
   uint32_t grant_returned = 0;
-  uint64_t rto = rte_get_timer_hz() / get_ticks_ms() * 5;
+  uint64_t rto = get_ticks_ms() * 5;
   connection_state cstate = connection_state::ESTABLISHING;
 };
