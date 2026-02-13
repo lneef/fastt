@@ -115,14 +115,14 @@ public:
     send_list.push_front(*entry);
   }
 
-  void acknowledge(uint64_t seq, uint16_t budget, uint64_t now, bool is_sack) {
+  void acknowledge(uint64_t seq, uint16_t budget, uint64_t ts, bool is_sack) {
     if (seq < least_unacked_pkt)
       return;
     stats.acked = seq;
     if (!is_sack) {
-      update_srtt(seq, now);
+      update_srtt(seq, ts);
       update_budget(budget, seq);
-      timeout = now + rto;
+      timeout = rte_get_timer_cycles() + rto;
     }
     cleanup_acked_pkts(seq);
     least_unacked_pkt = seq + 1;
@@ -130,7 +130,7 @@ public:
 
   template <typename F>
   void acknowledge_sack(protocol::ft_sack_payload *payload, uint64_t budget,
-                        uint64_t now, F &&retransmit_cb) {
+                        uint64_t ts, F &&retransmit_cb) {
     auto pkt_seq = least_unacked_pkt;
     uint64_t largest_acked = 0;
     assert(payload->bit_map_len > 0);
@@ -150,10 +150,10 @@ public:
         desc.sacked = true;
       }
     }
-    timeout = now + rto;
+    timeout = rte_get_timer_cycles() + rto;
     FASTT_LOG_DEBUG("Largest set seq num %lu\n", largest_acked);
     if(largest_acked){
-        update_srtt(largest_acked, now);
+        update_srtt(largest_acked, ts);
         update_budget(budget, largest_acked);
     }
   }

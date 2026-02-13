@@ -77,6 +77,10 @@ public:
 
   void flush() { ifc->flush(); }
 
+  connection& con_at(unsigned i){
+      return *cons[i];
+  }
+
 private:
   client_iface *ifc;
   std::vector<connection *> cons;

@@ -260,7 +260,6 @@ public:
       acknowledge();
       grant_returned = 0;
     }
-
   }
 
   unsigned capacity(){
