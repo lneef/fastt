@@ -16,7 +16,7 @@ template <uint32_t width> struct window {
   // reserve some headroom
   static constexpr uint32_t N = 2 * width;
   window(uint64_t min_seq)
-      : wd(), mwd(N), buffered(nullptr), front(0), mask(N - 1), least_in_window(min_seq), max_rx(0) {}
+      : wd(N), mwd(N), buffered(nullptr), front(0), mask(N - 1), least_in_window(min_seq), max_rx(0) {}
 
   uint64_t get_last_acked_packet() const { return least_in_window - 1; }
 
@@ -78,9 +78,11 @@ template <uint32_t width> struct window {
 
   uint16_t copy_bitset(protocol::ft_sack_payload *data) {
     uint16_t id = 0;
-    std::memset(data, 0,
+    std::memset(data->bit_map, 0,
                 (max_rx - least_in_window + 64) /
-                    64); /* 64 since least_in_window is part of the window */
+                    64 * sizeof(uint64_t)); /* 64 since least_in_window is part of the window */
+    assert(protocol::ft_sack_payload::kBitMapLen * 64 >= (max_rx - least_in_window));
+
     for (auto i = least_in_window; i <= max_rx; ++i, ++id) {
       auto ind = get_bit_indices_64(id);
       data->bit_map[ind.first] |= static_cast<uint64_t>(wd[index(i)])
@@ -97,7 +99,7 @@ template <uint32_t width> struct window {
     return now - ts;
   }
 
-  std::bitset<N> wd;
+  std::vector<bool> wd;
   std::vector<message*> mwd;
   message* buffered;
   message *msg_start = nullptr, *msg_end = nullptr;
