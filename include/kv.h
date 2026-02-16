@@ -1,62 +1,90 @@
 #pragma once
 
 #include "client.h"
+#include "connection.h"
 #include "message.h"
 #include "slot.h"
 #include "util.h"
 #include <cstdint>
 #include <generic/rte_cycles.h>
+#include <rte_ether.h>
 #include <rte_lcore.h>
 #include <rte_timer.h>
 
 #include "kv_protocol.h"
+#include <random>
 
-inline void create_put_request(message *msg, int64_t key, int64_t val) {
-  auto *kv_req = static_cast<kv_packet<kv_request> *>(msg->data());
-  kv_req->payload.op = request_t::PUT;
-  kv_req->payload.key = key;
-  kv_req->payload.val = val;
+inline uint16_t random_port() {
+  thread_local std::mt19937 rng(std::random_device{}());
+  std::uniform_int_distribution<uint16_t> dist(1024, 65535);
+  return dist(rng);
 }
 
-inline void create_get_request(message *msg, int64_t key, int64_t id) {
-  auto *kv_req = static_cast<kv_packet<kv_request> *>(msg->data());
-  kv_req->pt = packet_t::SINGLE;
-  kv_req->id = id;
-  kv_req->payload.op = request_t::GET;
-  kv_req->payload.key = key;
+inline void create_get_request(message *msg, int64_t key, uint64_t id) {
+  kv::create_kv_request(static_cast<uint8_t *>(msg->data()), id, key);
+}
+
+inline void create_scan_request(message *msg, int64_t low, uint64_t high,
+                                int64_t id) {
+  kv::create_kv_scan(msg->data<uint8_t>(), id, low, high);
 }
 
 class kv_proxy {
 public:
-  kv_proxy(client_iface *ifc, connection *con)
-      : ifc(ifc), con(con), completion_timeout(rte_get_timer_hz() / 1e4) {
+  kv_proxy(client_iface *ifc) : ifc(ifc) {}
 
+  int connect(const con_config &con, uint16_t n, rte_ether_addr &dmac) {
+    con_config cfg = con;
+    cons.reserve(n);
+    mask = n - 1;
+    for (uint16_t i = 0; i < n; ++i) {
+      cfg.port = random_port();
+      auto *con = ifc->open_connection(cfg, dmac);
+      if (!con)
+        return -1;
+      while (!ifc->probe_connection_setup_done(con))
+        ;
+      con->acknowledge_all();
+      cons.emplace_back(con);
+    }
+    return 0;
   }
 
-  transaction_slot* start_transaction(connection *con);
-  void lookup(int64_t key, message *msg, int64_t id) { create_get_request(msg, key, id); };
-  void acknowledge() { con->acknowledge_all(); }
-  void finish_transaction(transaction_slot *slot);
-
-  void poll_tx_completion() {  
-    con->get_manager()->poll_single_connection(con, ready);
+  slot *start() {
+    auto *con = cons[i];
+    auto *slt = con->get_slot();
+    if (!slt) {
+      i = (i + 1) & mask;
+      con = cons[i];
+      slt = con->get_slot();
+    }
+    return slt;
   }
 
-  intrusive_list_t<transaction_slot> &completions() { return ready; }
+  void lookup(int64_t key, message *msg, uint64_t id) {
+    create_get_request(msg, key, id);
+  };
+  void scan(int64_t low, int64_t high, message *msg, uint64_t id) {
+    create_scan_request(msg, low, high, id);
+  }
+
+  void acknowledge_all() {
+    for (auto *c : cons)
+      c->acknowledge_all();
+  }
+
+  template <typename F> void handle_active(F &&fun) { ifc->manager.poll(fun); }
 
   void flush() { ifc->flush(); }
 
-private:
-  static void poll_tx_completion_cb(rte_timer *timer, void *arg) {
-    (void)timer;
-    auto *kv = static_cast<kv_proxy *>(arg);
-    kv->poll_tx_completion();
-    // Assume one request
-    // with one response
+  connection& con_at(unsigned i){
+      return *cons[i];
   }
+
+private:
   client_iface *ifc;
-  connection *con;
-  rte_timer timer;
-  intrusive_list_t<transaction_slot> ready;
-  uint64_t completion_timeout;
+  std::vector<connection *> cons;
+
+  uint16_t i = 0;
+  uint16_t mask = 0;
 };

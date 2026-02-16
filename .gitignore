@@ -2,4 +2,7 @@ build/
 compile_commands.json
 subprojects/.wraplock
 subprojects/tlx
+subprojects/gflags-2.2.2
+subprojects/packagecache
+subprojects/hdr_histogram
 .cache/

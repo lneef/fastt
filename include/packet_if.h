@@ -11,16 +11,24 @@
 #include <rte_ip4.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
+#include <rte_memory.h>
 #include <rte_udp.h>
+#include <rte_gro.h>
 
 class packet_if {
   static constexpr uint16_t kdefaultTTL = 64;
   static constexpr uint16_t kdefaultARPTableSize = 1024;
+  static constexpr uint16_t kMaxFlowNum = 32;
+  static constexpr uint16_t kMaxPktPerFlow = 128;
 
 public:
   packet_if(packet_scheduler *scheduler, uint32_t sip, uint16_t port)
       : arp_table(kdefaultARPTableSize), scheduler(scheduler), sip(sip) {
     rte_eth_macaddr_get(port, &smac);
+    gro_param.gro_types = RTE_GRO_UDP_IPV4;
+    gro_param.socket_id = SOCKET_ID_ANY;
+    gro_param.max_flow_num = kMaxFlowNum;
+    gro_param.max_item_per_flow = kMaxPktPerFlow;
   }
 
   rte_udp_hdr *udp_header(message *msg, uint16_t sport, uint16_t dport) {
@@ -38,7 +46,7 @@ public:
     auto *ipv4 = msg->move_headroom<rte_ipv4_hdr>();
     ipv4->src_addr = source;
     ipv4->dst_addr = target;
-    ipv4->fragment_offset = 0;
+    ipv4->fragment_offset = rte_cpu_to_be_16(RTE_IPV4_HDR_DF_FLAG);
     ipv4->next_proto_id = IPPROTO_UDP;
     ipv4->time_to_live = kdefaultTTL;
     ipv4->total_length = rte_cpu_to_be_16(msg->pkt_len);
@@ -116,24 +124,28 @@ public:
     rte_pktmbuf_adj(mbuf, sizeof(rte_udp_hdr));
   }
 
-  message *consume_pkt(rte_mbuf *mbuf, flow_tuple &ft) {
+  message *consume_pkt(rte_mbuf *mbuf) {
     if (!check_ether(mbuf)) {
       broken_packet(mbuf);
       return nullptr;
     }
-    if (check_ip_cksum(mbuf))
-      strip_ether_ip(mbuf, ft);
-    else {
+
+    if (!check_ip_cksum(mbuf)){
       broken_packet(mbuf);
       return nullptr;
     }
-    if (check_udp_cksum(mbuf))
-      strip_udp(mbuf, ft);
-    else {
+
+    if (!check_udp_cksum(mbuf)){
       broken_packet(mbuf);
       return nullptr;
     }
+
     return static_cast<message *>(mbuf);
+  }
+
+  void strip_header(message* msg, flow_tuple& ft){
+      strip_ether_ip(msg, ft);
+      strip_udp(msg, ft);
   }
 
 private:
@@ -141,4 +153,5 @@ private:
   rte_ether_addr smac;
   packet_scheduler *scheduler;
   uint32_t sip;
+  rte_gro_param gro_param;
 };

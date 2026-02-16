@@ -3,7 +3,6 @@
 #include "kv_protocol.h"
 #include "message.h"
 #include "server.h"
-#include "slot.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdint>
@@ -29,7 +28,7 @@ struct netconfig {
 };
 
 struct lcore_server_adapter {
-  std::unique_ptr<server_iface> iface;
+  std::unique_ptr<server_iface<>> iface;
   std::shared_ptr<message_allocator> allocator;
 };
 
@@ -40,30 +39,30 @@ static constexpr uint32_t kStoreSize = 1024 * 1024;
 static tlx::btree_map<int64_t, int64_t> store;
 
 static void prepare() {
-  uint32_t size = kStoreSize;
-  for (auto [k, v] :
-       std::ranges::views::iota(0u, size) | std::views::transform([&](int) {
-         return std::make_pair(dist(rng), dist(rng));
-       })) {
-    store[k] = v;
-  }
+uint32_t size = kStoreSize;
+for (auto [k, v] :
+   std::ranges::views::iota(0u, size) | std::views::transform([&](int) {
+     return std::make_pair(dist(rng), dist(rng));
+   })) {
+store[k] = v;
+}
 }
 
 static message *serve(message_allocator *allocator,
-                      kv_packet<kv_request> *packet) {
+                      kv::kv_packet<kv::kv_request> *packet) {
   auto key = packet->payload.key;
   auto it = store.find(key);
 
-  message *msg = allocator->alloc_message(sizeof(kv_packet<kv_completion>));
-  auto *completion = rte_pktmbuf_mtod(msg, kv_packet<kv_completion> *);
+  message *msg = allocator->alloc_message(sizeof(kv::kv_packet<kv::kv_completion>));
+  auto *completion = msg->data<kv::kv_packet<kv::kv_completion>>();
   completion->id = packet->id;
   completion->pt = packet->pt;
   completion->payload.key = packet->payload.key;
   if (it == store.end()) {
-    completion->payload.reponse = response_t::FAILURE;
+    completion->payload.reponse = kv::response_t::FAILURE;
     completion->payload.val = 0;
   } else {
-    completion->payload.reponse = response_t::SUCCESS;
+    completion->payload.reponse = kv::response_t::SUCCESS;
     completion->payload.val = it->second;
   }
   return msg;
@@ -99,14 +98,15 @@ int lcore_server_fun(void *arg) {
   auto &allocator = *adapters[myid].allocator;
 
   while (!terminate) {
-    server->poll([&](transaction_slot &slot) {
-      auto *msg = slot.rx_if.read();
+    server->poll([&](slot& slt) {      
+      while(!slt.can_send())
+        return;
+      auto msg = std::move(slt).get();  
       auto *resp =
-          serve(&allocator, rte_pktmbuf_mtod(msg, kv_packet<kv_request> *));
-      slot.tx_if.send(resp, true);
-      if (!slot.has_outstanding_messages())
-        slot.finish();
-      message_allocator::deallocate(msg);
+          serve(&allocator, msg.buffered->data<kv::kv_packet<kv::kv_request>>());
+      slt.send(resp);    
+      msg.free();
+      slt.unlink();
     });
     server->complete();
   }
@@ -129,7 +129,7 @@ int run(netconfig &conf) {
     auto& adapter = adapters[lcore_id];  
     auto [port, txq, rxq, pool] = ifc->get_slice(i);
     adapter.allocator = std::make_shared<message_allocator>(("mpool" + std::to_string(i)).c_str(),  8191);
-    adapter.iface = std::make_unique<server_iface>(
+    adapter.iface = std::make_unique<server_iface<>>(
         port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator, lcore_id);
     ++i;
   }

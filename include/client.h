@@ -21,10 +21,10 @@ public:
         manager(true, port, txq, rxq, scon_config.ip, pool, lcore_id) {}
 
   template <bool flush = true> bool probe_connection_setup_done(connection *con) {
-    manager.fetch_from_device();  
+    manager.fetch_from_qpair();  
     if constexpr (flush)
       manager.flush();
-    return con->active();
+    return con->up();
   }
 
   message *recv_message(connection *con);
@@ -34,5 +34,6 @@ public:
 
 private:
   con_config scon_config;
+public:
   connection_manager manager;
 };

@@ -9,6 +9,7 @@ class packet_scheduler {
 public:
   static constexpr uint16_t kDefaultOutBurstSize = 32;  
   bool add_pkt(rte_mbuf *pkt);
+  bool add_pkt_non_blocking(rte_mbuf* pkt);
   uint16_t flush();
   packet_scheduler(qpair *dev): dev(dev), buffer(kDefaultOutBurstSize), ptr(0) {}
 

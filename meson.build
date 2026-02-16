@@ -3,14 +3,18 @@ project('dpdk-perf', 'cpp',
   default_options: ['warning_level=2', 'cpp_std=c++23', 'buildtype=debugoptimized'])
 
 cmake = import('cmake')
-dpdk_dep = dependency('libdpdk', method: 'pkg-config', required: true, static: true)
+dpdk_dep = dependency('libdpdk', method: 'pkg-config', required: true, static: true, version: '25.11.0')
 tlx_proj = cmake.subproject('tlx')
 tlx_dep = tlx_proj.dependency('tlx')
+hdr_hist = cmake.subproject('hdr_histogram')
+hdr_histogram_dep = hdr_hist.dependency('hdr_histogram')
+gflags_dep = dependency('gflags', required: true)
 
 add_project_arguments('-D_POSIX_C_SOURCE=200809L', language: 'c')
 add_project_arguments('-Wpedantic', language: 'c')
+add_project_arguments('-fno-omit-frame-pointer', language: 'cpp')
 
-sources = files('src/client.cc', 'src/connection.cc', 'src/iface.cc', 'src/message.cc', 'src/packet_scheduler.cc', 'src/protocol.cc', 'src/util.cc', 'src/log.cc', 'src/kv.cc')
+sources = files('src/client.cc', 'src/connection.cc', 'src/iface.cc', 'src/message.cc', 'src/packet_scheduler.cc', 'src/protocol.cc', 'src/util.cc', 'src/log.cc', 'src/slot.cc')
 
 fastt_lib = static_library('fastt', sources, include_directories: include_directories('include'), 
   dependencies: [dpdk_dep], link_args: ['-lcap', '-Wl,--allow-multiple-definition', '-Wl,--whole-archive'])
@@ -18,5 +22,4 @@ fastt_lib = static_library('fastt', sources, include_directories: include_direct
 
 executable('client', 'client_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep], link_with: fastt_lib, link_args: ['-lcap'])
 executable('server', 'server_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep, tlx_dep], link_with: fastt_lib, link_args: ['-lcap'])
-
 executable('uring', 'uring_peer.cc', include_directories: include_directories('include'), dependencies: [tlx_dep], link_args: ['-luring'])

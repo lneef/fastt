@@ -21,13 +21,15 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
 #include <utility>
 
 #include "uring/iface.h"
+#include "uring/tcp.h"
 #include <tlx/container/btree_map.hpp>
 
-static constexpr uint32_t kDefaultTXN = 100;
+static constexpr uint32_t kDefaultTXN = 1e6;
 static constexpr uint16_t kDefaultSQBatch = 8;
 
 static std::random_device dev;
@@ -47,39 +49,39 @@ static void prepare() {
   assert(store.size() == kStoreSize);
 }
 
-struct slot_storage{
-    std::deque<unsigned> free_slots;
-    slot_storage(unsigned n){
-        for(unsigned i = 0; i < n; ++i)
-            free_slots.push_back(i);
-    }
+struct slot_storage {
+  std::deque<unsigned> free_slots;
+  std::vector<int64_t> elems;
+  slot_storage(unsigned n) : elems(n) {
+    for (unsigned i = 0; i < n; ++i)
+      free_slots.push_back(i);
+  }
 };
 
-
 unsigned seen = 0;
-static int handle_request(kv_packet<kv_request> *req,
-                          kv_packet<kv_completion> *completion) {
+static int handle_request(kv::kv_packet<kv::kv_request> *req,
+                          kv::kv_packet<kv::kv_completion> *completion) {
   auto key = req->payload.key;
-  printf("%ld\n", key);
   auto it = store.find(key);
   completion->id = req->id;
   completion->pt = req->pt;
   completion->payload.key = req->payload.key;
   if (it == store.end()) {
-    completion->payload.reponse = response_t::FAILURE;
+    completion->payload.reponse = kv::response_t::FAILURE;
     completion->payload.val = 0;
   } else {
-    completion->payload.reponse = response_t::SUCCESS;
+    completion->payload.reponse = kv::response_t::SUCCESS;
     completion->payload.val = it->second;
   }
   ++seen;
   return 0;
 }
 
-static uint64_t request_batch(uring::client_iface *st, slot_storage& slt_strge, uint64_t t, uint8_t bs) {
+static uint64_t request_batch(uring::client_iface *st, slot_storage &slt_strge,
+                              uint64_t t, uint8_t bs) {
   for (auto i = 0u; i < std::min<unsigned>(bs, kDefaultTXN - t); ++i) {
-    if(!slt_strge.free_slots.size())
-        break;
+    if (!slt_strge.free_slots.size())
+      break;
     uint8_t *buf = static_cast<uint8_t *>(st->pool.alloc());
     if (!buf)
       break;
@@ -91,10 +93,11 @@ static uint64_t request_batch(uring::client_iface *st, slot_storage& slt_strge, 
     auto slt_id = slt_strge.free_slots.front();
     slt_strge.free_slots.pop_front();
     int64_t key = dist(rng);
-    printf("%ld\n", key);
-    create_kv_request(buf, slt_id, key);
+    slt_strge.elems[slt_id] = key;
+    kv::create_kv_request(buf, slt_id, key);
     ++t;
-    st->prepare_send(buf, sizeof(kv_packet<kv_request>), std::bit_cast<uint64_t>(buf),  st->fd, sqe);
+    st->prepare_send(buf, sizeof(kv::kv_packet<kv::kv_request>),
+                     std::bit_cast<uint64_t>(buf), st->fd, sqe);
   }
   return t;
 }
@@ -103,8 +106,8 @@ unsigned prsd = 0;
 static std::pair<size_t, int> parse_request(uring::server_iface &iface,
                                             uint8_t *data, size_t size,
                                             unsigned idx) {
-  using kv_request_t = kv_packet<kv_request>;
-  using kv_response_t = kv_packet<kv_completion>;
+  using kv_request_t = kv::kv_packet<kv::kv_request>;
+  using kv_response_t = kv::kv_packet<kv::kv_completion>;
   int ret = 0;
   unsigned i = 0;
   struct io_uring_sqe *sqe = nullptr;
@@ -117,11 +120,8 @@ static std::pair<size_t, int> parse_request(uring::server_iface &iface,
 
     if (!sbuf) {
       sbuf = static_cast<uint8_t *>(iface.pool.alloc());
-      if (!sbuf) {
-        assert(0);
-        ret = -1;
-        goto end;
-      }
+      if (!sbuf) 
+          std::abort();
     }
 
     if (!sqe) {
@@ -147,17 +147,17 @@ static std::pair<size_t, int> parse_request(uring::server_iface &iface,
     i += sizeof(kv_request_t);
   }
 end:
-  if(sqe)
+  if (sqe)
     iface.prepare_send(sbuf, resp_off, std::bit_cast<uint64_t>(sbuf),
-                         iface.clients[idx], sqe);
+                       iface.clients[idx], sqe);
   prsd += i;
   std::memmove(data, data + i, size - i);
   return {size - i, ret};
 }
 
-static std::pair<size_t, unsigned> parse_completion(slot_storage& slt_strge, uint8_t *data,
-                                                    size_t size) {
-  using packet_t = kv_packet<kv_completion>;
+static std::pair<size_t, unsigned>
+parse_completion(slot_storage &slt_strge, uint8_t *data, size_t size) {
+  using packet_t = kv::kv_packet<kv::kv_completion>;
   unsigned i = 0;
   unsigned c = 0;
   for (; i < size;) {
@@ -166,7 +166,7 @@ static std::pair<size_t, unsigned> parse_completion(slot_storage& slt_strge, uin
 
     auto *resp = reinterpret_cast<packet_t *>(data + i);
     slt_strge.free_slots.push_back(resp->id);
-    printf("r: %ld\n", resp->payload.key);
+    assert(resp->payload.key == slt_strge.elems[resp->id]);
     ++c;
     i += sizeof(packet_t);
   }
@@ -175,7 +175,8 @@ static std::pair<size_t, unsigned> parse_completion(slot_storage& slt_strge, uin
   return {size - i, c};
 }
 
-static uint64_t process_completions(uring::client_iface *st, slot_storage& slt_strge) {
+static uint64_t process_completions(uring::client_iface *st,
+                                    slot_storage &slt_strge) {
   unsigned head = 0;
   unsigned c = 0;
   unsigned cnt = 0;
@@ -192,9 +193,9 @@ static uint64_t process_completions(uring::client_iface *st, slot_storage& slt_s
     st->handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {
       (void)sidx;
       st->rbuffer.cpy(buf, size);
-      auto [off, nc] =
-          parse_completion(slt_strge, st->rbuffer.buffer.data(), st->rbuffer.off);
-      st->rbuffer.reset(off);    
+      auto [off, nc] = parse_completion(slt_strge, st->rbuffer.buffer.data(),
+                                        st->rbuffer.off);
+      st->rbuffer.reset(off);
 
       c += nc;
       return 0;
@@ -205,13 +206,13 @@ static uint64_t process_completions(uring::client_iface *st, slot_storage& slt_s
   return c;
 }
 
-static int client_fun(struct sockaddr_in *addr) {
-  static constexpr uint16_t kNumSlots = 64;  
+static int client_fun(struct sockaddr_in addr) {
+  static constexpr uint16_t kNumSlots = 128;
   uring::client_iface iface{};
   struct io_uring_cqe *cqe;
   iface.setup(0);
   uint64_t t = 0, c = 0;
-  iface.uring_connect(addr);
+  iface.uring_connect(&addr);
   iface.uring_submit_and_wait();
   io_uring_peek_cqe(&iface.ctx->ring, &cqe);
   io_uring_cq_advance(&iface.ctx->ring, 1);
@@ -230,19 +231,23 @@ static int client_fun(struct sockaddr_in *addr) {
   while (c < kDefaultTXN) {
     c += process_completions(&iface, slt_strge);
   }
+  struct tcp_info info;
+  uring::tcp::get_tcp_stats(iface.fd, &info);
+  uring::tcp::print_tcp_info(stdout, &info);
   auto end = std::chrono::steady_clock::now();
-  printf("%f\n", std::chrono::duration<double, std::micro>(end - start).count());
+  printf("%f\n",
+         std::chrono::duration<double, std::micro>(end - start).count());
   return 0;
 }
 
-static int server_fun(int port_arg) {
+static int server_fun(int port_arg, in_addr_t addr) {
   int ret;
   prepare();
   struct io_uring_cqe *cqe;
   uring::server_iface iface{};
   iface.setup(port_arg);
   unsigned head = 0;
-  ret = iface.uring_prepare_listen();
+  ret = iface.prepare_listen(addr);
   if (ret) {
     fprintf(stderr, "Set listen failed: %s\n", strerror(-ret));
     return ret;
@@ -266,8 +271,8 @@ static int server_fun(int port_arg) {
         auto &slt = iface.connection_state(sidx);
         slt.rbuffer.cpy(buf, size);
         rx += size;
-        auto [off, ret] = parse_request(iface, slt.rbuffer.data(),
-                                        slt.rbuffer.off, sidx);
+        auto [off, ret] =
+            parse_request(iface, slt.rbuffer.data(), slt.rbuffer.off, sidx);
         slt.rbuffer.reset(off);
         return ret;
       });
@@ -277,7 +282,7 @@ static int server_fun(int port_arg) {
     }
     io_uring_cq_advance(&iface.ctx->ring, cnt);
 
-    for (auto& slt: iface.active) {
+    for (auto &slt : iface.active) {
       auto [off, ret] = parse_request(iface, slt.rbuffer.buffer.data(),
                                       slt.rbuffer.off, slt.idx);
       slt.rbuffer.reset(off);
@@ -288,11 +293,13 @@ static int server_fun(int port_arg) {
 
 int main(int argc, char *argv[]) {
   uint16_t port_arg = 0;
-  int opt, ret = 0;
+  int opt, nt = 1;
   bool is_client = false;
-  struct sockaddr_in addr;
+  bool did_init_addr = false;
+  struct in_addr ip_addr;
+  std::vector<std::thread> threads;
 
-  while ((opt = getopt(argc, argv, "p:ca:")) != -1) {
+  while ((opt = getopt(argc, argv, "p:ca:t:")) != -1) {
     switch (opt) {
     case 'p':
       port_arg = std::atoi(optarg);
@@ -301,7 +308,11 @@ int main(int argc, char *argv[]) {
       is_client = true;
       break;
     case 'a':
-      inet_aton(optarg, &addr.sin_addr);
+      inet_aton(optarg, &ip_addr);
+      did_init_addr = true;
+      break;
+    case 't':
+      nt = std::atoi(optarg);
       break;
     default:
       fprintf(stderr,
@@ -311,11 +322,21 @@ int main(int argc, char *argv[]) {
       exit(-1);
     }
   }
-  addr.sin_port = htons(port_arg);
-  addr.sin_family = AF_INET;
-  if (is_client)
-    ret = client_fun(&addr);
-  else
-    ret = server_fun(port_arg);
-  return ret;
+  threads.reserve(nt);
+  uint16_t pidx = 0;
+  for (uint16_t i = 0; i < nt; ++i) {
+    if (is_client) {
+      threads.emplace_back(client_fun, sockaddr_in{.sin_family = AF_INET,
+                                                   .sin_port = htons(port_arg),
+                                                   .sin_addr = {ip_addr},
+                                                   .sin_zero = {}});
+    } else {
+      threads.emplace_back(server_fun, port_arg + pidx++,
+                           did_init_addr ? ip_addr.s_addr : INADDR_ANY);
+    }
+  }
+
+  for (auto &t : threads)
+    t.join();
+  return 0;
 }

@@ -13,6 +13,7 @@
 #include <err.h>
 #include <errno.h>
 #include <liburing.h>
+#include <liburing/io_uring.h>
 #include <memory>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -22,6 +23,9 @@
 
 namespace uring {
 static constexpr int kMaxClientFd = 128;
+static constexpr int kMaxClientFdTag = 2 * kMaxClientFd + 1;
+static constexpr int kSetSockTag = kMaxClientFd + 1;
+static constexpr int kGetSockTCPInfoTag = kSetSockTag + 2;
 static constexpr int kDefaultBufferSize = 32;
 
 static constexpr uint64_t tag_send(unsigned idx) {
@@ -105,7 +109,10 @@ struct buffer_pool {
 
 struct iface_base {
 
+  int flag;  
   uint16_t port;
+  struct tcp_info info;
+  struct io_uring_napi napi{};
   std::unique_ptr<qpair> ctx;
 
   buffer_pool<kDefaultBufferSize> pool;
@@ -127,7 +134,7 @@ struct iface_base {
     assert(sqe && "No free sqe");
     io_uring_prep_send_zc(sqe, peer_fd, buf, len, MSG_WAITALL, 0);
     assert((idx & 1) == 0);
-    io_uring_sqe_set_data64(sqe, tag_send(idx));
+    io_uring_sqe_set_data64(sqe, idx);
   }
 
   int uring_submit_and_wait(struct io_uring_cqe **cqe) {
@@ -150,19 +157,60 @@ struct iface_base {
       return fd;
     }
 
+    napi.prefer_busy_poll = true;
+    napi.busy_poll_to = 1;
+    io_uring_register_napi(&ctx->ring, &napi);
+
     return 0;
   }
 
   int process_cqe_send(struct io_uring_cqe *cqe) {
-    if (cqe->res < 0)
+    if (cqe->res < 0){
       fprintf(stderr, "bad send %s\n", strerror(-cqe->res));
+      return cqe->res;
+    }
     if (cqe->flags & IORING_CQE_F_MORE)
       return 0;
     auto *buf = std::bit_cast<void *>(cqe->user_data);
-    assert(cqe->flags == 0);
+    assert(cqe->flags == 0 || cqe->flags & IORING_CQE_F_NOTIF);
     pool.free(buf);
     return 0;
   }
+
+
+  void uring_socketopt(int fd, int optname, void* optval, socklen_t len){
+      auto *sqe = io_uring_get_sqe(&ctx->ring);
+      io_uring_prep_cmd_sock(sqe, SOCKET_URING_OP_SETSOCKOPT, fd, IPPROTO_TCP, optname, optval, len);
+      io_uring_sqe_set_data64(sqe, kSetSockTag);
+  }
+
+  void uring_set_no_delay(int fd){
+      flag = 1;
+      uring_socketopt(fd, TCP_NODELAY, &flag, sizeof(flag));
+  }
+
+  void uring_set_bbr(int fd){
+      uring_socketopt(fd, TCP_CONGESTION, std::bit_cast<void*>(&tcp::bbr_congestion), sizeof(tcp::bbr_congestion));
+  }
+
+  void uring_gettcpstats(int fd){
+      auto *sqe = ctx->get_sqe();
+      io_uring_prep_cmd_sock(sqe, SOCKET_URING_OP_GETSOCKOPT, fd, IPPROTO_TCP, TCP_INFO, &info, sizeof(tcp_info));
+      io_uring_sqe_set_data64(sqe, kGetSockTCPInfoTag);
+  }
+
+  int process_cmd_cqe(io_uring_cqe *cqe){
+      switch(cqe->user_data){
+          case kSetSockTag:
+          case kGetSockTCPInfoTag:
+              return 0;
+          default:
+              assert(0);
+      }
+      return 0;
+  }
+
+  virtual ~iface_base() = default;
 };
 
 struct client_iface : iface_base {
@@ -186,6 +234,7 @@ struct client_iface : iface_base {
       return ret;
     }
     tcp::disable_nagle(fd);
+    tcp::change_congestion_control(fd, tcp::bbr_congestion);
     return 0;
   }
 
@@ -196,10 +245,14 @@ struct client_iface : iface_base {
     case 0:
       return process_cqe_send(cqe);
     case 1:
+      if(cqe->user_data > kMaxClientFdTag)
+          return process_cmd_cqe(cqe);
       return process_cqe_recv(this, cqe, fd, 0, f);
     }
     return 0;
   }
+
+  ~client_iface() override { close(fd); }
 };
 
 struct server_iface : iface_base {
@@ -223,7 +276,7 @@ struct server_iface : iface_base {
 
   int setup(int port_arg) { return setup_base(port_arg, clients.front()); }
 
-  int uring_prepare_listen() {
+  int prepare_listen( in_addr_t s_addr) {
     int enable = 1;
     int ret = setsockopt(clients.front(), SOL_SOCKET, SO_REUSEADDR, &enable,
                          sizeof(enable));
@@ -233,7 +286,7 @@ struct server_iface : iface_base {
     }
     struct sockaddr_in addr = {.sin_family = AF_INET,
                                .sin_port = port,
-                               .sin_addr = {INADDR_ANY},
+                               .sin_addr = { s_addr },
                                .sin_zero = {0}};
     ret = bind(clients.front(), reinterpret_cast<struct sockaddr *>(&addr),
                sizeof(addr));
@@ -270,7 +323,9 @@ struct server_iface : iface_base {
       clients[idx] = cqe->res;
       con_state[idx] = {};
       add_recv(this, cqe->res, idx);
+      io_uring_register_napi(&ctx->ring, &napi);
       tcp::disable_nagle(cqe->res);
+      tcp::change_congestion_control(cqe->res, tcp::bbr_congestion);
       active.push_front(con_state[idx]);
       return 0;
     }
@@ -283,6 +338,8 @@ struct server_iface : iface_base {
       return process_cqe_send(cqe);
     }
     case 1: {
+      if(cqe->user_data > kMaxClientFdTag)
+          return process_cmd_cqe(cqe);
       auto idx = untag(cqe->user_data);
       if (idx == 0)
         return handle_accept(cqe);
@@ -295,6 +352,10 @@ struct server_iface : iface_base {
     }
     }
     return 0;
+  }
+
+  ~server_iface() override{
+      close(clients.front());
   }
 };
 
