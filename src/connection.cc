@@ -11,7 +11,7 @@
 #include <rte_memcpy.h>
 
 void connection::process_pkt(rte_mbuf *pkt) {
-    transport_impl->process_pkt(msg_fragment(static_cast<message*>(pkt)));   
+    transport_impl->process_pkt((static_cast<message*>(pkt)));   
 } 
 
 void connection::acknowledge_all(){

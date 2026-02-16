@@ -3,9 +3,12 @@ project('dpdk-perf', 'cpp',
   default_options: ['warning_level=2', 'cpp_std=c++23', 'buildtype=debugoptimized'])
 
 cmake = import('cmake')
-dpdk_dep = dependency('libdpdk', method: 'pkg-config', required: true, static: true)
+dpdk_dep = dependency('libdpdk', method: 'pkg-config', required: true, static: true, version: '25.11.0')
 tlx_proj = cmake.subproject('tlx')
 tlx_dep = tlx_proj.dependency('tlx')
+hdr_hist = cmake.subproject('hdr_histogram')
+hdr_histogram_dep = hdr_hist.dependency('hdr_histogram')
+gflags_dep = dependency('gflags', required: true)
 
 add_project_arguments('-D_POSIX_C_SOURCE=200809L', language: 'c')
 add_project_arguments('-Wpedantic', language: 'c')

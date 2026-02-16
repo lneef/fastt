@@ -2,22 +2,10 @@
 
 #include <cstdint>
 #include <deque>
-#include <generic/rte_cycles.h>
-#include <memory.h>
 #include <memory>
 #include <ranges>
-#include <rte_branch_prediction.h>
-#include <rte_byteorder.h>
-#include <rte_ether.h>
-#include <rte_ip4.h>
-#include <rte_lcore.h>
-#include <rte_log.h>
-#include <rte_mbuf.h>
-#include <rte_mbuf_core.h>
-#include <rte_udp.h>
 #include <utility>
 
-#include "debug.h"
 #include "dev.h"
 #include "message.h"
 #include "packet_if.h"
@@ -40,6 +28,9 @@ class connection {
       transport::kOustandingMessages;
 
 public:
+  struct msg_meta{
+      bool som, eom;
+  };
   connection(message_allocator *allocator, packet_if *pkt_if,
              const con_config &target, uint16_t sport,
              connection_manager *manager, bool is_client)
@@ -67,15 +58,31 @@ public:
     return transport_impl->send_pkt(msg, sid, first, last);
   }
 
+  size_t send(void* buf, size_t size, const msg_meta& meta){
+      return transport_impl->send(buf, size, meta.som, meta.eom);
+  }
+
   void handle_incoming() {
     transport_impl->receive_messages([&](message *msg) {
       auto *hdr = msg->data<protocol::ft_header>();
-      slots[hdr->sid].handle_incoming(msg);
-      if (hdr->end && !is_client) {
+      slots[hdr->sid].handle_incoming(msg, hdr->end);
+      if (hdr->start && !is_client) {
         assert(!slots[hdr->sid].link.is_linked());
         slots[hdr->sid].move_to_active(active);
       }
-      slots[hdr->sid].outstanding = hdr->end;
+      msg->shrink_headroom(sizeof(protocol::ft_header));
+    });
+  }
+
+  template <typename S, typename F> void handle_incoming(S &scheduler, F&& f) {
+    transport_impl->receive_messages([&](message *msg) {
+      auto *hdr = msg->data<protocol::ft_header>();
+      slots[hdr->sid].handle_incoming(msg, hdr->end);
+      if (hdr->start && !is_client) {
+        assert(!slots[hdr->sid].link.is_linked());
+        slots[hdr->sid].move_to_active(active);
+        scheduler.schedule(f(scheduler, slots[hdr->sid]));
+      }
       msg->shrink_headroom(sizeof(protocol::ft_header));
     });
   }
@@ -100,10 +107,7 @@ public:
     slt->unlink();
   }
 
-  
-  void check_ack_necessary(){
-      transport_impl->maybe_acknowledge();
-  }
+  void check_ack_necessary() { transport_impl->maybe_acknowledge(); }
 
   bool up() const { return transport_impl->active(); }
 
@@ -157,8 +161,8 @@ public:
 
   void check_timeouts() {
     auto now = rte_get_timer_cycles();
-    for (auto &con : active){
-      con.check_ack_necessary();  
+    for (auto &con : active) {
+      con.check_ack_necessary();
       con.check_timeout(now);
     }
   }
@@ -186,7 +190,7 @@ public:
   }
 
   template <typename F> void poll(F &&handler) {
-    fetch_from_device();
+    fetch_from_qpair();
     if (!is_client)
       accept_connection();
     for (auto &con : active) {
@@ -201,7 +205,17 @@ public:
     con_timer_manager.manage();
   }
 
-  void fetch_from_device() {
+
+  template<typename S, typename F> void run(S& scheduler, F&& handler){
+      fetch_from_qpair();
+      if(!is_client)
+          accept_connection();
+      for(auto& con : active)
+          con.handle_incoming(scheduler, handler);
+      scheduler.run();
+  }
+
+  void fetch_from_qpair() {
     std::array<flow_tuple, kdefaultBurstSize> fts;
     uint16_t valid = 0, i = 0;
     assert(vec.i == 0);

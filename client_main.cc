@@ -105,15 +105,14 @@ static int lcore_fn(void *arg) {
   uint64_t t = 0;
   uint64_t c = 0;
   auto completion_handler = [&](slot &slt) {
-      auto *msg = slt.get();
-      if(!slt.get())
-          return;
-      slt.take();
-      msg->free();
-      if(slt.complete())
-        slt.con->put_slot(&slt);
-      ++c;
-    };
+    if (!slt.has_message())
+      return;
+    auto msg = std::move(slt).get();
+    msg.free();
+    if (msg.done)
+      slt.con->put_slot(&slt);
+    ++c;
+  };
   auto now = rte_get_timer_cycles();
   while (t < dur) {
     kv.handle_active(completion_handler);
@@ -126,13 +125,14 @@ static int lcore_fn(void *arg) {
     assert(sent);
     ++t;
   }
-  while (c < t) 
-    kv.handle_active(completion_handler);  
-  
+  while (c < t)
+    kv.handle_active(completion_handler);
+
   kv.acknowledge_all();
   kv.flush();
   auto stats = kv.con_at(0).get_transport_stats();
-  std::cerr << stats.retransmitted << ", " << stats.retransmissions << std::endl;
+  std::cerr << stats.retransmitted << ", " << stats.retransmissions
+            << std::endl;
   auto end = rte_get_timer_cycles();
   std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
   return 0;

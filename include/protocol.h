@@ -7,6 +7,7 @@
 #include <rte_ip.h>
 #include <rte_mempool.h>
 #include <rte_udp.h>
+#include <utility>
 
 namespace protocol {
 enum pkt_type : uint8_t {
@@ -31,13 +32,21 @@ struct __rte_packed_begin ft_header {
 static_assert(sizeof(ft_header) == 24, "");
 
 struct __rte_packed_begin ft_sack_payload {
+  using interval = std::pair<uint64_t, uint64_t>;  
   static constexpr uint16_t kBitMapLen = 4;
+  static constexpr uint16_t kMaxIntervalCnt = 64;
   uint64_t bit_map[kBitMapLen];
   uint16_t bit_map_len;
+
+#if 0
+  uint16_t interval_cnt;
+  uint64_t max_rx;
+  interval itvls[];
+#endif
 } __rte_packed_end;
 
 void prepare_ft_header(message *msg, uint64_t seq, uint64_t ack,  uint16_t sid, uint16_t wnd, 
-                       bool start, bool fini, uint32_t us = 0);
+                       bool start, bool fini, bool is_sack = false, uint32_t us = 0);
 void prepare_ack_pkt(message *msg, uint64_t ack, uint16_t wnd, uint32_t us,
                      bool is_sack = false);
 void prepare_init_header(message *msg, uint64_t seq);

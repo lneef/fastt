@@ -3,35 +3,52 @@
 #include "message.h"
 #include <cstdint>
 #include <rte_mbuf_core.h>
-struct msg_fragment {
-  message *msg = nullptr;
-  uint16_t off;
-  msg_fragment(message *msg, uint16_t off = 0) : msg(msg), off(off) {}
-  msg_fragment() = default;
+struct message_buffer {
+  message *buffered = nullptr;
+  bool done;
+  
+  message_buffer(message *buffered, bool done = true) : buffered(buffered), done(done) {}
+  message_buffer() = default;
+
+  message_buffer(message_buffer &&other) noexcept : buffered(other.buffered), done(other.done) {
+    other.buffered = nullptr;
+  }
+
+  message_buffer &operator=(message_buffer &&other) noexcept {
+    if (this != &other) {
+      if (buffered)
+        free();
+      buffered = other.buffered;
+      done = other.done;
+      other.buffered = nullptr;
+    }
+    return *this;
+  }
+
+  message& operator->(){
+      return *buffered;
+  }
 
   template <typename T> T *data() {
-    assert(msg != nullptr);  
-    return rte_pktmbuf_mtod_offset(msg, T *, off);
+    assert(buffered != nullptr);  
+    return rte_pktmbuf_mtod(buffered, T *);
   }
 
   template<typename T> T* data_offset(uint16_t offset){
-      assert(msg != nullptr);
-      return rte_pktmbuf_mtod_offset(msg, T *, off + offset);
+      assert(buffered != nullptr);
+      return rte_pktmbuf_mtod_offset(buffered, T *, offset);
   }
 
-  void move_offset(uint16_t amount){
-      off += amount;
-  }
 
   void free(){
-      rte_pktmbuf_free(msg);
+      rte_pktmbuf_free(buffered);
   }
 
-  void set(message* new_msg){
-      msg = new_msg;
+  void set(message* new_buffered){
+      buffered = new_buffered;
   }
 
   bool ready() const{
-      return msg != nullptr;
+      return buffered != nullptr;
   }
 };

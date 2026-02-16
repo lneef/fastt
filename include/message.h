@@ -14,11 +14,31 @@ struct message : public rte_mbuf {
   static int init();
   uint64_t *get_ts() { return RTE_MBUF_DYNFIELD(this, timestamp, uint64_t *); }
 
-  void inc_refcnt() { return rte_pktmbuf_refcnt_update(this, 1); }
+  void inc_refcnt() {
+    auto *buf = static_cast<rte_mbuf *>(this);
+    while (buf) {
+      rte_pktmbuf_refcnt_update(this, 1);
+      buf = buf->next;
+    }
+  }
 
+  static inline void merge(message *&first, message *&last, message *seg) {
+    if (!first) {
+      first = seg;
+      last = seg;
+    } else {
+      last->next = seg;
+      first->nb_segs += seg->nb_segs;
+      first->pkt_len += seg->pkt_len;
+      last = static_cast<message *>(rte_pktmbuf_lastseg(seg));
+    }
+  }
 
-  template<typename T>
-  T* data() { return rte_pktmbuf_mtod(this, T*); }    
+  template <typename T> T *data() { return rte_pktmbuf_mtod(this, T *); }
+
+  template <typename T> T *data(uint16_t off) {
+    return rte_pktmbuf_mtod_offset(this, T *, off);
+  }
   void *data() { return rte_pktmbuf_mtod(this, void *); }
   uint16_t len() { return data_len; }
 
@@ -29,9 +49,7 @@ struct message : public rte_mbuf {
     return rte_pktmbuf_mtod(this, T *);
   }
 
-  void free(){
-      rte_pktmbuf_free(this);
-  }
+  void free() { rte_pktmbuf_free(this); }
 
   void shrink_headroom(uint16_t len) { rte_pktmbuf_adj(this, len); }
 };
@@ -49,14 +67,14 @@ public:
       : pool(rte_pktmbuf_pool_create(name, elems, kMempoolCacheSize,
                                      kMemBufPrivSize, kMemBufDataRoomSize,
                                      SOCKET_ID_ANY)) {
-    assert(pool && "allocation failed");        
+    assert(pool && "allocation failed");
     payload_size = RTE_MBUF_DEFAULT_DATAROOM;
     assert(payload_size > 0);
     FASTT_LOG_DEBUG("Payload Size: %lu\n", payload_size);
   }
 
   message *alloc_message(uint16_t data_size) {
-      
+
     assert(data_size < payload_size);
     if (data_size >= payload_size - kRequiredHeadRoom)
       return nullptr;
@@ -70,9 +88,9 @@ public:
 
 private:
   message *prepare(rte_mbuf *mbuf, uint16_t data_size) {
-    assert(mbuf);  
-    if constexpr(RTE_PKTMBUF_HEADROOM < kRequiredHeadRoom)  
-        rte_pktmbuf_adj(mbuf, kRequiredHeadRoom - RTE_PKTMBUF_HEADROOM);
+    assert(mbuf);
+    if constexpr (RTE_PKTMBUF_HEADROOM < kRequiredHeadRoom)
+      rte_pktmbuf_adj(mbuf, kRequiredHeadRoom - RTE_PKTMBUF_HEADROOM);
     auto *msg = static_cast<message *>(mbuf);
     msg->data_len = data_size;
     msg->pkt_len = data_size;

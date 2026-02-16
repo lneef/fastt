@@ -1,4 +1,5 @@
 #include "packet_scheduler.h"
+#include <algorithm>
 #include <cstdint>
 #include <rte_cycles.h>
 
@@ -22,4 +23,15 @@ uint16_t packet_scheduler::do_send(){
     }while(sent < ptr);
     ptr = 0;
     return sent;
+}
+
+bool packet_scheduler::add_pkt_non_blocking(rte_mbuf *pkt){
+  if (ptr == buffer.size()){
+      auto sent = dev->tx_burst(buffer.data(), ptr);
+      if(sent == 0)
+          return false;
+      std::move(buffer.begin() + sent, buffer.begin() + ptr, buffer.begin());
+  }
+  buffer[ptr++] = pkt;
+  return true;
 }

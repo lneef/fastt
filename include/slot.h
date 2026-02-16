@@ -1,6 +1,7 @@
 #pragma once
 
 #include "message.h"
+#include "transport/msg_fragment.h"
 #include "transport/transport.h"
 #include "util.h"
 #include <cstdint>
@@ -14,18 +15,12 @@ class connection;
 struct slot {
   uint32_t id;
   connection *con;
-  message *buffered = nullptr;
-  bool outstanding = false;
+  message_buffer mb;
   list_hook link;
 
   void unlink() {
     if (link.is_linked())
       link.unlink();
-    outstanding = true;
-  }
-
-  bool complete(){
-      return outstanding;
   }
 
   void move_to_active(intrusive_list_t<slot> &active) {
@@ -33,15 +28,16 @@ struct slot {
     active.push_front(*this);
   }
 
-  void handle_incoming(message *msg) {
-    if (buffered) {
-      auto *last = rte_pktmbuf_lastseg(buffered);
+  void handle_incoming(message *msg, bool end) {
+    if (mb.buffered) {
+      auto *last = rte_pktmbuf_lastseg(mb.buffered);
       last->next = msg;
-      buffered->nb_segs += msg->nb_segs;
-      buffered->pkt_len += msg->pkt_len;
+      mb.buffered->nb_segs += msg->nb_segs;
+      mb.buffered->pkt_len += msg->pkt_len;
     } else {
-      buffered = msg;
+      mb.buffered = msg;
     }
+    mb.done = end;
   }
 
   slot(uint32_t id, connection *con) : id(id), con(con) {}
@@ -50,7 +46,11 @@ struct slot {
   bool send(message *msg);
   bool can_send();
 
-  message *get() { return buffered; }
+  message_buffer& get() & { return mb; }
 
-  void take() { buffered = nullptr; }
+  message_buffer&& get() && {return std::move(mb);}
+
+  bool has_message() const{
+      return mb.buffered != nullptr;
+  }
 };

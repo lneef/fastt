@@ -25,8 +25,6 @@
 #include <unistd.h>
 #include <utility>
 
-#include "client.h"
-#include "server.h"
 #include "uring/iface.h"
 #include "uring/tcp.h"
 #include <tlx/container/btree_map.hpp>
@@ -58,13 +56,6 @@ struct slot_storage {
     for (unsigned i = 0; i < n; ++i)
       free_slots.push_back(i);
   }
-};
-
-struct thread_context {
-  union {
-    server_iface siface;
-    client_iface ciface;
-  };
 };
 
 unsigned seen = 0;

@@ -28,7 +28,7 @@ struct netconfig {
 };
 
 struct lcore_server_adapter {
-  std::unique_ptr<server_iface> iface;
+  std::unique_ptr<server_iface<>> iface;
   std::shared_ptr<message_allocator> allocator;
 };
 
@@ -39,13 +39,13 @@ static constexpr uint32_t kStoreSize = 1024 * 1024;
 static tlx::btree_map<int64_t, int64_t> store;
 
 static void prepare() {
-  uint32_t size = kStoreSize;
-  for (auto [k, v] :
-       std::ranges::views::iota(0u, size) | std::views::transform([&](int) {
-         return std::make_pair(dist(rng), dist(rng));
-       })) {
-    store[k] = v;
-  }
+uint32_t size = kStoreSize;
+for (auto [k, v] :
+   std::ranges::views::iota(0u, size) | std::views::transform([&](int) {
+     return std::make_pair(dist(rng), dist(rng));
+   })) {
+store[k] = v;
+}
 }
 
 static message *serve(message_allocator *allocator,
@@ -99,14 +99,13 @@ int lcore_server_fun(void *arg) {
 
   while (!terminate) {
     server->poll([&](slot& slt) {      
-      if(!slt.can_send())
+      while(!slt.can_send())
         return;
-      auto* msg = slt.get();
-      slt.take();
+      auto msg = std::move(slt).get();  
       auto *resp =
-          serve(&allocator, msg->data<kv::kv_packet<kv::kv_request>>());
+          serve(&allocator, msg.buffered->data<kv::kv_packet<kv::kv_request>>());
       slt.send(resp);    
-      msg->free();  
+      msg.free();
       slt.unlink();
     });
     server->complete();
@@ -130,7 +129,7 @@ int run(netconfig &conf) {
     auto& adapter = adapters[lcore_id];  
     auto [port, txq, rxq, pool] = ifc->get_slice(i);
     adapter.allocator = std::make_shared<message_allocator>(("mpool" + std::to_string(i)).c_str(),  8191);
-    adapter.iface = std::make_unique<server_iface>(
+    adapter.iface = std::make_unique<server_iface<>>(
         port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator, lcore_id);
     ++i;
   }
