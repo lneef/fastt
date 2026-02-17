@@ -112,11 +112,9 @@ public:
       uint64_t ack = 0;
       uint32_t ts = 0;
       auto least_in_window = trx.get_last_acked_packet();
-      if (scheduler.ack_pending(least_in_window)) {
-        ack = least_in_window;
-        ts = trx.get_ts();
-        scheduler.ack_callback(ack);
-      }
+      ack = least_in_window;
+      ts = trx.get_ts();
+      scheduler.ack_callback(ack);
       protocol::prepare_ft_header(pkt, seq, ack, sid,
                                   trx.capacity(kOustandingMessages), start, end,
                                   ts);
@@ -129,7 +127,7 @@ public:
   }
 
   size_t send(void *buf, size_t size, bool start, bool end) {
-    static constexpr uint16_t kMaxPayload = 2048;  
+    static constexpr uint16_t kMaxPayload = 2048;
     assert(size < kMaxPayload);
     if (ttx.get_current_wnd() == 0)
       return 0;

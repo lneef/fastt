@@ -46,7 +46,7 @@ struct __rte_packed_begin ft_sack_payload {
 } __rte_packed_end;
 
 void prepare_ft_header(message *msg, uint64_t seq, uint64_t ack,  uint16_t sid, uint16_t wnd, 
-                       bool start, bool fini, bool is_sack = false, uint32_t us = 0);
+                       bool start, bool fini, uint32_t us = 0, bool is_sack = false);
 void prepare_ack_pkt(message *msg, uint64_t ack, uint16_t wnd, uint32_t us,
                      bool is_sack = false);
 void prepare_init_header(message *msg, uint64_t seq);
