@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 
@@ -11,6 +12,11 @@ __inline T exp_filter(T val, T measured){
     return  (w1 * measured + w2 * val) >> shift;
 }
 
+template<typename T>
+__inline T min_filter(T val, T measured){
+    return std::min<T>(val, measured);
+}
+
 static __inline std::pair<uint64_t, uint64_t>
 estimate_exp(uint64_t rtt, uint64_t rtt_dv, uint64_t measured) {
   static constexpr uint64_t w1 = 1, w2 = 7, shift = 3;
@@ -19,4 +25,5 @@ estimate_exp(uint64_t rtt, uint64_t rtt_dv, uint64_t measured) {
   auto nrtt_dv = (w1 * diff + w2 * rtt_dv) >> shift;
   return {nrtt, nrtt_dv};
 }
+
 }

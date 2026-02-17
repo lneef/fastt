@@ -66,8 +66,7 @@ public:
     transport_impl->receive_messages([&](message *msg) {
       auto *hdr = msg->data<protocol::ft_header>();
       slots[hdr->sid].handle_incoming(msg, hdr->end);
-      if (hdr->start && !is_client) {
-        assert(!slots[hdr->sid].link.is_linked());
+      if (!slots[hdr->sid].link.is_linked() && !is_client) {
         slots[hdr->sid].move_to_active(active);
       }
       msg->shrink_headroom(sizeof(protocol::ft_header));
@@ -78,12 +77,10 @@ public:
     transport_impl->receive_messages([&](message *msg) {
       auto *hdr = msg->data<protocol::ft_header>();
       slots[hdr->sid].handle_incoming(msg, hdr->end);
-      if (hdr->start && !is_client) {
-        assert(!slots[hdr->sid].link.is_linked());
+      if (!slots[hdr->sid].link.is_linked() && !is_client) {
         slots[hdr->sid].move_to_active(active);
         scheduler.schedule(f(scheduler, slots[hdr->sid]));
       }
-      msg->shrink_headroom(sizeof(protocol::ft_header));
     });
   }
 
@@ -128,7 +125,7 @@ public:
 };
 
 class connection_manager {
-  static constexpr uint16_t kdefaultBurstSize = 32;
+  static constexpr uint16_t kdefaultBurstSize = 64;
   static constexpr uint16_t kdefaultFlowTableSize = 512;
 
 public:

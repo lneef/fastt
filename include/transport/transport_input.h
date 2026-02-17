@@ -144,30 +144,7 @@ public:
       }
       ++it;
     }
-#if 0
-    uint64_t p_seq = least_unacked_pkt;
-    auto itr = unacked.begin();
-    const auto sack_cb = [&](){
-            largest_acked = &(*itr);
-            largest_acked_seq = itr->seq;
-            itr->sacked = true;
-            ++itr;
-    };
-    for(auto i = 0u; i < payload->interval_cnt; ++i){
-        auto [begin, end] = payload->itvls[i];
-        for(;p_seq < begin; ++p_seq)
-            sack_cb;
 
-        for(; p_seq <= end; ++p_seq){
-            prepare_retransmit(&(*itr));
-            retransmit_cb(itr->packet);
-            ++itr;
-        }
-    }
-
-    for(; p_seq <= payload->max_rx; ++p_seq)
-        sack_cb;
-#endif
     timeout = rte_get_timer_cycles() + rto;
     FASTT_LOG_DEBUG("Largest set seq num %lu\n", largest_acked);
     if (largest_acked) {
