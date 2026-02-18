@@ -98,6 +98,7 @@ int lcore_server_fun(void *arg) {
 
   while (!terminate) {
     server->poll([&](connection &con) {
+      while(true) {     
       if (!con.can_recv() || !con.can_send())
         return;
 
@@ -105,7 +106,9 @@ int lcore_server_fun(void *arg) {
       assert(sz == sizeof(req));
       serve(&resp, &req);
       con.send(&resp, sizeof(resp), {true, true});
+      }
     });
+
     server->complete();
   }
   return 0;
