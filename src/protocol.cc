@@ -4,7 +4,7 @@
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 
-void protocol::prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint16_t sid, uint16_t wnd, bool start, bool end, bool is_sack, uint32_t us){
+void protocol::prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint16_t sid, uint16_t wnd, bool start, bool end, uint32_t us, bool is_sack){
     auto *ft = msg->move_headroom<protocol::ft_header>();
     ft->ack = ack;
     ft->seq = seq;

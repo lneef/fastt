@@ -14,6 +14,68 @@
 
 static constexpr uint64_t min_seq = 1;
 
+struct swift {
+  static constexpr float ai = 64;
+  static constexpr float beta = 0.9;
+  static constexpr float max_md = 0.5;
+  static constexpr uint64_t reset_threshold = 64;
+  uint64_t least_in_window, retransmit_cnt, last_decrease;
+  float target_delay, cwnd_size;
+  const uint64_t min_wd_size;
+
+  swift(std::size_t initial_len, uint64_t target_delay)
+      : least_in_window(min_seq), retransmit_cnt(0), last_decrease(0),
+        target_delay(target_delay), cwnd_size(initial_len),
+        min_wd_size(std::max<uint64_t>(initial_len >> 8, 1)) {}
+
+  void on_ack(uint64_t ack, uint64_t now, uint64_t rtt) {
+    retransmit_cnt = 0;
+    bool can_decrease = now - last_decrease > rtt;
+    if (rtt < target_delay) {
+      cwnd_size += ai / cwnd_size * (ack - least_in_window);
+    } else if (can_decrease) {
+      cwnd_size *= 1 - beta * (rtt - target_delay) / rtt;
+      last_decrease = now;
+    }
+    least_in_window = ack;
+    update_stats();
+  }
+
+  bool has_space(uint64_t seq) const {
+    return seq < least_in_window + cwnd_size;
+  }
+
+  void on_retransmission(std::size_t nb, uint64_t rtt, uint64_t now) {
+    if (nb == 0)
+      return;
+    bool can_decrease = now - last_decrease > rtt;
+    retransmit_cnt += nb;
+    if (retransmit_cnt > reset_threshold) {
+      cwnd_size = min_wd_size;
+    } else if (can_decrease) {
+      cwnd_size *= (1 - max_md);
+      last_decrease = now;
+    }
+    update_stats();
+  }
+
+  void on_fast_recovery(uint64_t now, uint64_t rtt) {
+    retransmit_cnt = 0;
+    bool can_decrease = now - last_decrease > rtt;
+    if (can_decrease) {
+      cwnd_size = (1 - max_md) * cwnd_size;
+      last_decrease = now;
+    }
+    update_stats();
+  }
+
+  void update_stats() {
+    // TODO: fix this according to real impl
+    // but we currently dont have a pacer
+    cwnd_size = std::max<std::size_t>(static_cast<std::size_t>(cwnd_size), 1);
+  }
+};
+
 struct sender_entry {
   message *packet;
   uint64_t seq;
@@ -40,7 +102,7 @@ public:
     statistics() : acked(0), retransmitted(0) {}
   };
   transport_input(uint32_t budget = 1)
-      : budget(budget), seq(min_seq), rtt() {}
+      : cc(64, get_ticks_us() * 200), budget(budget), seq(min_seq), rtt() {}
 
   unsigned get_current_wnd() const { return budget; }
 
@@ -65,6 +127,8 @@ public:
     update_srtt(&srtt_desc, ts);
     rte_pktmbuf_free(srtt_desc.packet);
     unacked.pop_front();
+    cc.on_ack(seq, rte_get_timer_cycles(),
+              (ts - *srtt_desc.packet->get_ts()) * get_ticks_us());
     return burst_rtt;
   }
 
@@ -77,14 +141,15 @@ public:
     *msg->get_ts() = 0;
     unacked.emplace_back(msg, seq++, false);
     FASTT_LOG_DEBUG("Enqueue pkt with %lu new budget %u\n", seq - 1, budget);
-    if (all_acked()) 
+    if (all_acked())
       timeout = rte_get_timer_cycles() + rto;
-    
+
     return true;
   }
 
-  template <typename F> void probe_retransmit(F &&cb) {
-    for (auto& entry : unacked) {
+  template <typename F> void probe_retransmit(F &&cb) {  
+    auto cnt = 0;  
+    for (auto &entry : unacked) {
       auto *msg = entry.packet;
       if (*msg->get_ts() == 0)
         continue;
@@ -93,7 +158,9 @@ public:
       FASTT_LOG_DEBUG("Retransmitting packet: %lu\n", entry.seq);
       prepare_retransmit(&entry);
       cb(msg);
+      ++cnt;
     }
+    cc.on_retransmission(cnt, rtt, rte_get_timer_cycles());
   }
 
   void prepare_retransmit(sender_entry *entry) {
@@ -104,7 +171,6 @@ public:
     entry->packet->inc_refcnt();
     *entry->packet->get_ts() = 0;
     entry->retransmitted = true;
-
   }
 
   void acknowledge(uint64_t seq, uint16_t budget, uint64_t ts, bool is_sack) {
@@ -144,30 +210,7 @@ public:
       }
       ++it;
     }
-#if 0
-    uint64_t p_seq = least_unacked_pkt;
-    auto itr = unacked.begin();
-    const auto sack_cb = [&](){
-            largest_acked = &(*itr);
-            largest_acked_seq = itr->seq;
-            itr->sacked = true;
-            ++itr;
-    };
-    for(auto i = 0u; i < payload->interval_cnt; ++i){
-        auto [begin, end] = payload->itvls[i];
-        for(;p_seq < begin; ++p_seq)
-            sack_cb;
 
-        for(; p_seq <= end; ++p_seq){
-            prepare_retransmit(&(*itr));
-            retransmit_cb(itr->packet);
-            ++itr;
-        }
-    }
-
-    for(; p_seq <= payload->max_rx; ++p_seq)
-        sack_cb;
-#endif
     timeout = rte_get_timer_cycles() + rto;
     FASTT_LOG_DEBUG("Largest set seq num %lu\n", largest_acked);
     if (largest_acked) {
@@ -201,6 +244,7 @@ public:
   const statistics &get_stats() const { return stats; }
 
 private:
+  swift cc;
   statistics stats;
   std::deque<sender_entry> unacked;
   uint32_t budget;

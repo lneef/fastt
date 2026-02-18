@@ -39,22 +39,20 @@ static constexpr uint32_t kStoreSize = 1024 * 1024;
 static tlx::btree_map<int64_t, int64_t> store;
 
 static void prepare() {
-uint32_t size = kStoreSize;
-for (auto [k, v] :
-   std::ranges::views::iota(0u, size) | std::views::transform([&](int) {
-     return std::make_pair(dist(rng), dist(rng));
-   })) {
-store[k] = v;
-}
+  uint32_t size = kStoreSize;
+  for (auto [k, v] :
+       std::ranges::views::iota(0u, size) | std::views::transform([&](int) {
+         return std::make_pair(dist(rng), dist(rng));
+       })) {
+    store[k] = v;
+  }
 }
 
-static message *serve(message_allocator *allocator,
-                      kv::kv_packet<kv::kv_request> *packet) {
+static void serve(kv::kv_packet<kv::kv_completion> *completion,
+                  kv::kv_packet<kv::kv_request> *packet) {
   auto key = packet->payload.key;
   auto it = store.find(key);
 
-  message *msg = allocator->alloc_message(sizeof(kv::kv_packet<kv::kv_completion>));
-  auto *completion = msg->data<kv::kv_packet<kv::kv_completion>>();
   completion->id = packet->id;
   completion->pt = packet->pt;
   completion->payload.key = packet->payload.key;
@@ -65,7 +63,6 @@ static message *serve(message_allocator *allocator,
     completion->payload.reponse = kv::response_t::SUCCESS;
     completion->payload.val = it->second;
   }
-  return msg;
 }
 
 static netconfig parse_cmdline(int argc, char *argv[]) {
@@ -95,19 +92,23 @@ int lcore_server_fun(void *arg) {
   auto myid = rte_lcore_index(rte_lcore_id());
   auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
   auto *server = adapters[myid].iface.get();
-  auto &allocator = *adapters[myid].allocator;
+
+  kv::kv_packet<kv::kv_request> req;
+  kv::kv_packet<kv::kv_completion> resp;
 
   while (!terminate) {
-    server->poll([&](slot& slt) {      
-      while(!slt.can_send())
+    server->poll([&](connection &con) {
+      while(true) {     
+      if (!con.can_recv() || !con.can_send())
         return;
-      auto msg = std::move(slt).get();  
-      auto *resp =
-          serve(&allocator, msg.buffered->data<kv::kv_packet<kv::kv_request>>());
-      slt.send(resp);    
-      msg.free();
-      slt.unlink();
+
+      auto sz = con.recv(&req, sizeof(req));
+      assert(sz == sizeof(req));
+      serve(&resp, &req);
+      con.send(&resp, sizeof(resp), {true, true});
+      }
     });
+
     server->complete();
   }
   return 0;
@@ -119,23 +120,33 @@ int run(netconfig &conf) {
     return -1;
 
   auto nthreads = rte_lcore_count();
-  auto ifc = iface::configure_port(0, nthreads, nthreads);
-  if (!ifc)
-    return -1;
-  std::vector<lcore_server_adapter> adapters(nthreads);
   unsigned i = 0;
   uint16_t lcore_id;
-  RTE_LCORE_FOREACH(lcore_id){
-    auto& adapter = adapters[lcore_id];  
-    auto [port, txq, rxq, pool] = ifc->get_slice(i);
-    adapter.allocator = std::make_shared<message_allocator>(("mpool" + std::to_string(i)).c_str(),  8191);
+  std::vector<std::shared_ptr<message_allocator>> allocators;
+  allocators.reserve(nthreads);
+  RTE_LCORE_FOREACH(lcore_id) {
+    allocators.emplace_back(std::make_shared<message_allocator>(
+        ("mpool" + std::to_string(i)).c_str(), 16383));
+    ++i;
+  }
+  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);
+  if (!ifc)
+    return -1;
+
+  std::vector<lcore_server_adapter> adapters(nthreads);
+  i = 0;
+  RTE_LCORE_FOREACH(lcore_id) {
+    auto &adapter = adapters[i];
+    auto [port, txq, rxq] = ifc->get_slice(i);
+    adapter.allocator = std::move(allocators[i]);
     adapter.iface = std::make_unique<server_iface<>>(
-        port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator, lcore_id);
+        port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator,
+        lcore_id);
     ++i;
   }
 
   rte_eal_mp_remote_launch(lcore_server_fun, &adapters, CALL_MAIN);
-  rte_eal_mp_wait_lcore(); 
+  rte_eal_mp_wait_lcore();
   ifc->stop();
   return 0;
 }

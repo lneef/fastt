@@ -1,10 +1,13 @@
 #pragma once
 
+#include "message.h"
+#include "transport/msg_fragment.h"
 #include <coroutine>
 #include <deque>
 
 namespace concurrency {
 
+class connection;
 class scheduler;
 struct task {
   struct promise_type {
@@ -33,15 +36,43 @@ struct task {
   std::coroutine_handle<promise_type> handle;
 };
 
+struct send_awaitable {
+  scheduler &schdlr;
+  connection &con;
+  message *msg;
+  msg_meta meta;
+
+  send_awaitable(scheduler &schdlr, connection &con, message *msg, msg_meta& meta)
+      : schdlr(schdlr), con(con), msg(msg), meta(meta) {}
+
+  bool await_ready() noexcept;
+
+  void await_suspend(std::coroutine_handle<task::promise_type> caller);
+
+  bool await_resume() noexcept;
+};
+
+struct recv_awaitable {
+  scheduler &schdlr;
+  connection *con;
+
+  recv_awaitable(scheduler &schdlr, connection *con)
+      : schdlr(schdlr), con(con) {}
+
+  bool await_ready() noexcept { return false; }
+
+  void await_suspend(std::coroutine_handle<task::promise_type> caller);
+
+  message_buffer await_resume() noexcept;
+};
+
 class scheduler {
   using task_handle = std::coroutine_handle<task::promise_type>;
 
 public:
   scheduler() = default;
 
-  void schedule(task_handle handle) {
-    tasks.push_back(std::move(handle));
-  }
+  void schedule(task_handle handle) { tasks.push_back(std::move(handle)); }
 
   void run() {
     run([]() { return false; });

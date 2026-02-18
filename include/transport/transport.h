@@ -89,8 +89,8 @@ public:
 
   transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
             const con_config &target)
-      : trx(min_seq), target(target), ttx(kOustandingMessages), scheduler(),
-        allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
+      : trx(min_seq, allocator), target(target), ttx(kOustandingMessages),
+        scheduler(), allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
 
   void probe_timeout() {
     ttx.probe_retransmit(
@@ -112,11 +112,9 @@ public:
       uint64_t ack = 0;
       uint32_t ts = 0;
       auto least_in_window = trx.get_last_acked_packet();
-      if (scheduler.ack_pending(least_in_window)) {
-        ack = least_in_window;
-        ts = trx.get_ts();
-        scheduler.ack_callback(ack);
-      }
+      ack = least_in_window;
+      ts = trx.get_ts();
+      scheduler.ack_callback(ack);
       protocol::prepare_ft_header(pkt, seq, ack, sid,
                                   trx.capacity(kOustandingMessages), start, end,
                                   ts);
@@ -129,40 +127,28 @@ public:
   }
 
   size_t send(void *buf, size_t size, bool start, bool end) {
-    static constexpr uint16_t kMaxPayload = 2048;  
+    static constexpr uint16_t kMaxPayload = 2048;
     assert(size < kMaxPayload);
-    if (ttx.get_current_wnd() == 0)
-      return 0;
-    auto *msg = allocator->alloc_message(size);
-    bool is_sack = false;
-    size_t user_offset = 0;
-    if (trx.has_holes() &&
-        scheduler.sack_pending(trx.get_last_acked_packet())) {
-      trx.copy_bitset(msg->data<protocol::ft_sack_payload>());
-      msg->data_len += sizeof(protocol::ft_sack_payload);
-      msg->pkt_len += sizeof(protocol::ft_sack_payload);
-      is_sack = true;
-      user_offset += sizeof(protocol::ft_sack_payload);
-    }
-    rte_memcpy(msg->data<uint8_t>(user_offset), buf, size);
+    assert(capacity());
+    auto *mbuf = allocator->alloc_message(size);
+    rte_memcpy(mbuf->data<uint8_t>(), buf, size);
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
       uint32_t ts = 0;
-      auto least_in_window = trx.get_last_acked_packet();
-      if (scheduler.ack_pending(least_in_window)) {
-        ack = least_in_window;
-        ts = trx.get_ts();
-        scheduler.ack_callback(ack);
-      }
+      ack = trx.get_last_acked_packet();
+      ts = trx.get_ts();
+      scheduler.ack_callback(ack);
       protocol::prepare_ft_header(pkt, seq, ack, 0,
                                   trx.capacity(kOustandingMessages), start, end,
-                                  ts, is_sack);
+                                  ts, false);
     };
-    auto inserted = ttx.record_pkt(msg, ctor);
+    auto inserted = ttx.record_pkt(mbuf, ctor);
     if (inserted)
-      pkt_if->consume_pkt(msg, sport, target);
+      pkt_if->consume_pkt(mbuf, sport, target);
     return size;
   }
+
+  size_t recv(void *buf, size_t size) { return trx.read(buf, size); }
 
   transport_statistics get_stats() const {
     auto &rt_stats = ttx.get_stats();
@@ -175,14 +161,14 @@ public:
     bool is_sack = trx.has_holes();
     uint64_t ack = trx.get_last_acked_packet();
     if (is_sack) {
-      if (!scheduler.sack_pending(ack))
+      if (!scheduler.sack_pending(trx.max_rx))
         return false;
       msg = allocator->alloc_message(sizeof(protocol::ft_header) +
                                      sizeof(protocol::ft_sack_payload));
       auto *sack_payload = rte_pktmbuf_mtod_offset(
           msg, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
       trx.copy_bitset(sack_payload);
-      scheduler.sack_callback(ack);
+      scheduler.sack_callback(trx.max_rx);
       FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %lu\n",
                       sack_payload->bit_map_len, ack);
     } else {
@@ -213,7 +199,7 @@ public:
         msg->free();
         return false;
       } else
-        trx.set(hdr->seq, msg);
+        trx.set_and_reassmble(hdr->seq, msg);
       break;
     }
     case protocol::pkt_type::FT_ACK: {
@@ -281,6 +267,8 @@ public:
     assert(retval);
     pkt_if->consume_pkt(msg, sport, target);
   }
+
+  bool can_recv() const { return !trx.out.empty(); }
 
   bool active() { return connection_state::ESTABLISHED == cstate; }
 
