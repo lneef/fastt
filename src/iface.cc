@@ -123,6 +123,7 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
     if (rte_eth_tx_queue_setup(ifc->port, setup_tx++, nb_txd,
                                rte_lcore_to_socket_id(lcore_id), &txconf))
       return nullptr;
+    ++i;
   }
   ifc->tx_queues = setup_tx;
   ifc->rx_queues = setup_rx;
