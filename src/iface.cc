@@ -10,7 +10,6 @@
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
 #include <rte_timer.h>
-#include <tuple>
 
 static uint8_t RSS_DEFAULT_KEY[] = {
     0xbe, 0xac, 0x01, 0xfa, 0x6a, 0x42, 0xb7, 0x3b, 0x80, 0x30,
@@ -53,7 +52,7 @@ static inline int setup_reta(uint16_t port, uint32_t nrx, uint32_t reta_size){
 }
 
 std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
-                                           uint16_t nrx) {
+                                           uint16_t nrx, std::vector<std::shared_ptr<message_allocator>>& pools) {
   uint16_t nb_rxd, nb_txd;
   int retval;
   std::unique_ptr<iface> ifc(new iface()); /*c++11*/
@@ -115,15 +114,11 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
   uint16_t lcore_id = 0;
   uint16_t setup_tx = 0;
   uint16_t setup_rx = 0;
+  uint16_t i = 0;
   RTE_LCORE_FOREACH(lcore_id) {
-    ifc->pools.emplace_back(
-        rte_pktmbuf_pool_create(std::to_string(lcore_id).data(), 2 * nb_rxd,
-                                256, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
-                                rte_lcore_to_socket_id(lcore_id)),
-        deleter);
     if (rte_eth_rx_queue_setup(ifc->port, setup_rx++, nb_rxd,
                                rte_lcore_to_socket_id(lcore_id), &rxconf,
-                               ifc->pools.back().get()))
+                               pools[i]->get()))
       return nullptr;
     if (rte_eth_tx_queue_setup(ifc->port, setup_tx++, nb_txd,
                                rte_lcore_to_socket_id(lcore_id), &txconf))
@@ -143,5 +138,5 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
 
 iface::netdev_iface iface::get_slice(uint16_t idx) {
   assert(idx < tx_queues);
-  return std::make_tuple(port, idx, idx, pools[idx]);
+  return std::make_tuple(port, idx, idx);
 }

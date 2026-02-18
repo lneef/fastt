@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -11,6 +12,7 @@
 #include "packet_if.h"
 #include "protocol.h"
 #include "slot.h"
+#include "task.h"
 #include "timer.h"
 #include "transport/transport.h"
 #include "util.h"
@@ -28,8 +30,8 @@ class connection {
       transport::kOustandingMessages;
 
 public:
-  struct msg_meta{
-      bool som, eom;
+  struct msg_meta {
+    bool som, eom;
   };
   connection(message_allocator *allocator, packet_if *pkt_if,
              const con_config &target, uint16_t sport,
@@ -58,9 +60,19 @@ public:
     return transport_impl->send_pkt(msg, sid, first, last);
   }
 
-  size_t send(void* buf, size_t size, const msg_meta& meta){
-      return transport_impl->send(buf, size, meta.som, meta.eom);
+  size_t send(void *buf, size_t size, const msg_meta &meta) {
+    return transport_impl->send(buf, size, meta.som, meta.eom);
   }
+
+  size_t recv(void *buf, size_t len){
+      return transport_impl->recv(buf, len);
+  }
+
+  concurrency::send_awaitable send(concurrency::scheduler &schdlr, message *msg,
+                                   bool first, bool last);
+
+  concurrency::recv_awaitable recv(concurrency::scheduler &schdlr,
+                                   message **msg);
 
   void handle_incoming() {
     transport_impl->receive_messages([&](message *msg) {
@@ -73,7 +85,7 @@ public:
     });
   }
 
-  template <typename S, typename F> void handle_incoming(S &scheduler, F&& f) {
+  template <typename S, typename F> void handle_incoming(S &scheduler, F &&f) {
     transport_impl->receive_messages([&](message *msg) {
       auto *hdr = msg->data<protocol::ft_header>();
       slots[hdr->sid].handle_incoming(msg, hdr->end);
@@ -108,6 +120,10 @@ public:
 
   bool up() const { return transport_impl->active(); }
 
+  bool can_send() { return transport_impl->capacity() > 0; }
+
+  bool can_recv() { return transport_impl->can_recv(); }
+
   connection_manager *get_manager() { return manager; }
 
 private:
@@ -126,16 +142,14 @@ public:
 
 class connection_manager {
   static constexpr uint16_t kdefaultBurstSize = 64;
-  static constexpr uint16_t kdefaultFlowTableSize = 512;
 
 public:
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
                      uint32_t sip, std::shared_ptr<message_allocator> allocator,
                      uint16_t lcore_id)
-      : flows(kdefaultFlowTableSize), allocator(allocator), dev(port, txq, rxq),
-        scheduler(&dev), pkt_if(&scheduler, sip, port), active(),
-        is_client(is_client), flush_timeout(get_ticks_us()),
-        flush_timer(timertype::PERIODICAL) {
+      : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
+        pkt_if(&scheduler, sip, port), active(), is_client(is_client),
+        flush_timeout(get_ticks_us()), flush_timer(timertype::PERIODICAL) {
     flush_timer.reset(flush_timeout, flush_cb, lcore_id, this);
   }
 
@@ -146,9 +160,9 @@ public:
     if (unlikely(header->type == protocol::FT_INIT))
       register_request(pkt, ft);
     else {
-      auto *connection = flows.lookup(ft);
-      if (likely(connection))
-        (*connection)->process_pkt(pkt);
+      auto it = flows.find(ft);
+      if (likely(it != flows.end()))
+        it->second->process_pkt(pkt);
       else {
         dump_pkt(pkt, pkt->len());
         rte_pktmbuf_free(pkt);
@@ -159,7 +173,6 @@ public:
   void check_timeouts() {
     auto now = rte_get_timer_cycles();
     for (auto &con : active) {
-      con.check_ack_necessary();
       con.check_timeout(now);
     }
   }
@@ -179,11 +192,11 @@ public:
                                          source.port, this, is_client));
     if (!inserted)
       return nullptr;
-    it->get()->open_connection();
-    active.push_front(*it->get());
+    it->second->open_connection();
+    active.push_front(*it->second);
     ++open_connections;
     flush();
-    return it->get();
+    return it->second.get();
   }
 
   template <typename F> void poll(F &&handler) {
@@ -191,25 +204,26 @@ public:
     if (!is_client)
       accept_connection();
     for (auto &con : active) {
-      con.handle_incoming();
-      for (auto it = con.active.begin(), end = con.active.end(); it != end;) {
-        auto &slt = *it;
-        ++it;
-        handler(slt);
-      }
+      handler(con);
+      con.acknowledge_all();
     }
     check_timeouts();
     con_timer_manager.manage();
   }
 
+  void poll_client() {
+    fetch_from_qpair();
+    check_timeouts();
+    con_timer_manager.manage();
+  }
 
-  template<typename S, typename F> void run(S& scheduler, F&& handler){
-      fetch_from_qpair();
-      if(!is_client)
-          accept_connection();
-      for(auto& con : active)
-          con.handle_incoming(scheduler, handler);
-      scheduler.run();
+  template <typename S, typename F> void run(S &scheduler, F &&handler) {
+    fetch_from_qpair();
+    if (!is_client)
+      accept_connection();
+    for (auto &con : active)
+      con.handle_incoming(scheduler, handler);
+    scheduler.run();
   }
 
   void fetch_from_qpair() {
@@ -261,10 +275,10 @@ public:
                    con_config{tuple.sip, rte_be_to_cpu_16(tuple.sport)}, port,
                    this, is_client));
     if (inserted) {
-      active.push_front(*it->get());
+      active.push_front(*it->second);
       ++open_connections;
     }
-    return {it->get(), inserted};
+    return {it->second.get(), inserted};
   }
 
   statistics get_stats() {
@@ -290,7 +304,7 @@ private:
     this_ptr->flush();
   }
   std::deque<std::pair<message *, flow_tuple>> connection_requests;
-  fixed_size_hash_table<flow_tuple, std::unique_ptr<connection>> flows;
+  flow_table<flow_tuple, std::unique_ptr<connection>> flows;
   std::shared_ptr<message_allocator> allocator;
   qpair dev;
   packet_scheduler scheduler;

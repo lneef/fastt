@@ -6,6 +6,8 @@
 #include "transport/msg_fragment.h"
 #include "util.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -13,6 +15,18 @@
 #include <rte_branch_prediction.h>
 #include <rte_mbuf.h>
 #include <vector>
+
+
+struct user_buffer{
+    uint8_t *buffer;
+    size_t size, off = 0;
+
+    void fill(uint8_t *data, size_t len) {
+        auto copy = std::min(len, size - off);
+        std::memcpy(buffer + off, data, copy);
+        off += copy;
+    }
+};
 
 template <typename T> struct window_queue {
   std::vector<T *> data;
@@ -47,45 +61,13 @@ template <typename T> struct window_queue {
       : data(size, nullptr), head(0), mask(size - 1) {}
 };
 
-template <typename T> struct ooo_queue {
-  std::deque<T *> data;
-  size_t mask;
-
-  T *&operator[](size_t i) {
-    assert(i < mask + 1);
-    return data[i];
-  }
-
-  T *front() { return data.front(); }
-
-  void insert(message *msg, size_t idx) {  
-    if (idx > data.size())
-      data.resize(idx, nullptr);
-    data.push_back(msg);
-  }
-
-  void pop_front() { data.pop_front(); }
-
-  size_t capacity() const { return mask + 1; }
-
-  void resize_upon_round() {
-    auto nsize = 2 * (mask + 1);
-    data.resize(nsize);
-    mask = nsize - 1;
-  }
-
-  bool has_elements() const{
-      return !data.empty();
-  }
-
-  ooo_queue() : data() {}
-};
-
 template <uint32_t width> struct transport_output {
   // reserve some headroom
   static constexpr uint32_t N = 2 * width;
-  transport_output(uint64_t min_seq)
-      : wnd(N), least_in_window(min_seq), max_rx(0) {}
+  static constexpr unsigned kLowThreshold = 2048;
+  transport_output(uint64_t min_seq, message_allocator *port_allocator)
+      : wnd(N), port_allocator(port_allocator), least_in_window(min_seq),
+        max_rx(0) {}
 
   uint64_t get_last_acked_packet() const { return least_in_window - 1; }
 
@@ -97,34 +79,19 @@ template <uint32_t width> struct transport_output {
       max_rx = seq;
       ts = *msg->get_ts();
     }
+
+    // dont buffer in case of imminent buffer exhaustion
+    if (unlikely(seq != least_in_window &&
+                 port_allocator->get_remaining_space() < kLowThreshold))
+      return false;
     wnd[idx] = msg;
     return true;
   }
 
-  bool set_and_reassmble(uint64_t seq, message *msg, bool sack, bool end) {
-    auto idx = index(seq);
-    if (beyond_window(seq) || wnd[idx])
+  bool set_and_reassmble(uint64_t seq, message *msg) {
+    if (!set(seq, msg))
       return false;
-    if (seq > max_rx) {
-      max_rx = seq;
-      ts = *msg->get_ts();
-    }
-    if (seq == least_in_window) {
-      ++least_in_window;
-      msg->shrink_headroom(sizeof(protocol::ft_header) +
-                           (sack ? sizeof(protocol::ft_sack_payload) : 0));
-      message::merge(first, last, msg);
-      wnd.advance_head();
-      if (end) {
-        out.push_back(first);
-        first = last = nullptr;
-      }
-
-      if(out_of_order.has_elements())
-          reassemble([&](message*){ out.push_back(msg); });
-    } else { 
-      wnd[idx] = msg;
-    }
+    reassemble([&](message_buffer&& complete_msg) { out.push_back(complete_msg.buffered); });
     return true;
   }
 
@@ -156,12 +123,12 @@ template <uint32_t width> struct transport_output {
     unsigned advanced = 0;
     while (wnd.front()) {
       ++least_in_window;
+      if (wnd.new_round())
+        estimate_rcv_rtt();
       auto *mbuf = wnd.front();
       auto *hdr = mbuf->data<protocol::ft_header>();
       bool end = hdr->end;
-      mbuf->shrink_headroom(sizeof(protocol::ft_header) + hdr->sack
-                                ? sizeof(protocol::ft_sack_payload)
-                                : 0);
+      mbuf->shrink_headroom(sizeof(protocol::ft_header));
       message::merge(first, last, mbuf);
       if (end) {
         auto *msg = first;
@@ -224,12 +191,19 @@ template <uint32_t width> struct transport_output {
     }
   }
 
-  bool read(message *&msg) {
-    if (out.empty())
-      return false;
-    msg = out.front();
+  size_t read(void* buf, size_t size) {
+    if (out.empty()) 
+        return 0;
+    auto *msg = out.front();
+    auto to_copy = std::min<size_t>(msg->pkt_len, size);
+    assert(to_copy == msg->pkt_len);
+    if(msg->nb_segs > 1)
+        rte_pktmbuf_read(out.front(), 0, size, buf);
+    else
+        std::memcpy(buf, msg->data<uint8_t>(), size);
     out.pop_front();
-    return true;
+    rte_pktmbuf_free(msg);
+    return to_copy;
   }
 
   uint64_t get_ts() {
@@ -238,9 +212,11 @@ template <uint32_t width> struct transport_output {
   }
 
   window_queue<message> wnd;
-  ooo_queue<message*> out_of_order;
   message *first = nullptr, *last = nullptr;
+  message_allocator *port_allocator;
+  user_buffer buffer{};
   std::deque<message *> out;
+  size_t off_read = 0;
   uint64_t least_in_window;
   uint64_t max_rx;
   uint64_t ts = 0;

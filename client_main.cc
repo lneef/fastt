@@ -90,47 +90,46 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 }
 
 static constexpr auto dur = 1e6;
-static constexpr uint16_t dataSize = sizeof(kv::kv_packet<kv::kv_request>);
-
 static int lcore_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
   std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
-  auto &allocator = adapter->allocator[me];
   auto &cif = *adapter->cifs[me];
   kv_proxy kv(&cif);
   kv.connect(adapter->cfg, 1, adapter->dmac);
   uint64_t t = 0;
   uint64_t c = 0;
-  auto completion_handler = [&](slot &slt) {
-    if (!slt.has_message())
-      return;
-    auto msg = std::move(slt).get();
-    msg.free();
-    if (msg.done)
-      slt.con->put_slot(&slt);
-    ++c;
-  };
-  auto now = rte_get_timer_cycles();
-  while (t < dur) {
-    kv.handle_active(completion_handler);
-    auto *tx = kv.start();
-    if (!tx)
-      continue;
-    auto *req = allocator->alloc_message(dataSize);
-    kv.lookup(dist(rng), req, t);
-    auto sent = tx->send(req);
-    assert(sent);
-    ++t;
-  }
-  while (c < t)
-    kv.handle_active(completion_handler);
 
+  kv::kv_packet<kv::kv_request> req;
+  kv::kv_packet<kv::kv_completion> resp;
+  auto now = rte_get_timer_cycles();
+  size_t rcvd = 0;
+  while(t < dur){
+      cif.poll();
+      while((rcvd = kv.recv(&resp, sizeof(resp)) > 0)){
+          kv.complete(resp.id);
+          ++c;
+      }
+      auto *tx = kv.start();
+      if(!tx)
+          continue;
+      kv::create_kv_request(reinterpret_cast<uint8_t*>(&req), tx->id, dist(rng));
+      kv.send(&req, sizeof(req));
+      ++t;
+  }
+  while(c < dur){
+      cif.poll();
+      rcvd = kv.recv(&resp, sizeof(resp));
+      if(!rcvd)
+          continue;
+      kv.complete(resp.id);
+      ++c;
+  }
   kv.acknowledge_all();
   kv.flush();
-  auto stats = kv.con_at(0).get_transport_stats();
+  auto stats = kv.con->get_transport_stats();
   std::cerr << stats.retransmitted << ", " << stats.retransmissions
             << std::endl;
   auto end = rte_get_timer_cycles();
@@ -146,26 +145,34 @@ static void run(lcore_function_t *f, void *args) {
 int run(netconfig &conf) {
   if (fastt::init())
     return -1;
-  auto cnt = rte_lcore_count();
-  auto ifc = iface::configure_port(0, cnt, cnt);
+
+  auto nthreads = rte_lcore_count();
+  unsigned i = 0;
+  uint16_t lcore_id;
+  std::vector<std::shared_ptr<message_allocator>> allocators;
+  allocators.reserve(nthreads);
+  RTE_LCORE_FOREACH(lcore_id) {
+    allocators.emplace_back(std::make_shared<message_allocator>(
+        ("mpool" + std::to_string(i)).c_str(), 16383));
+    ++i;
+  }
+  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);
   if (!ifc)
     return -1;
 
-  uint16_t i = 0;
-  uint16_t lcore;
-  lcore_adapter adpater(rte_lcore_count(), {conf.dip, conf.sports[i]});
-  RTE_LCORE_FOREACH(lcore) {
-    auto [port, txq, rxq, pool] = ifc->get_slice(i);
-    adpater.allocator[i] = std::make_shared<message_allocator>(
-        ("mpool" + std::to_string(i)).c_str(), 8191);
-    adpater.cifs[i] = std::make_unique<client_iface>(
-        port, txq, rxq, adpater.allocator[i],
-        con_config{conf.sip, conf.sports[i]}, lcore);
-    adpater.dmac = conf.dmac;
+  lcore_adapter adapter(nthreads, {conf.dip, conf.dport});
+  adapter.dmac = conf.dmac;
+  i = 0;
+  RTE_LCORE_FOREACH(lcore_id) {
+    auto [port, txq, rxq] = ifc->get_slice(i);
+    adapter.allocator[i] = std::move(allocators[i]);
+    adapter.cifs[i] = std::make_unique<client_iface>(
+        port, txq, rxq, adapter.allocator[i],
+        con_config{conf.sip, conf.sports[i]}, lcore_id);
     ++i;
   }
-  run(lcore_fn, &adpater);
 
+  run(lcore_fn, &adapter);
   ifc->stop();
   std::cout << "avg: " << lat.load() / rte_lcore_count() << std::endl;
   return 0;

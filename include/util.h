@@ -5,6 +5,7 @@
 #include <boost/intrusive/options.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <generic/rte_cycles.h>
 #include <rte_ether.h>
 #include <rte_mbuf.h>
@@ -13,8 +14,10 @@
 #include <vector>
 
 #include <boost/intrusive/list.hpp>
+#include <boost/unordered/unordered_flat_map.hpp>
 
 namespace bi = boost::intrusive;
+namespace bu = boost::unordered;
 
 extern uint64_t to_us;
 extern uint64_t to_ms;
@@ -22,6 +25,9 @@ extern uint64_t to_ms;
 void init_timing();
 
 using list_hook = bi::list_member_hook<bi::link_mode<bi::link_mode_type::auto_unlink>>;
+
+template<typename Key, typename T>
+using flow_table = bu::unordered_flat_map<Key, T>;
 
 template<typename T, list_hook T::*link  = &T::link>
 using intrusive_list_t = bi::list<T, bi::member_hook<T, list_hook, link>, bi::constant_time_size<false>>;
@@ -127,6 +133,10 @@ template <> inline uint32_t calc_hash<flow_tuple>(const flow_tuple &tuple) {
 
 template <> inline uint32_t calc_hash<uint32_t>(const uint32_t &val) {
   return jhash_3words(val, 0, 0);
+}
+
+inline std::size_t hash_value(const flow_tuple& ft) {
+    return calc_hash(ft);
 }
 
 template <typename K, typename V> struct fixed_size_hash_table {

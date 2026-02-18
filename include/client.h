@@ -27,6 +27,10 @@ public:
     return con->up();
   }
 
+  void poll(){
+      manager.poll_client();
+  }
+
   message *recv_message(connection *con);
   connection *open_connection(const con_config &target, rte_ether_addr &dmac);
 
