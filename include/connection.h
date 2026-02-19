@@ -212,7 +212,7 @@ public:
         auto &acon = *it;
         ++it;
         if (!handler(acon)) {
-          acon.link.is_linked();
+          acon.link.unlink();
           blocked.push_front(acon);
         }
       }
