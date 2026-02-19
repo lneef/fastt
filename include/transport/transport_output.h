@@ -123,8 +123,10 @@ struct transport_output {
     unsigned advanced = 0;
     while (wnd.front()) {
       ++least_in_window;
-      if (wnd.new_round())
+      if (wnd.new_round()){
         estimate_rcv_rtt();
+        probe_resize();
+      }
       auto *mbuf = wnd.front();
       auto *hdr = mbuf->data<protocol::ft_header>();
       bool end = hdr->end;
