@@ -210,8 +210,7 @@ struct transport_output {
   }
 
   uint64_t get_ts() {
-    auto now = rte_get_timer_cycles() / get_ticks_us();
-    return now - ts;
+    return ts;
   }
 
   window_queue<message> wnd;

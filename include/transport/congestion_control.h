@@ -1,4 +1,5 @@
 #pragma once
+#include "util.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -34,20 +35,20 @@ struct swift {
         base_target_delay(target_delay), cwnd_size(initial_len),
         min_wd_size(std::max<uint64_t>(initial_len >> 8, 1)) {}
 
-  void on_ack(uint64_t ack, uint64_t now, uint64_t rtt) {
+  void on_ack(uint64_t ack, uint64_t now, uint64_t srtt, uint64_t delay) {
     retransmit_cnt = 0;
-    bool can_decrease = now - last_decrease > rtt;
+    bool can_decrease = now - last_decrease > srtt * get_ticks_us();
 
     // Skip hop delay
     auto target_delay =
         base_target_delay +
         std::max<float>(
             std::min<float>(fast_inv_sqrt(cwnd_size) * 5.4 - 0.48, 5), 0);
-    if (rtt < target_delay) {
+    if (delay < target_delay) {
       cwnd_size += ai / cwnd_size * (ack - least_in_window);
     } else if (can_decrease) {
       cwnd_size *=
-          std::max<float>(1 - beta * (rtt - target_delay) / rtt, 1 - max_md);
+          std::max<float>(1 - beta * (delay - target_delay) / delay, 1 - max_md);
       last_decrease = now;
     }
     least_in_window = ack;
@@ -61,7 +62,7 @@ struct swift {
   void on_retransmission_timeout(std::size_t nb, uint64_t rtt, uint64_t now) {
     if (nb == 0)
       return;
-    bool can_decrease = now - last_decrease > rtt;
+    bool can_decrease = now - last_decrease >= rtt * get_ticks_us();
     retransmit_cnt += nb;
     if (retransmit_cnt > reset_threshold) {
       cwnd_size = min_wd_size;
@@ -74,7 +75,7 @@ struct swift {
 
   void on_fast_recovery(uint64_t now, uint64_t rtt) {
     retransmit_cnt = 0;
-    bool can_decrease = now - last_decrease > rtt;
+    bool can_decrease = now - last_decrease >= rtt * get_ticks_us();
     if (can_decrease) {
       cwnd_size = (1 - max_md) * cwnd_size;
       last_decrease = now;

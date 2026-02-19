@@ -155,7 +155,7 @@ public:
             stats.retransmissions, rt_stats.rtt};
   }
 
-  bool acknowledge() {
+  bool acknowledge(uint64_t now = rte_get_timer_cycles()) {
     message *msg;
     bool is_sack = trx.has_holes();
     uint64_t ack = trx.get_last_acked_packet();
@@ -177,7 +177,7 @@ public:
       scheduler.ack_callback(ack);
     }
     protocol::prepare_ack_pkt(msg, ack, trx.capacity(),
-                              trx.get_ts(), is_sack);
+                              now / get_ticks_us() - trx.get_ts(), is_sack);
     FASTT_LOG_DEBUG("Return %u capacity to peer\n",
                     trx.capacity(kOustandingMessages));
     pkt_if->consume_pkt(msg, sport, target);

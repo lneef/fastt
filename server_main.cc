@@ -97,16 +97,15 @@ int lcore_server_fun(void *arg) {
   kv::kv_packet<kv::kv_completion> resp;
 
   while (!terminate) {
-    server->poll([&](connection &con) {
-      while(true) {     
+    server->poll([&](connection &con) -> bool {
       if (!con.can_recv() || !con.can_send())
-        return;
+        return false;
 
       auto sz = con.recv(&req, sizeof(req));
       assert(sz == sizeof(req));
       serve(&resp, &req);
       con.send(&resp, sizeof(resp), {true, true});
-      }
+      return true;
     });
 
     server->complete();

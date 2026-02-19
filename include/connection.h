@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <generic/rte_cycles.h>
 #include <memory>
 #include <ranges>
 #include <utility>
@@ -46,7 +47,7 @@ public:
     }
   }
   void process_pkt(rte_mbuf *pkt);
-  void acknowledge_all();
+  void acknowledge_all(uint64_t now);
   void accept();
   uint16_t receive_message(message **msgs, uint16_t cnt);
   void open_connection();
@@ -63,9 +64,7 @@ public:
     return transport_impl->send(buf, size, meta.som, meta.eom);
   }
 
-  size_t recv(void *buf, size_t len){
-      return transport_impl->recv(buf, len);
-  }
+  size_t recv(void *buf, size_t len) { return transport_impl->recv(buf, len); }
 
   concurrency::send_awaitable send(concurrency::scheduler &schdlr, message *msg,
                                    bool first, bool last);
@@ -174,6 +173,12 @@ public:
     }
   }
 
+  void acknowledge_all() {
+    auto now = rte_get_timer_cycles();
+    for (auto &con : active)
+      con.acknowledge_all(now);
+  }
+
   void add_mac(uint32_t ip, rte_ether_addr &mac) {
     pkt_if.add_mapping(ip, mac);
   }
@@ -198,20 +203,28 @@ public:
 
   template <typename F> void poll(F &&handler) {
     fetch_from_qpair();
+    intrusive_list_t<connection> blocked;
     if (!is_client)
       accept_connection();
-    for(auto& con : active)
-        con.acknowledge_all();
     flush();
-    for (auto &con : active) 
-      handler(con); 
+    while (active.size()) {
+      for (auto it = active.begin(), end = active.end(); it != end;) {
+        auto &acon = *it;
+        ++it;
+        if (!handler(acon)) {
+          acon.link.is_linked();
+          blocked.push_front(acon);
+        }
+      }
+    }
+    std::swap(blocked, active);
     check_timeouts();
   }
 
   void poll_client() {
     fetch_from_qpair();
-    for(auto& con : active)
-        con.acknowledge_all();
+    for (auto &con : active)
+      con.acknowledge_all(rte_get_timer_cycles());
     check_timeouts();
     con_timer_manager.manage();
   }

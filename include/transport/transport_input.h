@@ -67,7 +67,7 @@ public:
     update_srtt(&srtt_desc, ts);
     rte_pktmbuf_free(srtt_desc.packet);
     unacked.pop_front();
-    cc.on_ack(seq, rte_get_timer_cycles(), (ts - *srtt_desc.packet->get_ts()));
+    cc.on_ack(seq, rte_get_timer_cycles(), rtt, (ts - *srtt_desc.packet->get_ts()));
     return burst_rtt;
   }
 
