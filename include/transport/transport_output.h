@@ -179,7 +179,7 @@ struct transport_output {
   }
 
   void estimate_rcv_rtt() {
-    round = last_round;
+    last_round = round;
     round = rte_get_timer_cycles();
     did_resize_in_round = false;
     c_rcv_rtt = round - last_round;
