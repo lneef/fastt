@@ -36,20 +36,28 @@ struct task {
   std::coroutine_handle<promise_type> handle;
 };
 
-struct send_awaitable {
-  scheduler &schdlr;
-  connection &con;
-  message *msg;
+struct io_awaitable{
+    scheduler &schdlr;
+    connection &con;
+
+    // user data
+    void* buf;
+    size_t size;
+
+    io_awaitable(scheduler &schdlr, connection &con, void* buf, size_t size): schdlr(schdlr), con(con), buf(buf), size(size) {}
+};
+
+struct send_awaitable : public io_awaitable{
   msg_meta meta;
 
-  send_awaitable(scheduler &schdlr, connection &con, message *msg, msg_meta& meta)
-      : schdlr(schdlr), con(con), msg(msg), meta(meta) {}
+  send_awaitable(scheduler &schdlr, connection &con, void* buf, size_t size, const msg_meta& meta)
+      : io_awaitable(schdlr, con, buf, size), meta(meta) {}
 
   bool await_ready() noexcept;
 
   void await_suspend(std::coroutine_handle<task::promise_type> caller);
 
-  bool await_resume() noexcept;
+  size_t await_resume() noexcept;
 };
 
 struct recv_awaitable {

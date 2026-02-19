@@ -13,7 +13,6 @@
 #include <rte_timer.h>
 
 #include "kv_protocol.h"
-#include <random>
 #include <vector>
 
 inline void create_get_request(message *msg, int64_t key, uint64_t id) {

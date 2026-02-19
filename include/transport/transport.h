@@ -77,7 +77,6 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
 
 class connection;
 class transport {
-  static constexpr uint16_t kOustandingMessages = 128;
   friend class connection;
   enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
 
@@ -89,7 +88,7 @@ public:
 
   transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
             const con_config &target)
-      : trx(min_seq, allocator), target(target), ttx(kOustandingMessages),
+      : trx(min_seq, allocator), target(target), ttx(),
         scheduler(), allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
 
   void probe_timeout() {
@@ -116,7 +115,7 @@ public:
       ts = trx.get_ts();
       scheduler.ack_callback(ack);
       protocol::prepare_ft_header(pkt, seq, ack, sid,
-                                  trx.capacity(kOustandingMessages), start, end,
+                                  trx.capacity(), start, end,
                                   ts);
     };
 
@@ -139,7 +138,7 @@ public:
       ts = trx.get_ts();
       scheduler.ack_callback(ack);
       protocol::prepare_ft_header(pkt, seq, ack, 0,
-                                  trx.capacity(kOustandingMessages), start, end,
+                                  trx.capacity(), start, end,
                                   ts, false);
     };
     auto inserted = ttx.record_pkt(mbuf, ctor);
@@ -177,7 +176,7 @@ public:
       msg = allocator->alloc_message(sizeof(protocol::ft_header));
       scheduler.ack_callback(ack);
     }
-    protocol::prepare_ack_pkt(msg, ack, trx.capacity(kOustandingMessages),
+    protocol::prepare_ack_pkt(msg, ack, trx.capacity(),
                               trx.get_ts(), is_sack);
     FASTT_LOG_DEBUG("Return %u capacity to peer\n",
                     trx.capacity(kOustandingMessages));
@@ -259,7 +258,7 @@ public:
   void accept_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     bool retval =
-        ttx.record_pkt(msg, [budget = trx.capacity(kOustandingMessages)](
+        ttx.record_pkt(msg, [budget = trx.capacity()](
                                 message *msg, uint64_t seq) {
           protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
         });
@@ -279,13 +278,6 @@ public:
       grant_returned += trx.max_rx - trx.least_in_window;
   }
 
-  void maybe_acknowledge() {
-    if (grant_returned >= kOustandingMessages / 4 || trx.has_holes()) {
-      acknowledge();
-      grant_returned = 0;
-    }
-  }
-
   unsigned capacity() { return ttx.get_current_wnd(); }
 
 private:
@@ -296,7 +288,7 @@ private:
     });
   }
 
-  transport_output<kOustandingMessages> trx;
+  transport_output trx;
   con_config target;
   transport_input ttx;
   ack_scheduler scheduler;
@@ -304,6 +296,6 @@ private:
   packet_if *pkt_if;
   uint16_t sport;
   uint32_t grant_returned = 0;
-  uint64_t rto = get_ticks_ms() * 5;
+  uint64_t rto = get_ticks_ms() * 10;
   connection_state cstate = connection_state::ESTABLISHING;
 };

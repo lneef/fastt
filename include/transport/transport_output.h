@@ -61,13 +61,13 @@ template <typename T> struct window_queue {
       : data(size, nullptr), head(0), mask(size - 1) {}
 };
 
-template <uint32_t width> struct transport_output {
+struct transport_output {
   // reserve some headroom
-  static constexpr uint32_t N = 2 * width;
+  static constexpr uint32_t kRcvSsthresh = 4;
   static constexpr unsigned kLowThreshold = 2048;
-  transport_output(uint64_t min_seq, message_allocator *port_allocator)
-      : wnd(N), port_allocator(port_allocator), least_in_window(min_seq),
-        max_rx(0) {}
+  transport_output(uint64_t min_seq, message_allocator *port_allocator, unsigned max_window_size = 128)
+      : wnd(kRcvSsthresh), port_allocator(port_allocator), least_in_window(min_seq),
+        max_rx(0), max_window_size(max_window_size) {}
 
   uint64_t get_last_acked_packet() const { return least_in_window - 1; }
 
@@ -145,9 +145,9 @@ template <uint32_t width> struct transport_output {
     return seq >= least_in_window && seq < least_in_window + wnd.capacity();
   }
 
-  uint32_t capacity(uint32_t min_capacity) const {
+  uint32_t capacity() const {
     return std::min<uint32_t>(least_in_window + wnd.mask - max_rx,
-                              min_capacity);
+                              max_window_size);
   }
 
   std::size_t __inline index(std::size_t i) {
@@ -185,7 +185,8 @@ template <uint32_t width> struct transport_output {
   }
 
   void probe_resize() {
-    if (c_rcv_rtt <= 2 * rcv_rtt && !did_resize_in_round) {
+    // we are very conservative here  
+    if (c_rcv_rtt <= rcv_rtt && !did_resize_in_round) {
       did_resize_in_round = true;
       wnd.resize_upon_round();
     }
@@ -222,4 +223,5 @@ template <uint32_t width> struct transport_output {
   uint64_t ts = 0;
   uint64_t round = 0, last_round = 0, rcv_rtt = rte_get_timer_hz(), c_rcv_rtt;
   bool did_resize_in_round = false;
+  const unsigned max_window_size;
 };

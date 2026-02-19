@@ -26,8 +26,7 @@ struct statistics {
 };
 
 class connection {
-  static constexpr uint16_t kMaxSlotsPerConnection =
-      transport::kOustandingMessages;
+  static constexpr uint16_t kMaxSlotsPerConnection = 128;
 
 public:
   struct msg_meta {
@@ -116,8 +115,6 @@ public:
     slt->unlink();
   }
 
-  void check_ack_necessary() { transport_impl->maybe_acknowledge(); }
-
   bool up() const { return transport_impl->active(); }
 
   bool can_send() { return transport_impl->capacity() > 0; }
@@ -203,16 +200,18 @@ public:
     fetch_from_qpair();
     if (!is_client)
       accept_connection();
-    for (auto &con : active) {
-      handler(con);
-      con.acknowledge_all();
-    }
+    for(auto& con : active)
+        con.acknowledge_all();
+    flush();
+    for (auto &con : active) 
+      handler(con); 
     check_timeouts();
-    con_timer_manager.manage();
   }
 
   void poll_client() {
     fetch_from_qpair();
+    for(auto& con : active)
+        con.acknowledge_all();
     check_timeouts();
     con_timer_manager.manage();
   }
