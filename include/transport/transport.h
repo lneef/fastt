@@ -116,7 +116,7 @@ public:
       scheduler.ack_callback(ack);
       protocol::prepare_ft_header(pkt, seq, ack, sid,
                                   trx.capacity(), start, end,
-                                  ts);
+                                  rte_get_timer_cycles() / get_ticks_us() - ts);
     };
 
     auto inserted = ttx.record_pkt(pkt, ctor);
@@ -135,7 +135,7 @@ public:
       uint64_t ack = 0;
       uint32_t ts = 0;
       ack = trx.get_last_acked_packet();
-      ts = trx.get_ts();
+      ts = rte_get_timer_cycles() / get_ticks_us() - trx.get_ts();
       scheduler.ack_callback(ack);
       protocol::prepare_ft_header(pkt, seq, ack, 0,
                                   trx.capacity(), start, end,
