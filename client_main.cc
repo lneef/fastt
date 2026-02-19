@@ -109,13 +109,16 @@ static int lcore_fn(void *arg) {
   while(t < dur){
       cif.poll();
       while((rcvd = kv.recv(&resp, sizeof(resp)) > 0)){
+          assert(resp.payload.key == kv[resp.id].key);
           kv.complete(resp.id);
           ++c;
       }
       auto *tx = kv.start();
       if(!tx)
           continue;
-      kv::create_kv_request(reinterpret_cast<uint8_t*>(&req), tx->id, dist(rng));
+      int64_t key = dist(rng);
+      kv::create_kv_request(reinterpret_cast<uint8_t*>(&req), tx->id, key);
+      tx->key = key;
       kv.send(&req, sizeof(req));
       ++t;
   }
