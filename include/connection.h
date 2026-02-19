@@ -206,6 +206,7 @@ public:
     intrusive_list_t<connection> blocked;
     if (!is_client)
       accept_connection();
+    acknowledge_all();
     flush();
     while (active.size()) {
       for (auto it = active.begin(), end = active.end(); it != end;) {
