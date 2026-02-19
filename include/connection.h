@@ -208,17 +208,8 @@ public:
       accept_connection();
     acknowledge_all();
     flush();
-    while (active.size()) {
-      for (auto it = active.begin(), end = active.end(); it != end;) {
-        auto &acon = *it;
-        ++it;
-        if (!handler(acon)) {
-          acon.link.unlink();
-          blocked.push_front(acon);
-        }
-      }
-    }
-    std::swap(blocked, active);
+    for(auto& con: active)
+        handler(con);
     check_timeouts();
   }
 
