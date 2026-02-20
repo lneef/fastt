@@ -110,6 +110,11 @@ public:
     }
   }
 
+  void check_ctrl(){
+    if (trx.check_wnd_return()) 
+      send_ctrl(trx.prepare_wnd_return(), false, trx.get_last_acked_packet());
+  }
+
   void send_ctrl(uint16_t wnd, bool blocked, uint64_t ack) {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     if (!msg)
@@ -161,9 +166,6 @@ public:
 
   size_t recv(void *buf, size_t size) {
     auto rcvd = trx.read(buf, size);
-    if (trx.check_wnd_return()) {
-      send_ctrl(trx.prepare_wnd_return(), false, trx.get_last_acked_packet());
-    }
     return rcvd;
   }
 

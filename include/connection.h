@@ -98,6 +98,10 @@ public:
     return transport_impl->get_stats();
   }
 
+  void transport_ctrl(){
+      transport_impl->check_ctrl();
+  }
+
   slot *get_slot() {
     assert(is_client);
     if (capacity() == 0 || free_list.empty())
@@ -208,8 +212,10 @@ public:
       accept_connection();
     acknowledge_all();
     flush();
-    for(auto& con: active)
+    for(auto& con: active){
         handler(con);
+        con.transport_ctrl();
+    }
     check_timeouts();
   }
 
