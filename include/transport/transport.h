@@ -99,10 +99,11 @@ public:
   void check_timeout(uint64_t now) {
     if(cstate != connection_state::ESTABLISHED)
         return;
-    if (ttx.get_current_wnd() == 0)
-      send_ctrl(0, true, 0);
-    if (ttx.all_acked())
+    if (ttx.all_acked()){
+      if (ttx.get_current_wnd() == 0)
+        send_ctrl(0, true, 0);  
       return;
+    }
     if (ttx.check_timeout(now)) {
       probe_timeout();
       ttx.rearm(now);
