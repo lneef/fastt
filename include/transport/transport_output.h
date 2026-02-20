@@ -84,8 +84,8 @@ struct transport_output {
   }
 
   bool is_set(uint64_t seq) {
-    return seq < least_in_window ||
-           (seq <= least_in_window + wnd.mask && wnd[index(seq)]);
+    return seq < next_seq ||
+           (seq <= next_seq + wnd.mask && wnd[index(seq)]);
   }
 
   bool beyond_window(uint64_t seq) {
@@ -123,11 +123,11 @@ struct transport_output {
   }
 
   std::size_t __inline index(std::size_t i) {
-    assert(i >= least_in_window);
-    return (i - least_in_window);
+    assert(i >= next_seq);
+    return (i - next_seq);
   }
 
-  bool has_holes() { return max_rx_in_window != least_in_window - 1; }
+  bool has_holes() { return max_rx_in_window != next_seq - 1; }
 
   uint16_t copy_bitset(protocol::ft_sack_payload *data) {
     uint16_t id = 0;
