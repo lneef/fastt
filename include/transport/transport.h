@@ -296,7 +296,7 @@ public:
 
   unsigned capacity() { return ttx.get_current_wnd(); }
 
-  bool can_recv() { return trx.wnd.front() != nullptr; }
+  bool can_recv() { return trx.out.size() > 0; }
 
 private:
   void setup_after_init() {
