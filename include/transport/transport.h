@@ -88,8 +88,8 @@ public:
 
   transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
             const con_config &target)
-      : trx(min_seq, allocator), target(target), ttx(),
-        scheduler(), allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
+      : trx(min_seq, allocator), target(target), ttx(), scheduler(),
+        allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
 
   void probe_timeout() {
     ttx.probe_retransmit(
@@ -99,10 +99,20 @@ public:
   void check_timeout(uint64_t now) {
     if (ttx.all_acked())
       return;
+    if (ttx.get_current_wnd() == 0)
+      send_ctrl(0, true, 0);
     if (ttx.check_timeout(now)) {
       probe_timeout();
       ttx.rearm(now);
     }
+  }
+
+  void send_ctrl(uint16_t wnd, bool blocked, uint64_t ack) {
+    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
+    if (!msg)
+      return;
+    protocol::prepare_ctrl_pkt(msg, wnd, blocked, ack);
+    pkt_if->consume_pkt(msg, sport, target);
   }
 
   bool send_pkt(message *pkt, uint16_t sid, bool start, bool end) {
@@ -114,8 +124,8 @@ public:
       ack = least_in_window;
       ts = trx.get_ts();
       scheduler.ack_callback(ack);
-      protocol::prepare_ft_header(pkt, seq, ack, sid,
-                                  trx.capacity(), start, end,
+      protocol::prepare_ft_header(pkt, seq, ack, sid, trx.prepare_wnd_return(), start,
+                                  end,
                                   rte_get_timer_cycles() / get_ticks_us() - ts);
     };
 
@@ -137,9 +147,8 @@ public:
       ack = trx.get_last_acked_packet();
       ts = rte_get_timer_cycles() / get_ticks_us() - trx.get_ts();
       scheduler.ack_callback(ack);
-      protocol::prepare_ft_header(pkt, seq, ack, 0,
-                                  trx.capacity(), start, end,
-                                  ts, false);
+      protocol::prepare_ft_header(pkt, seq, ack, trx.prepare_wnd_return(), start, end, ts,
+                                  false);
     };
     auto inserted = ttx.record_pkt(mbuf, ctor);
     if (inserted)
@@ -147,7 +156,13 @@ public:
     return size;
   }
 
-  size_t recv(void *buf, size_t size) { return trx.read(buf, size); }
+  size_t recv(void *buf, size_t size) {  
+      auto rcvd = trx.read(buf, size);
+      if(trx.check_wnd_return()){
+          send_ctrl(trx.prepare_wnd_return(), false, trx.get_last_acked_packet());
+      }
+      return rcvd; 
+  }
 
   transport_statistics get_stats() const {
     auto &rt_stats = ttx.get_stats();
@@ -160,14 +175,14 @@ public:
     bool is_sack = trx.has_holes();
     uint64_t ack = trx.get_last_acked_packet();
     if (is_sack) {
-      if (!scheduler.sack_pending(trx.max_rx))
+      if (!scheduler.sack_pending(trx.max_rx_in_window))
         return false;
       msg = allocator->alloc_message(sizeof(protocol::ft_header) +
                                      sizeof(protocol::ft_sack_payload));
       auto *sack_payload = rte_pktmbuf_mtod_offset(
           msg, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
       trx.copy_bitset(sack_payload);
-      scheduler.sack_callback(trx.max_rx);
+      scheduler.sack_callback(trx.max_rx_in_window);
       FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %lu\n",
                       sack_payload->bit_map_len, ack);
     } else {
@@ -176,10 +191,10 @@ public:
       msg = allocator->alloc_message(sizeof(protocol::ft_header));
       scheduler.ack_callback(ack);
     }
-    protocol::prepare_ack_pkt(msg, ack, trx.capacity(),
-                              now / get_ticks_us() - trx.get_ts(), is_sack);
     FASTT_LOG_DEBUG("Return %u capacity to peer\n",
-                    trx.capacity(kOustandingMessages));
+                    trx.get_available_wnd());
+    protocol::prepare_ack_pkt(msg, ack, trx.prepare_wnd_return(),
+                              now / get_ticks_us() - trx.get_ts(), is_sack);
     pkt_if->consume_pkt(msg, sport, target);
     return true;
   }
@@ -198,7 +213,7 @@ public:
         msg->free();
         return false;
       } else
-        trx.set_and_reassmble(hdr->seq, msg);
+        trx.set(hdr->seq, msg);
       break;
     }
     case protocol::pkt_type::FT_ACK: {
@@ -236,6 +251,15 @@ public:
       cstate = connection_state::ESTABLISHED;
       break;
     }
+    case protocol::pkt_type::FT_CRTL: {
+      if (hdr->wnd > 0) {
+        ttx.update_budget(hdr->wnd, hdr->ack);
+      } else if (hdr->blocked) {
+        send_ctrl(trx.prepare_wnd_return(), false, trx.get_last_acked_packet());
+      }
+      msg->free();
+      break;
+    };
     default:
       msg->free();
       break;
@@ -257,9 +281,8 @@ public:
 
   void accept_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
-    bool retval =
-        ttx.record_pkt(msg, [budget = trx.capacity()](
-                                message *msg, uint64_t seq) {
+    bool retval = ttx.record_pkt(
+        msg, [budget = trx.get_available_wnd()](message *msg, uint64_t seq) {
           protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
         });
     FASTT_LOG_DEBUG("Sent ack for init");
@@ -267,18 +290,13 @@ public:
     pkt_if->consume_pkt(msg, sport, target);
   }
 
-  bool can_recv() const { return !trx.out.empty(); }
-
   bool active() { return connection_state::ESTABLISHED == cstate; }
 
-  template <typename F> void receive_messages(F &&f) {
-    grant_returned += trx.advance(f);
-    /* maybe we lost pkts */
-    if (trx.max_rx > trx.least_in_window)
-      grant_returned += trx.max_rx - trx.least_in_window;
-  }
+  template <typename F> void receive_messages(F &&f) { trx.advance(f); }
 
   unsigned capacity() { return ttx.get_current_wnd(); }
+
+  bool can_recv() { return trx.wnd.front() != nullptr; }
 
 private:
   void setup_after_init() {
@@ -295,7 +313,6 @@ private:
   message_allocator *allocator;
   packet_if *pkt_if;
   uint16_t sport;
-  uint32_t grant_returned = 0;
   uint64_t rto = get_ticks_ms() * 10;
   connection_state cstate = connection_state::ESTABLISHING;
 };

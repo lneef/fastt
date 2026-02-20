@@ -4,7 +4,7 @@
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 
-void protocol::prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint16_t sid, uint16_t wnd, bool start, bool end, uint32_t us, bool is_sack){
+void protocol::prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint16_t wnd, bool start, bool end, uint32_t us, bool is_sack){
     auto *ft = msg->move_headroom<protocol::ft_header>();
     ft->ack = ack;
     ft->seq = seq;
@@ -12,7 +12,6 @@ void protocol::prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint1
     ft->start = start;
     ft->end = end;
     ft->ts = us;
-    ft->sid = sid;
     ft->sack = is_sack;
     ft->type = protocol::pkt_type::FT_MSG;
 }
@@ -38,6 +37,14 @@ void protocol::prepare_init_header(message* msg, uint64_t seq){
     ft->type = protocol::pkt_type::FT_INIT;
 }
 
+
+void protocol::prepare_ctrl_pkt(message* msg, uint64_t ack, uint16_t wnd, bool blocked){
+    auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header*);
+    ft->ack = ack;
+    ft->wnd = wnd;
+    ft->blocked = blocked;
+    ft->type = protocol::pkt_type::FT_CRTL;
+}
 
 void protocol::prepare_init_ack_header(message* msg, uint64_t seq, uint64_t ack, uint16_t wnd){
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header*);

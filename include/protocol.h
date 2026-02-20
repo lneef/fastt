@@ -14,7 +14,8 @@ enum pkt_type : uint8_t {
   FT_MSG = 0,
   FT_ACK = 1,
   FT_INIT = 2,
-  FT_INIT_ACK = 3
+  FT_INIT_ACK = 3,
+  FT_CRTL = 4,
 };
 
 struct __rte_packed_begin ft_header {
@@ -23,8 +24,9 @@ struct __rte_packed_begin ft_header {
   uint64_t start :1;
   uint64_t end : 1;
   uint64_t sack : 1;
-  uint64_t ts : 32;
-  uint64_t sid :10;
+  uint64_t blocked :1;
+  uint64_t ts : 30;
+  uint64_t sid: 11; 
   uint64_t seq;
   uint64_t ack;
 } __rte_packed_end;
@@ -45,13 +47,14 @@ struct __rte_packed_begin ft_sack_payload {
 #endif
 } __rte_packed_end;
 
-void prepare_ft_header(message *msg, uint64_t seq, uint64_t ack,  uint16_t sid, uint16_t wnd, 
+void prepare_ft_header(message *msg, uint64_t seq, uint64_t ack, uint16_t wnd, 
                        bool start, bool fini, uint32_t us = 0, bool is_sack = false);
 void prepare_ack_pkt(message *msg, uint64_t ack, uint16_t wnd, uint32_t us,
                      bool is_sack = false);
 void prepare_init_header(message *msg, uint64_t seq);
 void prepare_init_ack_header(message *msg, uint64_t seq, uint64_t ack,
                              uint16_t wnd);
+void prepare_ctrl_pkt(message *msg, uint64_t ack, uint16_t wnd, bool blocked);
 
 namespace defs {
 static constexpr uint16_t kipOffset = sizeof(rte_ether_hdr);

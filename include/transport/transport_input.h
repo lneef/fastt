@@ -40,10 +40,10 @@ public:
     statistics() : acked(0), retransmitted(0) {}
   };
   transport_input(uint32_t budget = 1)
-      : cc(64, 80), budget(budget), seq(min_seq), rtt() {}
+      : cc(16, 80), budget(budget), seq(min_seq), rtt() {}
 
   unsigned get_current_wnd() const {
-    return std::min<unsigned>(budget, cc.space(seq));
+    return budget;
   }
 
   bool check_timeout(uint64_t now) {
@@ -67,7 +67,6 @@ public:
     update_srtt(&srtt_desc, ts);
     rte_pktmbuf_free(srtt_desc.packet);
     unacked.pop_front();
-    cc.on_ack(seq, rte_get_timer_cycles(), rtt, (ts - *srtt_desc.packet->get_ts()));
     return burst_rtt;
   }
 
@@ -87,7 +86,6 @@ public:
   }
 
   template <typename F> void probe_retransmit(F &&cb) {
-    auto cnt = 0;
     for (auto &entry : unacked) {
       auto *msg = entry.packet;
       if (*msg->get_ts() == 0)
@@ -97,9 +95,7 @@ public:
       FASTT_LOG_DEBUG("Retransmitting packet: %lu\n", entry.seq);
       prepare_retransmit(&entry);
       cb(msg);
-      ++cnt;
     }
-    cc.on_retransmission_timeout(cnt, rtt, rte_get_timer_cycles());
   }
 
   void prepare_retransmit(sender_entry *entry) {
@@ -155,8 +151,6 @@ public:
       update_srtt(largest_acked, ts);
       update_budget(budget, largest_acked_seq);
     }
-
-    cc.on_fast_recovery(rte_get_timer_cycles(), rtt);
   }
 
   auto size() { return unacked.size(); }

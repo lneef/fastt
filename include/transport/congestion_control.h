@@ -7,6 +7,8 @@
  * Swift Congestion Control without pacing, so large scale incasts
  * should be avoided (https://dl.acm.org/doi/pdf/10.1145/3387514.3406591)
  * it is meant to emphasize "user level" networking solution in a unikernel
+ * additionly it is only supposed to avoid completely downing the receiver in
+ * case of medium scale incasts
  */
 
 static __inline constexpr float fast_inv_sqrt(float val) {
@@ -28,6 +30,7 @@ struct swift {
   static constexpr uint64_t reset_threshold = 64;
   uint64_t least_in_window, retransmit_cnt, last_decrease;
   float base_target_delay, cwnd_size;
+  float pacing = 0;
   const uint64_t min_wd_size;
 
   swift(std::size_t initial_len, uint64_t target_delay)
@@ -47,8 +50,8 @@ struct swift {
     if (delay < target_delay) {
       cwnd_size += ai / cwnd_size * (ack - least_in_window);
     } else if (can_decrease) {
-      cwnd_size *=
-          std::max<float>(1 - beta * (delay - target_delay) / delay, 1 - max_md);
+      cwnd_size *= std::max<float>(1 - beta * (delay - target_delay) / delay,
+                                   1 - max_md);
       last_decrease = now;
     }
     least_in_window = ack;
