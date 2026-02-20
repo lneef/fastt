@@ -68,6 +68,7 @@ public:
       while (!ifc->probe_connection_setup_done(con))
         ;
       con->acknowledge_all(rte_get_timer_cycles());
+      ifc->flush();
     }
     return 0;
   }
