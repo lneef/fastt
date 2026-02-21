@@ -52,7 +52,7 @@ void prepare_ft_header(message *msg, uint64_t seq, uint64_t ack, uint16_t wnd,
                        bool start, bool fini, uint32_t us = 0, bool is_sack = false);
 void prepare_ack_pkt(message *msg, uint64_t ack, uint32_t us,
                      bool is_sack = false);
-void prepare_init_header(message *msg, uint64_t seq);
+void prepare_init_header(message *msg, uint64_t seq, uint16_t budget);
 void prepare_init_ack_header(message *msg, uint64_t seq, uint64_t ack,
                              uint16_t wnd);
 void prepare_ctrl_pkt(message *msg, uint64_t seq, uint16_t wnd);

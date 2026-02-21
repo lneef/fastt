@@ -26,11 +26,12 @@ void protocol::prepare_ack_pkt(message* msg, uint64_t ack, uint32_t us, bool is_
 }
 
 
-void protocol::prepare_init_header(message* msg, uint64_t seq){
+void protocol::prepare_init_header(message* msg, uint64_t seq, uint16_t budget){
     auto *ft = static_cast<ft_header*>(msg->data());
     ft->seq = seq;
     ft->ts = 0;
     ft->sack = 0;
+    ft->wnd = budget;
     ft->start = true;
     ft->end = true;
     ft->type = protocol::pkt_type::FT_INIT;

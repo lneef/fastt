@@ -99,7 +99,7 @@ public:
   void check_timeout(uint64_t now) {
     if (cstate != connection_state::ESTABLISHED)
       return;
-    if (ttx.all_acked()) 
+    if (ttx.all_acked())
       return;
     if (ttx.check_timeout(now)) {
       probe_timeout();
@@ -130,16 +130,15 @@ public:
     rte_memcpy(mbuf->data<uint8_t>(), buf, size);
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
-      uint32_t ts = 0;  
+      uint32_t ts = 0;
       uint16_t wnd = trx.prepare_wnd_return();
-      if(scheduler.ack_pending(seq)){
-          ack = trx.get_last_rcvd_in_seq();
-          ts = rte_get_timer_cycles() / get_ticks_us() - trx.get_ts();
-          scheduler.ack_callback(ack);
+      if (scheduler.ack_pending(seq)) {
+        ack = trx.get_last_rcvd_in_seq();
+        ts = rte_get_timer_cycles() / get_ticks_us() - trx.get_ts();
+        scheduler.ack_callback(ack);
       }
 
-      protocol::prepare_ft_header(pkt, seq, ack, wnd,
-                                  start, end, ts, false);
+      protocol::prepare_ft_header(pkt, seq, ack, wnd, start, end, ts, false);
     };
     auto inserted = ttx.record_pkt(mbuf, ctor);
     if (inserted)
@@ -169,8 +168,8 @@ public:
       scheduler.ack_callback(ack);
     }
     FASTT_LOG_DEBUG("Return %u capacity to peer\n", trx.get_available_wnd());
-    protocol::prepare_ack_pkt(msg, ack,
-                              now / get_ticks_us() - trx.get_ts(), is_sack);
+    protocol::prepare_ack_pkt(msg, ack, now / get_ticks_us() - trx.get_ts(),
+                              is_sack);
     pkt_if->consume_pkt(msg, sport, target);
     return true;
   }
@@ -182,8 +181,8 @@ public:
     case protocol::pkt_type::FT_MSG: {
       if (hdr->ack)
         ttx.acknowledge(hdr->ack, ts, hdr->sack);
-      if(hdr->wnd)
-        ttx.update_budget(hdr->wnd);  
+      if (hdr->wnd)
+        ttx.update_budget(hdr->wnd);
 
       scheduler.process_seq(hdr->seq);
       if (trx.is_set(hdr->seq)) {
@@ -205,6 +204,7 @@ public:
       }
       if (hdr->ack == min_seq)
         cstate = connection_state::ESTABLISHED;
+      assert(hdr->wnd == 0);
       msg->free();
       break;
     }
@@ -214,8 +214,8 @@ public:
         return false;
       } else
         trx.set(hdr->seq, msg);
-      if(hdr->wnd)
-          ttx.update_budget(hdr->wnd);
+      if (hdr->wnd)
+        ttx.update_budget(hdr->wnd);
       setup_after_init();
       break;
     }
@@ -228,18 +228,19 @@ public:
       } else {
         trx.set(hdr->seq, msg);
       }
-      if(hdr->wnd)
-          ttx.update_budget(hdr->wnd);
+      assert(hdr->wnd > 0);
+      ttx.update_budget(hdr->wnd);
       setup_after_init();
       cstate = connection_state::ESTABLISHED;
       break;
     }
     case protocol::pkt_type::FT_CRTL: {
-      if(trx.is_set(hdr->seq)){
-          msg->free();
-          return false;
+      if (trx.is_set(hdr->seq)) {
+        msg->free();
+        return false;
       }
       trx.set(hdr->seq, msg);
+      assert(hdr->wnd > 0);
       ttx.update_budget(hdr->wnd);
       msg->free();
       break;
@@ -253,10 +254,11 @@ public:
 
   void open_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
-    bool retval = ttx.record_pkt(msg, [](message *msg, uint64_t seq) {
-      protocol::prepare_init_header(msg, seq);
-    });
-    assert(retval);
+    assert(msg);
+    ttx.record_ctrl_pkt(
+        msg, [budget = trx.prepare_wnd_return()](message *msg, uint64_t seq) {
+          protocol::prepare_init_header(msg, seq, budget);
+        });
     auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     assert(hdr->type == protocol::FT_INIT);
     FASTT_LOG_DEBUG("Sent init header to peer %u %u\n", target.ip, target.port);
@@ -265,12 +267,12 @@ public:
 
   void accept_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
-    bool retval = ttx.record_pkt(
+    assert(msg);
+    ttx.record_ctrl_pkt(
         msg, [budget = trx.prepare_wnd_return()](message *msg, uint64_t seq) {
           protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
         });
     FASTT_LOG_DEBUG("Sent ack for init");
-    assert(retval);
     pkt_if->consume_pkt(msg, sport, target);
   }
 

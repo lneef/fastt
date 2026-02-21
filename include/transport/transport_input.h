@@ -37,8 +37,8 @@ public:
     uint64_t acked, retransmitted, rtt;
     statistics() : acked(0), retransmitted(0) {}
   };
-  transport_input(uint32_t budget = 1)
-      :  budget(budget), seq(min_seq), rtt() {}
+  transport_input()
+      :  seq(min_seq), rtt() {}
 
   unsigned get_current_wnd() const {
     return budget;
@@ -57,8 +57,6 @@ public:
     while (!unacked.empty() && unacked.front().seq < seq) {
       auto &desc = unacked.front();
       assert(desc.packet);
-      assert(queued_mbufs >= desc.packet->nb_segs);
-      queued_mbufs -= desc.packet->nb_segs;
       rte_pktmbuf_free(desc.packet);
       unacked.pop_front();
     }
@@ -66,8 +64,6 @@ public:
 
     auto &srtt_desc = unacked.front();
     update_srtt(&srtt_desc, ts);
-    assert(queued_mbufs >= srtt_desc.packet->nb_segs);
-    queued_mbufs -= srtt_desc.packet->nb_segs;
     rte_pktmbuf_free(srtt_desc.packet);
     unacked.pop_front();
     return burst_rtt;
@@ -77,7 +73,7 @@ public:
   void record_ctrl_pkt(message* msg, F &&ctor){
       ctor(msg, seq);
       msg->inc_refcnt();
-      queued_mbufs += msg->nb_segs;
+      *msg->get_ts() = 0;
       unacked.emplace_back(msg, seq++, false);
   }
 
@@ -87,7 +83,6 @@ public:
     --budget;
     ctor(msg, seq);
     msg->inc_refcnt();
-    queued_mbufs += msg->nb_segs;
     *msg->get_ts() = 0;
     unacked.emplace_back(msg, seq++, false);
     FASTT_LOG_DEBUG("Enqueue pkt with %lu new budget %u\n", seq - 1, budget);
@@ -183,11 +178,10 @@ public:
 private:
   statistics stats;
   std::deque<sender_entry> unacked;
-  uint32_t budget;
+  uint32_t budget = 0;
   uint64_t seq;
   uint64_t least_unacked_pkt = min_seq;
   uint64_t rtt;
   uint64_t rto = get_ticks_ms() * 5;
   uint64_t timeout;
-  size_t queued_mbufs = 0;
 };
