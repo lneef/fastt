@@ -38,7 +38,7 @@ void connection::make_progress(){
         case concurrency::io_yield_type::recv_yield:
             if(can_recv()){
                 auto rcvd = recv(prms.hdr);
-                if(rcvd == prms.hdr.size || !prms.hdr.flags)
+                if(rcvd == prms.hdr.size || prms.hdr.flags == 0)
                     op_completed = true;
                 prms.hdr.size = rcvd;
             }
@@ -51,7 +51,6 @@ void connection::make_progress(){
             break;
     
     }
-
     if(op_completed){
         prms.schdlr->schedule(*coro);
         coro.reset();

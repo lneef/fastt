@@ -19,19 +19,20 @@ enum pkt_type : uint8_t {
 };
 
 struct __rte_packed_begin ft_header {
+  uint16_t sport;
+  uint16_t dport;
   pkt_type type : 3;
   uint64_t wnd : 16;
-  uint64_t start :1;
   uint64_t end : 1;
   uint64_t sack : 1;
   uint64_t blocked :1;
-  uint64_t ts : 30;
-  uint64_t sid: 11; 
+  uint64_t ts : 26;
+  uint64_t len: 16; 
   uint64_t seq;
   uint64_t ack;
 } __rte_packed_end;
 
-static_assert(sizeof(ft_header) == 24, "");
+static_assert(sizeof(ft_header) == 28, "");
 
 struct __rte_packed_begin ft_sack_payload {
   using interval = std::pair<uint64_t, uint64_t>;  

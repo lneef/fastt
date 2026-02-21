@@ -3,7 +3,6 @@
 #include <cassert>
 #include <cstdint>
 #include <deque>
-#include <generic/rte_cycles.h>
 #include <message.h>
 #include <rte_cycles.h>
 
@@ -58,12 +57,17 @@ public:
     while (!unacked.empty() && unacked.front().seq < seq) {
       auto &desc = unacked.front();
       assert(desc.packet);
+      assert(queued_mbufs >= desc.packet->nb_segs);
+      queued_mbufs -= desc.packet->nb_segs;
       rte_pktmbuf_free(desc.packet);
       unacked.pop_front();
     }
+    assert(!unacked.empty());
 
     auto &srtt_desc = unacked.front();
     update_srtt(&srtt_desc, ts);
+    assert(queued_mbufs >= srtt_desc.packet->nb_segs);
+    queued_mbufs -= srtt_desc.packet->nb_segs;
     rte_pktmbuf_free(srtt_desc.packet);
     unacked.pop_front();
     return burst_rtt;
@@ -75,6 +79,7 @@ public:
     --budget;
     ctor(msg, seq);
     msg->inc_refcnt();
+    queued_mbufs += msg->nb_segs;
     *msg->get_ts() = 0;
     unacked.emplace_back(msg, seq++, false);
     FASTT_LOG_DEBUG("Enqueue pkt with %lu new budget %u\n", seq - 1, budget);
@@ -112,7 +117,7 @@ public:
       return;
     stats.acked = seq;
     if (!is_sack) {
-      update_budget(budget, seq);
+      update_budget(budget);
       timeout = rte_get_timer_cycles() + rto;
     }
     cleanup_acked_pkts(seq, ts);
@@ -123,7 +128,6 @@ public:
   void acknowledge_sack(protocol::ft_sack_payload *payload, uint64_t budget,
                         uint64_t ts, F &&retransmit_cb) {
     sender_entry *largest_acked = nullptr;
-    uint64_t largest_acked_seq = 0;
     assert(payload->bit_map_len > 0);
     assert(payload->bit_map_len <= unacked.size());
     assert(unacked.front().seq == least_unacked_pkt);
@@ -139,7 +143,6 @@ public:
       } else if (!desc.sacked) {
         /* we want the largest seq not acked yet */
         largest_acked = &(*it);
-        largest_acked_seq = it->seq;
         desc.sacked = true;
       }
       ++it;
@@ -148,7 +151,7 @@ public:
     FASTT_LOG_DEBUG("Largest set seq num %lu\n", largest_acked);
     if (largest_acked) {
       update_srtt(largest_acked, ts);
-      update_budget(budget, largest_acked_seq);
+      update_budget(budget);
     }
   }
 
@@ -169,8 +172,8 @@ public:
 
   bool all_acked() const { return least_unacked_pkt == seq; }
 
-  void update_budget(uint16_t granted, uint64_t ack) {
-    budget = (granted - (seq - ack - 1));
+  void update_budget(uint16_t granted) {
+    budget = (granted - queued_mbufs);
     FASTT_LOG_DEBUG("Got new capacity %u\n", budget);
   }
 
@@ -185,4 +188,5 @@ private:
   uint64_t rtt;
   uint64_t rto = get_ticks_ms() * 5;
   uint64_t timeout;
+  size_t queued_mbufs = 0;
 };

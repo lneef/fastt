@@ -97,11 +97,11 @@ public:
   }
 
   void check_timeout(uint64_t now) {
-    if(cstate != connection_state::ESTABLISHED)
-        return;
-    if (ttx.all_acked()){
+    if (cstate != connection_state::ESTABLISHED)
+      return;
+    if (ttx.all_acked()) {
       if (ttx.get_current_wnd() == 0)
-        send_ctrl(0, true, 0);  
+        send_ctrl(0, true, 0);
       return;
     }
     if (ttx.check_timeout(now)) {
@@ -110,9 +110,9 @@ public:
     }
   }
 
-  void check_ctrl(){
-    if (trx.check_wnd_return()) 
-      send_ctrl(trx.prepare_wnd_return(), false, trx.get_last_acked_packet());
+  void check_ctrl() {
+    if (trx.check_wnd_return())
+      send_ctrl(trx.prepare_wnd_return(), false, trx.get_last_rcvd_in_seq());
   }
 
   void send_ctrl(uint16_t wnd, bool blocked, uint64_t ack) {
@@ -121,26 +121,6 @@ public:
       return;
     protocol::prepare_ctrl_pkt(msg, ack, wnd, blocked);
     pkt_if->consume_pkt(msg, sport, target);
-  }
-
-  bool send_pkt(message *pkt, uint16_t sid, bool start, bool end) {
-    assert(cstate == connection_state::ESTABLISHED);
-    auto ctor = [&](message *pkt, uint64_t seq) {
-      uint64_t ack = 0;
-      uint32_t ts = 0;
-      auto least_in_window = trx.get_last_acked_packet();
-      ack = least_in_window;
-      ts = trx.get_ts();
-      scheduler.ack_callback(ack);
-      protocol::prepare_ft_header(pkt, seq, ack, sid, trx.prepare_wnd_return(),
-                                  start, end,
-                                  rte_get_timer_cycles() / get_ticks_us() - ts);
-    };
-
-    auto inserted = ttx.record_pkt(pkt, ctor);
-    if (inserted)
-      pkt_if->consume_pkt(pkt, sport, target);
-    return inserted;
   }
 
   size_t send(void *buf, size_t size, bool start, bool end) {
@@ -152,7 +132,7 @@ public:
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
       uint32_t ts = 0;
-      ack = trx.get_last_acked_packet();
+      ack = trx.get_last_rcvd_in_seq();
       ts = rte_get_timer_cycles() / get_ticks_us() - trx.get_ts();
       scheduler.ack_callback(ack);
       protocol::prepare_ft_header(pkt, seq, ack, trx.prepare_wnd_return(),
@@ -164,20 +144,10 @@ public:
     return size;
   }
 
-  ssize_t recv(msg_hdr& hdr) {
-      return trx.read(hdr);
-  }
-
-  transport_statistics get_stats() const {
-    auto &rt_stats = ttx.get_stats();
-    return {rt_stats.retransmitted, rt_stats.acked, stats.sent,
-            stats.retransmissions, rt_stats.rtt};
-  }
-
   bool acknowledge(uint64_t now = rte_get_timer_cycles()) {
     message *msg;
     bool is_sack = trx.has_holes();
-    uint64_t ack = trx.get_last_acked_packet();
+    uint64_t ack = trx.get_last_rcvd_in_seq();
     if (is_sack) {
       if (!scheduler.sack_pending(trx.max_rx_in_window))
         return false;
@@ -207,9 +177,9 @@ public:
     auto ts = *msg->get_ts() - hdr->ts;
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
-      if (hdr->ack) {
+      if (hdr->ack) 
         ttx.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
-      }
+      
       scheduler.process_seq(hdr->seq);
       if (trx.is_set(hdr->seq)) {
         ++stats.retransmissions;
@@ -256,11 +226,10 @@ public:
       break;
     }
     case protocol::pkt_type::FT_CRTL: {
-      if (hdr->wnd > 0) {
-        ttx.update_budget(hdr->wnd, hdr->ack);
-      } else if (hdr->blocked) {
-        send_ctrl(trx.prepare_wnd_return(), false, trx.get_last_acked_packet());
-      }
+      if (hdr->ack > 0)
+        ttx.acknowledge(hdr->ack, hdr->wnd, hdr->ts, hdr->sack);
+      else if (hdr->blocked)
+        send_ctrl(trx.prepare_wnd_return(), false, trx.get_last_rcvd_in_seq());
       msg->free();
       break;
     };
@@ -301,6 +270,14 @@ public:
   unsigned capacity() { return ttx.get_current_wnd(); }
 
   bool can_recv() { return trx.has_buffered_messages_frags(); }
+
+  ssize_t recv(msg_hdr &hdr) { return trx.read(hdr); }
+
+  transport_statistics get_stats() const {
+    auto &rt_stats = ttx.get_stats();
+    return {rt_stats.retransmitted, rt_stats.acked, stats.sent,
+            stats.retransmissions, rt_stats.rtt};
+  }
 
 private:
   void setup_after_init() {

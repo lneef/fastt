@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <bitset>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -52,11 +53,11 @@ struct transport_output {
   static constexpr unsigned kLowThreshold = 2048;
   static constexpr unsigned kMaxWndSize = 128;
   transport_output(uint64_t min_seq, message_allocator *port_allocator)
-      : port_allocator(port_allocator), received_pkts(min_seq),
+      : port_allocator(port_allocator), received_mbufs(min_seq),
         least_in_window(min_seq), max_rx_in_window(), next_seq(min_seq),
         last_wnd_return() {}
 
-  uint64_t get_last_acked_packet() const { return next_seq - 1; }
+  uint64_t get_last_rcvd_in_seq() const { return next_seq - 1; }
 
   bool set(uint64_t seq, message *msg) {
     auto idx = index(seq);
@@ -71,18 +72,17 @@ struct transport_output {
     if (unlikely(seq != next_seq &&
                  port_allocator->get_remaining_space() < kLowThreshold))
       return false;
-    ++received_pkts;
     wnd.set(index(seq));
     reassemble(seq, msg);
     return true;
   }
 
   bool is_set(uint64_t seq) {
-    return seq < next_seq || (seq <= next_seq + kMaxWndSize && wnd[index(seq)]);
+    return seq < next_seq || (seq < next_seq + kMaxWndSize && wnd[index(seq)]);
   }
 
   bool beyond_window(uint64_t seq) {
-    return seq >= least_in_window + kMaxWndSize;
+    return seq >= next_seq + kMaxWndSize;
   }
 
   template <typename F> bool advance(F &&f) {
@@ -111,6 +111,7 @@ struct transport_output {
       rb.insert(seq, msg);
     } else {
       assert(wnd.test(index(seq)));
+      received_mbufs += msg->nb_segs;
       reassemble_single_msg(msg);
       wnd.reset(index(next_seq));
       ++next_seq;
@@ -120,6 +121,7 @@ struct transport_output {
         wnd.reset(index(next_seq));
         ++next_seq;
         auto *mbuf = rb.front();
+        received_mbufs += mbuf->nb_segs;
         reassemble_single_msg(mbuf);
         rb.pop_front();
       }
@@ -127,7 +129,7 @@ struct transport_output {
   }
 
   bool inside(uint64_t seq) {
-    return seq >= least_in_window && seq < least_in_window + kMaxWndSize;
+    return seq >= next_seq && seq < next_seq + kMaxWndSize;
   }
 
   std::size_t __inline index(std::size_t i) {
@@ -140,10 +142,10 @@ struct transport_output {
   uint16_t copy_bitset(protocol::ft_sack_payload *data) {
     uint16_t id = 0;
     auto highest_seq = std::min(
-        next_seq + protocol::ft_sack_payload::kBitMapLen, max_rx_in_window);
+        next_seq + protocol::ft_sack_payload::kBitMapLen * 64, max_rx_in_window);
     std::memset(
         data->bit_map, 0,
-        (highest_seq - next_seq + 64) / 64 *
+        (highest_seq - next_seq + 1 + 63) / 64 *
             sizeof(
                 uint64_t)); /* 64 since least_in_window is part of the window */
     assert(protocol::ft_sack_payload::kBitMapLen * 64 >=
@@ -176,7 +178,7 @@ struct transport_output {
     } else {
       hdr.remaining = first->pkt_len - off;
     }
-    hdr.flags = 1;
+    hdr.flags = 0;
     return to_copy;
   }
 
@@ -185,11 +187,11 @@ struct transport_output {
   }
 
   size_t read(msg_hdr &hdr) {
-    hdr.flags = 0;  
+    hdr.flags = -ENODATA;  
     if (out.empty())
       return read_partial_msg(hdr);
     
-    hdr.flags = 1;
+    hdr.flags = 0;
     auto *msg = out.front();
     auto to_copy = std::min<size_t>(msg->pkt_len - off, hdr.size);
     if (msg->nb_segs > 1)
@@ -213,10 +215,7 @@ struct transport_output {
   uint64_t get_ts() { return ts; }
 
   unsigned get_available_wnd() const {
-    if (received_pkts < max_rx_in_window)
-      return least_in_window + kMaxWndSize - 1 - received_pkts;
-    else
-      return least_in_window + kMaxWndSize - 1 - max_rx_in_window;
+      return least_in_window + kMaxWndSize - received_mbufs;
   }
 
   unsigned prepare_wnd_return() {
@@ -238,7 +237,7 @@ struct transport_output {
 
   // connection state
   std::bitset<kMaxWndSize> wnd;
-  uint64_t received_pkts;
+  uint64_t received_mbufs;
   uint64_t least_in_window;
   uint64_t max_rx_in_window;
   uint64_t next_seq;

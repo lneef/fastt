@@ -27,6 +27,54 @@ struct msg_hdr {
   int flags;
 };
 
+struct msg_buf {
+  static int timestamp;
+  static int init();
+  rte_mbuf *mbuf;
+
+  uint64_t *get_ts() { return RTE_MBUF_DYNFIELD(mbuf, timestamp, uint64_t *); }
+
+  void inc_refcnt() {
+    auto *buf = mbuf;
+    while (buf) {
+      rte_pktmbuf_refcnt_update(buf, 1);
+      buf = buf->next;
+    }
+  }
+
+  static inline void merge(msg_buf &first, msg_buf &last, msg_buf seg) {
+    if (!first.mbuf) {
+      first = seg;
+      last = seg;
+    } else {
+      last.mbuf->next = seg.mbuf;
+      first.mbuf->nb_segs += seg.mbuf->nb_segs;
+      first.mbuf->pkt_len += seg.mbuf->pkt_len;
+      last.mbuf = rte_pktmbuf_lastseg(seg.mbuf);
+    }
+  }
+
+  template <typename T> T *data() { return rte_pktmbuf_mtod(mbuf, T *); }
+
+  template <typename T> T *data(uint16_t off) {
+    return rte_pktmbuf_mtod_offset(mbuf, T *, off);
+  }
+  void *data() { return rte_pktmbuf_mtod(mbuf, void *); }
+  uint16_t len() { return mbuf->data_len; }
+
+  uint32_t pkt_len() const { return mbuf->pkt_len; }
+
+
+  template <typename T> T *move_headroom() {
+    rte_pktmbuf_prepend(mbuf, sizeof(T));
+    return rte_pktmbuf_mtod(mbuf, T *);
+  }
+
+  void free() { rte_pktmbuf_free(mbuf); }
+
+  void shrink_headroom(uint16_t len) { rte_pktmbuf_adj(mbuf, len); }
+};
+
 struct message : public rte_mbuf {
   static int timestamp;
   static int init();
@@ -35,7 +83,7 @@ struct message : public rte_mbuf {
   void inc_refcnt() {
     auto *buf = static_cast<rte_mbuf *>(this);
     while (buf) {
-      rte_pktmbuf_refcnt_update(this, 1);
+      rte_pktmbuf_refcnt_update(buf, 1);
       buf = buf->next;
     }
   }

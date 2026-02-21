@@ -28,7 +28,7 @@ bool recv_awaitable::await_ready() noexcept {
   if (!con.can_recv())
     return false;
   auto rcvd = con.recv(hdr);
-  if (rcvd == hdr.size || !hdr.flags) {
+  if (rcvd == hdr.size || hdr.flags == 0) {
     hdr.size = rcvd;
     return true;
   } else {
