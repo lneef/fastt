@@ -194,7 +194,7 @@ public:
       if (hdr->sack) {
         auto *sack_payload =
             msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));
-        ttx.acknowledge_sack(sack_payload, hdr->wnd, ts, [&](message *msg) {
+        ttx.acknowledge_sack(sack_payload, ts, [&](message *msg) {
           pkt_if->consume_for_retransmission(msg);
         });
       }
