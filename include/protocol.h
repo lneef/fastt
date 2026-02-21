@@ -22,9 +22,10 @@ struct __rte_packed_begin ft_header {
   uint16_t sport;
   uint16_t dport;
   pkt_type type : 3;
-  uint64_t wnd : 16;
+  uint64_t wnd : 15;
   uint64_t end : 1;
   uint64_t sack : 1;
+  uint64_t start : 1;
   uint64_t blocked :1;
   uint64_t ts : 26;
   uint64_t len: 16; 

@@ -3,7 +3,6 @@
 #include "client.h"
 #include "connection.h"
 #include "message.h"
-#include "slot.h"
 #include "util.h"
 #include <cstddef>
 #include <cstdint>

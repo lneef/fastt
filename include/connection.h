@@ -12,9 +12,7 @@
 #include "message.h"
 #include "packet_if.h"
 #include "protocol.h"
-#include "slot.h"
 #include "task.h"
-#include "timer.h"
 #include "transport/transport.h"
 #include "util.h"
 
@@ -47,10 +45,6 @@ public:
   unsigned capacity() { return transport_impl->capacity(); }
 
   void check_timeout(uint64_t now) { transport_impl->check_timeout(now); }
-
-  bool send_pkt(message *msg, uint16_t sid, bool first, bool last) {
-    return transport_impl->send_pkt(msg, sid, first, last);
-  }
 
   size_t send(msg_hdr& hdr) {
     return transport_impl->send(hdr.buf, hdr.size, hdr.som, hdr.eom);
@@ -258,11 +252,7 @@ public:
   ~connection_manager() {}
 
 private:
-  static void flush_cb(rte_timer *timer, void *arg) {
-    (void)timer;
-    auto *this_ptr = static_cast<connection_manager *>(arg);
-    this_ptr->flush();
-  }
+ 
   std::deque<std::pair<message *, flow_tuple>> connection_requests;
   flow_table<flow_tuple, std::unique_ptr<connection>> flows;
   std::shared_ptr<message_allocator> allocator;

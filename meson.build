@@ -8,13 +8,12 @@ tlx_proj = cmake.subproject('tlx')
 tlx_dep = tlx_proj.dependency('tlx')
 hdr_hist = cmake.subproject('hdr_histogram')
 hdr_histogram_dep = hdr_hist.dependency('hdr_histogram')
-gflags_dep = dependency('gflags', required: true)
 
 add_project_arguments('-D_POSIX_C_SOURCE=200809L', language: 'c')
 add_project_arguments('-Wpedantic', language: 'c')
 add_project_arguments('-fno-omit-frame-pointer', language: 'cpp')
 
-sources = files('src/client.cc', 'src/connection.cc', 'src/iface.cc', 'src/message.cc', 'src/packet_scheduler.cc', 'src/protocol.cc', 'src/util.cc', 'src/log.cc', 'src/slot.cc')
+sources = files('src/client.cc', 'src/connection.cc', 'src/iface.cc', 'src/message.cc', 'src/packet_scheduler.cc', 'src/protocol.cc', 'src/util.cc', 'src/log.cc')
 
 fastt_lib = static_library('fastt', sources, include_directories: include_directories('include'), 
   dependencies: [dpdk_dep], link_args: ['-lcap', '-Wl,--allow-multiple-definition', '-Wl,--whole-archive'])
