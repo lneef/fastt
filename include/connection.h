@@ -20,6 +20,7 @@
 
 class iface;
 class connection_manager;
+class coro_handle;
 
 struct statistics {
   std::vector<transport_statistics> ts;
@@ -30,21 +31,12 @@ class connection {
   static constexpr uint16_t kMaxSlotsPerConnection = 128;
 
 public:
-  struct msg_meta {
-    bool som, eom;
-  };
   connection(message_allocator *allocator, packet_if *pkt_if,
              const con_config &target, uint16_t sport,
              connection_manager *manager, bool is_client)
       : allocator(allocator), transport_impl(std::make_unique<transport>(
                                   allocator, pkt_if, sport, target)),
         manager(manager), is_client(is_client) {
-
-    slots.reserve(kMaxSlotsPerConnection);
-    for (auto i = 0u; i < kMaxSlotsPerConnection; ++i) {
-      slots.emplace_back(i, this);
-      free_list.emplace_back(i);
-    }
   }
   void process_pkt(rte_mbuf *pkt);
   void acknowledge_all(uint64_t now);
@@ -60,39 +52,17 @@ public:
     return transport_impl->send_pkt(msg, sid, first, last);
   }
 
-  size_t send(void *buf, size_t size, const msg_meta &meta) {
-    return transport_impl->send(buf, size, meta.som, meta.eom);
+  size_t send(msg_hdr& hdr) {
+    return transport_impl->send(hdr.buf, hdr.size, hdr.som, hdr.eom);
   }
 
-  size_t recv(void *buf, size_t len) { return transport_impl->recv(buf, len); }
+  ssize_t recv(msg_hdr& hdr) { return transport_impl->recv(hdr); }
 
   concurrency::send_awaitable send(concurrency::scheduler &schdlr, message *msg,
                                    bool first, bool last);
 
   concurrency::recv_awaitable recv(concurrency::scheduler &schdlr,
                                    message **msg);
-
-  void handle_incoming() {
-    transport_impl->receive_messages([&](message *msg) {
-      auto *hdr = msg->data<protocol::ft_header>();
-      slots[hdr->sid].handle_incoming(msg, hdr->end);
-      if (!slots[hdr->sid].link.is_linked() && !is_client) {
-        slots[hdr->sid].move_to_active(active);
-      }
-      msg->shrink_headroom(sizeof(protocol::ft_header));
-    });
-  }
-
-  template <typename S, typename F> void handle_incoming(S &scheduler, F &&f) {
-    transport_impl->receive_messages([&](message *msg) {
-      auto *hdr = msg->data<protocol::ft_header>();
-      slots[hdr->sid].handle_incoming(msg, hdr->end);
-      if (!slots[hdr->sid].link.is_linked() && !is_client) {
-        slots[hdr->sid].move_to_active(active);
-        scheduler.schedule(f(scheduler, slots[hdr->sid]));
-      }
-    });
-  }
 
   transport_statistics get_transport_stats() const {
     return transport_impl->get_stats();
@@ -102,21 +72,7 @@ public:
       transport_impl->check_ctrl();
   }
 
-  slot *get_slot() {
-    assert(is_client);
-    if (capacity() == 0 || free_list.empty())
-      return nullptr;
-    auto slt_num = free_list.front();
-    free_list.pop_front();
-    slots[slt_num].move_to_active(active);
-    return &slots[slt_num];
-  }
-
-  void put_slot(slot *slt) {
-    assert(slt->link.is_linked());
-    free_list.push_front(slt->id);
-    slt->unlink();
-  }
+  void make_progress();
 
   bool up() const { return transport_impl->active(); }
 
@@ -130,13 +86,11 @@ private:
   friend class connection_manager;
   message_allocator *allocator;
   std::unique_ptr<transport> transport_impl;
-  std::vector<slot> slots;
-  std::deque<unsigned> free_list;
   connection_manager *manager;
-  intrusive_list_t<slot> active;
   bool is_client;
-
 public:
+
+  std::optional<concurrency::coro_handle> coro;
   list_hook link;
 };
 
@@ -145,12 +99,10 @@ class connection_manager {
 
 public:
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
-                     uint32_t sip, std::shared_ptr<message_allocator> allocator,
-                     uint16_t lcore_id)
+                     uint32_t sip, std::shared_ptr<message_allocator> allocator)
       : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
         pkt_if(&scheduler, sip, port), active(), is_client(is_client),
-        flush_timeout(get_ticks_us()), flush_timer(timertype::PERIODICAL) {
-    flush_timer.reset(flush_timeout, flush_cb, lcore_id, this);
+        flush_timeout(get_ticks_us()) {
   }
 
   void handle_pkt(message *pkt, flow_tuple &ft) {
@@ -224,15 +176,13 @@ public:
     for (auto &con : active)
       con.acknowledge_all(rte_get_timer_cycles());
     check_timeouts();
-    con_timer_manager.manage();
+    flush();
   }
 
   template <typename S, typename F> void run(S &scheduler, F &&handler) {
     fetch_from_qpair();
     if (!is_client)
       accept_connection();
-    for (auto &con : active)
-      con.handle_incoming(scheduler, handler);
     scheduler.run();
   }
 
@@ -305,7 +255,7 @@ public:
 
   void flush() { scheduler.flush(); }
 
-  ~connection_manager() { flush_timer.stop(); }
+  ~connection_manager() {}
 
 private:
   static void flush_cb(rte_timer *timer, void *arg) {
@@ -324,6 +274,5 @@ private:
   uint32_t open_connections = 0;
   uint64_t flush_timeout;
   packet_vector<kdefaultBurstSize> vec;
-  timer<dpdk_timer> flush_timer;
-  timer_manager<dpdk_timer> con_timer_manager;
+
 };

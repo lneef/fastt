@@ -19,9 +19,9 @@ public:
   using scheduler_t  = S;  
   server_iface(uint16_t port, uint16_t txq, uint16_t rxq,
                const con_config &scon_config,
-               std::shared_ptr<message_allocator> pool, uint16_t lcore_id)
+               std::shared_ptr<message_allocator> pool, [[maybe_unused]] uint16_t lcore_id)
       : scon_config(scon_config),
-        manager(false, port, txq, rxq, scon_config.ip, pool, lcore_id) {}
+        manager(false, port, txq, rxq, scon_config.ip, pool) {}
 
   void complete() { manager.flush(); };
 

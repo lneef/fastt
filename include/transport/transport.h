@@ -164,9 +164,8 @@ public:
     return size;
   }
 
-  size_t recv(void *buf, size_t size) {
-    auto rcvd = trx.read(buf, size);
-    return rcvd;
+  ssize_t recv(msg_hdr& hdr) {
+      return trx.read(hdr);
   }
 
   transport_statistics get_stats() const {
@@ -301,7 +300,7 @@ public:
 
   unsigned capacity() { return ttx.get_current_wnd(); }
 
-  bool can_recv() { return trx.out.size() > 0; }
+  bool can_recv() { return trx.has_buffered_messages_frags(); }
 
 private:
   void setup_after_init() {

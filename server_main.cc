@@ -101,11 +101,15 @@ int lcore_server_fun(void *arg) {
       while (true) {
         if (!con.can_recv() || !con.can_send())
           return false;
-
-        auto sz = con.recv(&req, sizeof(req));
+        msg_hdr m;
+        m.buf = reinterpret_cast<uint8_t*>(&req);
+        m.size = sizeof(req);
+        auto sz = con.recv(m);
         assert(sz == sizeof(req));
         serve(&resp, &req);
-        con.send(&resp, sizeof(resp), {true, true});
+        m.buf = reinterpret_cast<uint8_t*>(&resp);
+        m.size = sizeof(resp);
+        con.send(m);
       }
       return true;
     });

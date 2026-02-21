@@ -9,8 +9,22 @@
 #include <rte_memory.h>
 #include <rte_mempool.h>
 
-struct msg_meta {
-  bool som, eom;
+struct msg_hdr {
+  // user provided
+  uint8_t *buf;
+  ssize_t size;
+
+  union {
+    struct {
+      bool som, eom;
+    };
+
+    struct {
+      size_t remaining;
+    };
+  };
+
+  int flags;
 };
 
 struct message : public rte_mbuf {
@@ -86,13 +100,9 @@ public:
     return prepare(mbuf, data_size);
   }
 
-  size_t get_remaining_space() const{
-      return rte_mempool_avail_count(pool);
-  }
+  size_t get_remaining_space() const { return rte_mempool_avail_count(pool); }
 
-  rte_mempool* get(){
-      return pool;
-  }
+  rte_mempool *get() { return pool; }
 
   static void deallocate(message *msg) { rte_pktmbuf_free(msg); }
 

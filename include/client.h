@@ -16,9 +16,9 @@ class client_iface {
 public:
   client_iface(uint16_t port, uint16_t txq, uint16_t rxq,
                std::shared_ptr<message_allocator> pool,
-               const con_config &scon_config, uint16_t lcore_id)
+               const con_config &scon_config, [[maybe_unused]] uint16_t lcore_id)
       : scon_config(scon_config),
-        manager(true, port, txq, rxq, scon_config.ip, pool, lcore_id) {}
+        manager(true, port, txq, rxq, scon_config.ip, pool) {}
 
   template <bool flush = true> bool probe_connection_setup_done(connection *con) {
     manager.fetch_from_qpair();  

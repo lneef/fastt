@@ -91,11 +91,20 @@ public:
   }
 
   ssize_t recv(void* buf, size_t sz){
-      return con->recv(buf, sz);
+      msg_hdr m;
+      m.buf = static_cast<uint8_t*>(buf);
+      m.size = sz;
+      m.remaining = 0;
+      return con->recv(m);
   }
 
   ssize_t send(void* buf, size_t sz){
-      return con->send(buf, sz, {true, true});
+      msg_hdr m;
+      m.buf = static_cast<uint8_t*>(buf);
+      m.size = sz;
+      m.som = true;
+      m.eom = true;
+      return con->send(m);
   }
 
   void lookup(int64_t key, message *msg, uint64_t id) {

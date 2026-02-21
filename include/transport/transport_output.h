@@ -2,65 +2,60 @@
 
 #include "message.h"
 #include "protocol.h"
+#include "transport/transport_input.h"
 #include "util.h"
 
 #include <algorithm>
+#include <bitset>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <generic/rte_cycles.h>
 #include <rte_branch_prediction.h>
 #include <rte_mbuf.h>
-#include <vector>
-#include <deque>
 
-struct user_buffer {
-  uint8_t *buffer;
-  size_t size, off = 0;
+struct reorder_buffer {
+  using msg_desc_t = std::pair<uint64_t, message *>;
+  std::deque<msg_desc_t> msg_desc;
 
-  void fill(uint8_t *data, size_t len) {
-    auto copy = std::min(len, size - off);
-    std::memcpy(buffer + off, data, copy);
-    off += copy;
-  }
-};
-
-template <typename T> struct window_queue {
-  std::vector<T *> data;
-  size_t head;
-  size_t mask;
-
-  T *&operator[](size_t i) {
-    assert(i < mask + 1);
-    return data[(i + head) & mask];
-  }
-
-  T *front() { return data[head]; }
-
-  void pop_front() {
-    data[head] = nullptr;
-    head = (head + 1) & mask;
+  void insert(uint64_t seq, message *msg) {
+    if (msg_desc.empty()) {
+      msg_desc.emplace_back(seq, msg);
+      return;
+    }
+    if (seq < msg_desc.front().first) {
+      msg_desc.emplace_front(seq, msg);
+    } else if (seq > msg_desc.back().first) {
+      msg_desc.emplace_back(seq, msg);
+    } else {
+      msg_desc_t md(seq, msg);
+      auto it = std::lower_bound(msg_desc.begin(), msg_desc.end(), md,
+                                 [](const auto &elem, const auto &val) {
+                                   return elem.first < val.first;
+                                 });
+      msg_desc.insert(it, {seq, msg});
+    }
   }
 
-  bool new_round() { return head == 0; }
+  uint64_t next_buffered_seq() { return msg_desc.front().first; }
 
-  void advance_head() { head = (head + 1) & mask; }
+  bool has_elements() const { return msg_desc.size() > 0; }
 
-  size_t capacity() const { return mask + 1; }
+  message *front() { return msg_desc.front().second; }
 
-  window_queue(std::size_t size)
-      : data(size, nullptr), head(0), mask(size - 1) {}
+  void pop_front() { msg_desc.pop_front(); }
 };
 
 struct transport_output {
   // reserve some headroom
   static constexpr unsigned kLowThreshold = 2048;
-  transport_output(uint64_t min_seq, message_allocator *port_allocator,
-                   unsigned max_window_size = 128)
-      : wnd(max_window_size * 2), port_allocator(port_allocator),
-        received_pkts(min_seq), least_in_window(min_seq), max_rx_in_window(),
-        next_seq(min_seq), last_wnd_return(), max_window_size(max_window_size) {
-  }
+  static constexpr unsigned kMaxWndSize = 128;
+  transport_output(uint64_t min_seq, message_allocator *port_allocator)
+      : port_allocator(port_allocator), received_pkts(min_seq),
+        least_in_window(min_seq), max_rx_in_window(), next_seq(min_seq),
+        last_wnd_return() {}
 
   uint64_t get_last_acked_packet() const { return next_seq - 1; }
 
@@ -77,90 +72,147 @@ struct transport_output {
     if (unlikely(seq != next_seq &&
                  port_allocator->get_remaining_space() < kLowThreshold))
       return false;
-    wnd[idx] = msg;
     ++received_pkts;
-    reassemble();
+    wnd.set(index(seq));
+    reassemble(seq, msg);
     return true;
   }
 
   bool is_set(uint64_t seq) {
-    return seq < next_seq ||
-           (seq <= next_seq + wnd.mask && wnd[index(seq)]);
+    return seq < next_seq || (seq <= next_seq + kMaxWndSize && wnd[index(seq)]);
   }
 
   bool beyond_window(uint64_t seq) {
-    return seq >= least_in_window + wnd.capacity();
+    return seq >= least_in_window + kMaxWndSize;
   }
 
   template <typename F> bool advance(F &&f) {
-      if(out.empty())
-          return false;
-      auto *msg = out.front();
-      out.pop_front();
-      f(msg);
-      return true;
+    if (out.empty())
+      return false;
+    auto *msg = out.front();
+    out.pop_front();
+    f(msg);
+    return true;
   }
 
-   void reassemble() {
-    while (wnd.front()) {
-      ++next_seq;  
-      auto *mbuf = wnd.front();
-      auto *hdr = mbuf->data<protocol::ft_header>();
-      bool end = hdr->end;
-      mbuf->shrink_headroom(sizeof(protocol::ft_header));
-      message::merge(first, last, mbuf);
-      wnd.pop_front();
-      if (end) {
-        auto *msg = first;
-        first = last = nullptr;
-        out.push_back(msg);
+  void reassemble_single_msg(message *mbuf) {
+    auto *hdr = mbuf->data<protocol::ft_header>();
+    bool end = hdr->end;
+    mbuf->shrink_headroom(sizeof(protocol::ft_header));
+    message::merge(first, last, mbuf);
+    if (end) {
+      auto *msg = first;
+      first = last = nullptr;
+      out.push_back(msg);
+    }
+  }
+
+  void reassemble(uint64_t seq, message *msg) {
+    if (seq != next_seq) {
+      rb.insert(seq, msg);
+    } else {
+      assert(wnd.test(index(seq)));
+      reassemble_single_msg(msg);
+      wnd.reset(index(next_seq));
+      ++next_seq;
+      while (wnd.test(index(next_seq))) {
+        assert(rb.has_elements());
+        assert(rb.next_buffered_seq() == next_seq);
+        wnd.reset(index(next_seq));
+        ++next_seq;
+        auto *mbuf = rb.front();
+        reassemble_single_msg(mbuf);
+        rb.pop_front();
       }
     }
   }
 
   bool inside(uint64_t seq) {
-    return seq >= least_in_window && seq < least_in_window + wnd.capacity();
+    return seq >= least_in_window && seq < least_in_window + kMaxWndSize;
   }
 
   std::size_t __inline index(std::size_t i) {
     assert(i >= next_seq);
-    return (i - next_seq);
+    return (i - min_seq) & (kMaxWndSize - 1);
   }
 
   bool has_holes() { return max_rx_in_window != next_seq - 1; }
 
   uint16_t copy_bitset(protocol::ft_sack_payload *data) {
     uint16_t id = 0;
+    auto highest_seq = std::min(
+        next_seq + protocol::ft_sack_payload::kBitMapLen, max_rx_in_window);
     std::memset(
         data->bit_map, 0,
-        (max_rx_in_window - next_seq + 64) / 64 *
+        (highest_seq - next_seq + 64) / 64 *
             sizeof(
                 uint64_t)); /* 64 since least_in_window is part of the window */
     assert(protocol::ft_sack_payload::kBitMapLen * 64 >=
-           (max_rx_in_window - next_seq));
+           (highest_seq - next_seq));
 
     for (auto i = next_seq; i <= max_rx_in_window; ++i, ++id) {
       auto ind = get_bit_indices_64(id);
-      data->bit_map[ind.first] |= static_cast<uint64_t>(wnd[index(i)] ? 1 : 0)
+      data->bit_map[ind.first] |= static_cast<uint64_t>(wnd[index(i)])
                                   << ind.second;
     }
     data->bit_map_len = id;
     return id;
   }
 
-  size_t read(void *buf, size_t size) {
-    if(out.empty())
-        return 0;
+  ssize_t read_partial_msg(void *buf, size_t size, size_t &remaining) {
+    if (!first)
+      return 0;
+    auto to_copy = std::min<size_t>(first->pkt_len, size);
+    if (to_copy != first->len()) {
+      remaining = first->len();
+      return 0;
+    }
+    if (first->nb_segs > 1)
+      rte_pktmbuf_read(first, off, to_copy, buf);
+    else
+      std::memcpy(buf, first->data<uint8_t>(), to_copy);
+    off += to_copy;
+
+    if (to_copy == first->len()) {
+      least_in_window += first->nb_segs;
+      rte_pktmbuf_free(first);
+      first = last = nullptr;
+      off = 0;
+      remaining = 0;
+    } else {
+      remaining = first->len() - to_copy;
+    }
+    return to_copy;
+  }
+
+  bool has_buffered_messages_frags() const {
+    return out.size() > 0 || first != nullptr;
+  }
+
+  size_t read(msg_hdr &hdr) {
+    if (out.empty()){
+      hdr.flags = 1;  
+      return read_partial_msg(hdr.buf, hdr.size, hdr.remaining);
+    }
+    hdr.flags = 0;
     auto *msg = out.front();
-    out.pop_front();
-    auto to_copy = std::min<size_t>(msg->pkt_len, size);
+    auto to_copy = std::min<size_t>(msg->pkt_len, hdr.size);
     assert(to_copy == msg->pkt_len);
     if (msg->nb_segs > 1)
-      rte_pktmbuf_read(msg, 0, to_copy, buf);
+      rte_pktmbuf_read(msg, off, to_copy, hdr.buf);
     else
-      std::memcpy(buf, msg->data<uint8_t>(), size);
-    least_in_window += msg->nb_segs;
-    rte_pktmbuf_free(msg);
+      std::memcpy(hdr.buf, msg->data<uint8_t>() + off, to_copy);
+    off += to_copy;
+
+    if (to_copy == msg->len()) {
+      out.pop_front();
+      least_in_window += msg->nb_segs;
+      rte_pktmbuf_free(msg);
+      hdr.remaining = 0;
+      off = 0;
+    } else {
+      hdr.remaining = msg->len() - to_copy;
+    }
     return to_copy;
   }
 
@@ -168,9 +220,9 @@ struct transport_output {
 
   unsigned get_available_wnd() const {
     if (received_pkts < max_rx_in_window)
-      return least_in_window + max_window_size - 1 - received_pkts;
+      return least_in_window + kMaxWndSize - 1 - received_pkts;
     else
-      return least_in_window + max_window_size - 1 - max_rx_in_window;
+      return least_in_window + kMaxWndSize - 1 - max_rx_in_window;
   }
 
   unsigned prepare_wnd_return() {
@@ -180,14 +232,14 @@ struct transport_output {
   }
 
   bool check_wnd_return() const {
-    return least_in_window - last_wnd_return >= max_window_size >> 1;
+    return least_in_window - last_wnd_return >= kMaxWndSize >> 1;
   }
 
-  window_queue<message> wnd;
   message *first = nullptr, *last = nullptr;
   message_allocator *port_allocator;
-  std::deque<message*> out;
-  user_buffer buffer{};
+  reorder_buffer rb;
+  std::bitset<kMaxWndSize> wnd;
+  std::deque<message *> out;
 
   uint64_t received_pkts;
   uint64_t least_in_window;
@@ -196,6 +248,5 @@ struct transport_output {
   uint64_t last_wnd_return;
 
   uint64_t ts = 0;
-  bool did_resize_in_round = false;
-  const unsigned max_window_size;
+  size_t off = 0;
 };

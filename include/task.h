@@ -5,12 +5,19 @@
 #include <coroutine>
 #include <deque>
 
-namespace concurrency {
 
 class connection;
+
+namespace concurrency {
 class scheduler;
+
+enum class io_yield_type { recv_yield = 0, send_yield };
 struct task {
   struct promise_type {
+        msg_hdr hdr;  
+        io_yield_type yt;
+        scheduler *schdlr;
+    
     task get_return_object() {
       return task{std::coroutine_handle<promise_type>::from_promise(*this)};
     }
@@ -36,42 +43,43 @@ struct task {
   std::coroutine_handle<promise_type> handle;
 };
 
-struct io_awaitable{
-    scheduler &schdlr;
-    connection &con;
+using coro_handle = std::coroutine_handle<task::promise_type>;
 
-    // user data
-    void* buf;
-    size_t size;
+struct io_awaitable {
+  scheduler &schdlr;
+  connection &con;
 
-    io_awaitable(scheduler &schdlr, connection &con, void* buf, size_t size): schdlr(schdlr), con(con), buf(buf), size(size) {}
+  msg_hdr hdr;
+
+  io_awaitable(scheduler &schdlr, connection &con, msg_hdr &hdr)
+      : schdlr(schdlr), con(con), hdr(hdr) {}
 };
 
-struct send_awaitable : public io_awaitable{
-  msg_meta meta;
-
-  send_awaitable(scheduler &schdlr, connection &con, void* buf, size_t size, const msg_meta& meta)
-      : io_awaitable(schdlr, con, buf, size), meta(meta) {}
+struct send_awaitable : public io_awaitable {  
+  send_awaitable(scheduler &schdlr, connection &con, msg_hdr& hdr)
+      : io_awaitable(schdlr, con, hdr) {}
 
   bool await_ready() noexcept;
 
   void await_suspend(std::coroutine_handle<task::promise_type> caller);
 
-  size_t await_resume() noexcept;
+  ssize_t await_resume() noexcept{
+      return hdr.size;
+  };
 };
 
-struct recv_awaitable {
-  scheduler &schdlr;
-  connection *con;
+struct recv_awaitable :  io_awaitable{
 
-  recv_awaitable(scheduler &schdlr, connection *con)
-      : schdlr(schdlr), con(con) {}
+  recv_awaitable(scheduler &schdlr, connection &con, msg_hdr &hdr)
+      : io_awaitable(schdlr, con, hdr) {}
 
-  bool await_ready() noexcept { return false; }
+  bool await_ready() noexcept;
 
   void await_suspend(std::coroutine_handle<task::promise_type> caller);
 
-  message_buffer await_resume() noexcept;
+  ssize_t await_resume() noexcept{
+      return hdr.size;
+  };
 };
 
 class scheduler {
