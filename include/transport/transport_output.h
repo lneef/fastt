@@ -12,7 +12,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <generic/rte_cycles.h>
 #include <rte_branch_prediction.h>
 #include <rte_mbuf.h>
 
@@ -159,29 +158,25 @@ struct transport_output {
     return id;
   }
 
-  ssize_t read_partial_msg(void *buf, size_t size, size_t &remaining) {
+  ssize_t read_partial_msg(msg_hdr &hdr) {
     if (!first)
       return 0;
-    auto to_copy = std::min<size_t>(first->pkt_len, size);
-    if (to_copy != first->len()) {
-      remaining = first->len();
-      return 0;
-    }
+    auto to_copy = std::min<size_t>(first->pkt_len - off, hdr.size);
     if (first->nb_segs > 1)
-      rte_pktmbuf_read(first, off, to_copy, buf);
+      rte_pktmbuf_read(first, off, to_copy, hdr.buf);
     else
-      std::memcpy(buf, first->data<uint8_t>(), to_copy);
+      std::memcpy(hdr.buf, first->data<uint8_t>() + off, to_copy);
     off += to_copy;
-
-    if (to_copy == first->len()) {
+    if (off == first->pkt_len) {
       least_in_window += first->nb_segs;
       rte_pktmbuf_free(first);
       first = last = nullptr;
       off = 0;
-      remaining = 0;
+      hdr.remaining = 0;
     } else {
-      remaining = first->len() - to_copy;
+      hdr.remaining = first->pkt_len - off;
     }
+    hdr.flags = 1;
     return to_copy;
   }
 
@@ -190,28 +185,27 @@ struct transport_output {
   }
 
   size_t read(msg_hdr &hdr) {
-    if (out.empty()){
-      hdr.flags = 1;  
-      return read_partial_msg(hdr.buf, hdr.size, hdr.remaining);
-    }
-    hdr.flags = 0;
+    hdr.flags = 0;  
+    if (out.empty())
+      return read_partial_msg(hdr);
+    
+    hdr.flags = 1;
     auto *msg = out.front();
-    auto to_copy = std::min<size_t>(msg->pkt_len, hdr.size);
-    assert(to_copy == msg->pkt_len);
+    auto to_copy = std::min<size_t>(msg->pkt_len - off, hdr.size);
     if (msg->nb_segs > 1)
       rte_pktmbuf_read(msg, off, to_copy, hdr.buf);
     else
       std::memcpy(hdr.buf, msg->data<uint8_t>() + off, to_copy);
     off += to_copy;
 
-    if (to_copy == msg->len()) {
+    if (off == msg->pkt_len) {
       out.pop_front();
       least_in_window += msg->nb_segs;
       rte_pktmbuf_free(msg);
       hdr.remaining = 0;
       off = 0;
     } else {
-      hdr.remaining = msg->len() - to_copy;
+      hdr.remaining = msg->pkt_len - off;
     }
     return to_copy;
   }
@@ -235,18 +229,19 @@ struct transport_output {
     return least_in_window - last_wnd_return >= kMaxWndSize >> 1;
   }
 
+  // pkt reassmbly and buffering
   message *first = nullptr, *last = nullptr;
   message_allocator *port_allocator;
   reorder_buffer rb;
-  std::bitset<kMaxWndSize> wnd;
   std::deque<message *> out;
+  size_t off = 0;
 
+  // connection state
+  std::bitset<kMaxWndSize> wnd;
   uint64_t received_pkts;
   uint64_t least_in_window;
   uint64_t max_rx_in_window;
   uint64_t next_seq;
   uint64_t last_wnd_return;
-
   uint64_t ts = 0;
-  size_t off = 0;
 };

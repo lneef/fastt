@@ -7,7 +7,6 @@
 #include <message.h>
 #include <rte_cycles.h>
 
-#include "congestion_control.h"
 #include "debug.h"
 #include "filter.h"
 #include "message.h"
@@ -40,7 +39,7 @@ public:
     statistics() : acked(0), retransmitted(0) {}
   };
   transport_input(uint32_t budget = 1)
-      : cc(16, 80), budget(budget), seq(min_seq), rtt() {}
+      :  budget(budget), seq(min_seq), rtt() {}
 
   unsigned get_current_wnd() const {
     return budget;
@@ -178,7 +177,6 @@ public:
   const statistics &get_stats() const { return stats; }
 
 private:
-  swift cc;
   statistics stats;
   std::deque<sender_entry> unacked;
   uint32_t budget;
