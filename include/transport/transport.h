@@ -216,7 +216,6 @@ public:
         trx.set(hdr->seq, msg);
       if (hdr->wnd)
         ttx.update_budget(hdr->wnd);
-      setup_after_init();
       break;
     }
     case protocol::pkt_type::FT_INIT_ACK: {
@@ -230,7 +229,6 @@ public:
       }
       assert(hdr->wnd > 0);
       ttx.update_budget(hdr->wnd);
-      setup_after_init();
       cstate = connection_state::ESTABLISHED;
       break;
     }
@@ -293,13 +291,6 @@ public:
   }
 
 private:
-  void setup_after_init() {
-    trx.advance([](message *msg) {
-      msg->free();
-      return nullptr;
-    });
-  }
-
   transport_output trx;
   con_config target;
   transport_input ttx;

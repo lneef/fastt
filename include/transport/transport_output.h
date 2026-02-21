@@ -96,7 +96,7 @@ struct transport_output {
   void reassemble_single_msg(message *mbuf) {
     auto *hdr = mbuf->data<protocol::ft_header>();
     // control frames are freed
-    if(hdr->type == protocol::pkt_type::FT_CRTL){
+    if(hdr->type != protocol::pkt_type::FT_MSG){
         mbuf->free();
         return;
     }
