@@ -21,6 +21,7 @@ void protocol::prepare_ack_pkt(message* msg, uint64_t ack, uint32_t us, bool is_
     ft->ack = ack;
     ft->sack = is_sack;
     ft->seq = 0;
+    ft->wnd = 0;
     ft->ts = us;
     ft->type = protocol::pkt_type::FT_ACK;
 }
