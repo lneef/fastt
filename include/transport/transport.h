@@ -99,11 +99,8 @@ public:
   void check_timeout(uint64_t now) {
     if (cstate != connection_state::ESTABLISHED)
       return;
-    if (ttx.all_acked()) {
-      if (ttx.get_current_wnd() == 0)
-        send_ctrl(0, true, 0);
+    if (ttx.all_acked()) 
       return;
-    }
     if (ttx.check_timeout(now)) {
       probe_timeout();
       ttx.rearm(now);
@@ -112,14 +109,16 @@ public:
 
   void check_ctrl() {
     if (trx.check_wnd_return())
-      send_ctrl(trx.prepare_wnd_return(), false, trx.get_last_rcvd_in_seq());
+      send_ctrl(trx.prepare_wnd_return());
   }
 
-  void send_ctrl(uint16_t wnd, bool blocked, uint64_t ack) {
+  void send_ctrl(uint16_t wnd) {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     if (!msg)
       return;
-    protocol::prepare_ctrl_pkt(msg, ack, wnd, blocked);
+    ttx.record_ctrl_pkt(msg, [&](message *msg, uint64_t seq) {
+      protocol::prepare_ctrl_pkt(msg, seq, wnd);
+    });
     pkt_if->consume_pkt(msg, sport, target);
   }
 
@@ -131,11 +130,15 @@ public:
     rte_memcpy(mbuf->data<uint8_t>(), buf, size);
     auto ctor = [&](message *pkt, uint64_t seq) {
       uint64_t ack = 0;
-      uint32_t ts = 0;
-      ack = trx.get_last_rcvd_in_seq();
-      ts = rte_get_timer_cycles() / get_ticks_us() - trx.get_ts();
-      scheduler.ack_callback(ack);
-      protocol::prepare_ft_header(pkt, seq, ack, trx.prepare_wnd_return(),
+      uint32_t ts = 0;  
+      uint16_t wnd = trx.prepare_wnd_return();
+      if(scheduler.ack_pending(seq)){
+          ack = trx.get_last_rcvd_in_seq();
+          ts = rte_get_timer_cycles() / get_ticks_us() - trx.get_ts();
+          scheduler.ack_callback(ack);
+      }
+
+      protocol::prepare_ft_header(pkt, seq, ack, wnd,
                                   start, end, ts, false);
     };
     auto inserted = ttx.record_pkt(mbuf, ctor);
@@ -166,7 +169,7 @@ public:
       scheduler.ack_callback(ack);
     }
     FASTT_LOG_DEBUG("Return %u capacity to peer\n", trx.get_available_wnd());
-    protocol::prepare_ack_pkt(msg, ack, trx.prepare_wnd_return(),
+    protocol::prepare_ack_pkt(msg, ack,
                               now / get_ticks_us() - trx.get_ts(), is_sack);
     pkt_if->consume_pkt(msg, sport, target);
     return true;
@@ -177,9 +180,11 @@ public:
     auto ts = *msg->get_ts() - hdr->ts;
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
-      if (hdr->ack) 
-        ttx.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
-      
+      if (hdr->ack)
+        ttx.acknowledge(hdr->ack, ts, hdr->sack);
+      if(hdr->wnd)
+        ttx.update_budget(hdr->wnd);  
+
       scheduler.process_seq(hdr->seq);
       if (trx.is_set(hdr->seq)) {
         ++stats.retransmissions;
@@ -190,7 +195,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_ACK: {
-      ttx.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
+      ttx.acknowledge(hdr->ack, ts, hdr->sack);
       if (hdr->sack) {
         auto *sack_payload =
             msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));
@@ -209,11 +214,13 @@ public:
         return false;
       } else
         trx.set(hdr->seq, msg);
+      if(hdr->wnd)
+          ttx.update_budget(hdr->wnd);
       setup_after_init();
       break;
     }
     case protocol::pkt_type::FT_INIT_ACK: {
-      ttx.acknowledge(hdr->ack, hdr->wnd, ts, hdr->sack);
+      ttx.acknowledge(hdr->ack, ts, hdr->sack);
       scheduler.process_seq(hdr->seq);
       if (trx.is_set(hdr->seq)) {
         msg->free();
@@ -221,15 +228,19 @@ public:
       } else {
         trx.set(hdr->seq, msg);
       }
+      if(hdr->wnd)
+          ttx.update_budget(hdr->wnd);
       setup_after_init();
       cstate = connection_state::ESTABLISHED;
       break;
     }
     case protocol::pkt_type::FT_CRTL: {
-      if (hdr->ack > 0)
-        ttx.acknowledge(hdr->ack, hdr->wnd, hdr->ts, hdr->sack);
-      else if (hdr->blocked)
-        send_ctrl(trx.prepare_wnd_return(), false, trx.get_last_rcvd_in_seq());
+      if(trx.is_set(hdr->seq)){
+          msg->free();
+          return false;
+      }
+      trx.set(hdr->seq, msg);
+      ttx.update_budget(hdr->wnd);
       msg->free();
       break;
     };

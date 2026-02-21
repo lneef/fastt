@@ -16,12 +16,11 @@ void protocol::prepare_ft_header(message* msg, uint64_t seq, uint64_t ack, uint1
     ft->type = protocol::pkt_type::FT_MSG;
 }
 
-void protocol::prepare_ack_pkt(message* msg, uint64_t ack, uint16_t wnd, uint32_t us, bool is_sack){
+void protocol::prepare_ack_pkt(message* msg, uint64_t ack, uint32_t us, bool is_sack){
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header*);
     ft->ack = ack;
     ft->sack = is_sack;
     ft->seq = 0;
-    ft->wnd = wnd;
     ft->ts = us;
     ft->type = protocol::pkt_type::FT_ACK;
 }
@@ -38,11 +37,10 @@ void protocol::prepare_init_header(message* msg, uint64_t seq){
 }
 
 
-void protocol::prepare_ctrl_pkt(message* msg, uint64_t ack, uint16_t wnd, bool blocked){
+void protocol::prepare_ctrl_pkt(message* msg, uint64_t seq, uint16_t wnd){
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header*);
-    ft->ack = ack;
+    ft->seq = seq;
     ft->wnd = wnd;
-    ft->blocked = blocked;
     ft->type = protocol::pkt_type::FT_CRTL;
 }
 

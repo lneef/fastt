@@ -53,9 +53,7 @@ struct transport_output {
   static constexpr unsigned kLowThreshold = 2048;
   static constexpr unsigned kMaxWndSize = 128;
   transport_output(uint64_t min_seq, message_allocator *port_allocator)
-      : port_allocator(port_allocator), received_mbufs(min_seq),
-        least_in_window(min_seq), max_rx_in_window(), next_seq(min_seq),
-        last_wnd_return() {}
+      : port_allocator(port_allocator),  max_rx_in_window(), next_seq(min_seq){}
 
   uint64_t get_last_rcvd_in_seq() const { return next_seq - 1; }
 
@@ -90,12 +88,18 @@ struct transport_output {
       return false;
     auto *msg = out.front();
     out.pop_front();
+    grant_to_return += msg->nb_segs;
     f(msg);
     return true;
   }
 
   void reassemble_single_msg(message *mbuf) {
     auto *hdr = mbuf->data<protocol::ft_header>();
+    // control frames are freed
+    if(hdr->type == protocol::pkt_type::FT_CRTL){
+        mbuf->free();
+        return;
+    }
     bool end = hdr->end;
     mbuf->shrink_headroom(sizeof(protocol::ft_header));
     message::merge(first, last, mbuf);
@@ -111,7 +115,6 @@ struct transport_output {
       rb.insert(seq, msg);
     } else {
       assert(wnd.test(index(seq)));
-      received_mbufs += msg->nb_segs;
       reassemble_single_msg(msg);
       wnd.reset(index(next_seq));
       ++next_seq;
@@ -121,7 +124,6 @@ struct transport_output {
         wnd.reset(index(next_seq));
         ++next_seq;
         auto *mbuf = rb.front();
-        received_mbufs += mbuf->nb_segs;
         reassemble_single_msg(mbuf);
         rb.pop_front();
       }
@@ -170,8 +172,8 @@ struct transport_output {
       std::memcpy(hdr.buf, first->data<uint8_t>() + off, to_copy);
     off += to_copy;
     if (off == first->pkt_len) {
-      least_in_window += first->nb_segs;
-      rte_pktmbuf_free(first);
+      grant_to_return += first->nb_segs;
+      first->free();
       first = last = nullptr;
       off = 0;
       hdr.remaining = 0;
@@ -201,9 +203,9 @@ struct transport_output {
     off += to_copy;
 
     if (off == msg->pkt_len) {
+      grant_to_return += msg->nb_segs;
       out.pop_front();
-      least_in_window += msg->nb_segs;
-      rte_pktmbuf_free(msg);
+      msg->free();
       hdr.remaining = 0;
       off = 0;
     } else {
@@ -215,17 +217,17 @@ struct transport_output {
   uint64_t get_ts() { return ts; }
 
   unsigned get_available_wnd() const {
-      return least_in_window + kMaxWndSize - received_mbufs;
+      return grant_to_return;
   }
 
   unsigned prepare_wnd_return() {
     auto wnd = get_available_wnd();
-    last_wnd_return = least_in_window;
+    grant_to_return = 0;
     return wnd;
   }
 
   bool check_wnd_return() const {
-    return least_in_window - last_wnd_return >= kMaxWndSize >> 1;
+    return grant_to_return >= kMaxWndSize >> 1;
   }
 
   // pkt reassmbly and buffering
@@ -237,10 +239,8 @@ struct transport_output {
 
   // connection state
   std::bitset<kMaxWndSize> wnd;
-  uint64_t received_mbufs;
-  uint64_t least_in_window;
   uint64_t max_rx_in_window;
   uint64_t next_seq;
-  uint64_t last_wnd_return;
+  uint64_t grant_to_return = kMaxWndSize;
   uint64_t ts = 0;
 };

@@ -73,6 +73,14 @@ public:
     return burst_rtt;
   }
 
+  template<typename F>
+  void record_ctrl_pkt(message* msg, F &&ctor){
+      ctor(msg, seq);
+      msg->inc_refcnt();
+      queued_mbufs += msg->nb_segs;
+      unacked.emplace_back(msg, seq++, false);
+  }
+
   template <typename F> bool record_pkt(message *msg, F &&ctor) {
     if (budget == 0)
       return false;
@@ -83,9 +91,6 @@ public:
     *msg->get_ts() = 0;
     unacked.emplace_back(msg, seq++, false);
     FASTT_LOG_DEBUG("Enqueue pkt with %lu new budget %u\n", seq - 1, budget);
-    if (all_acked())
-      timeout = rte_get_timer_cycles() + rto;
-
     return true;
   }
 
@@ -112,12 +117,11 @@ public:
     entry->retransmitted = true;
   }
 
-  void acknowledge(uint64_t seq, uint16_t budget, uint64_t ts, bool is_sack) {
+  void acknowledge(uint64_t seq, uint64_t ts, bool is_sack) {
     if (seq < least_unacked_pkt)
       return;
     stats.acked = seq;
     cleanup_acked_pkts(seq, ts);
-    update_budget(budget);
     if (!is_sack) 
       timeout = rte_get_timer_cycles() + rto;
     least_unacked_pkt = seq + 1;
@@ -170,7 +174,7 @@ public:
   bool all_acked() const { return least_unacked_pkt == seq; }
 
   void update_budget(uint16_t granted) {
-    budget = (granted - queued_mbufs);
+    budget += granted;
     FASTT_LOG_DEBUG("Got new capacity %u\n", budget);
   }
 
