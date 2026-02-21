@@ -109,6 +109,8 @@ int lcore_server_fun(void *arg) {
         serve(&resp, &req);
         m.buf = reinterpret_cast<uint8_t*>(&resp);
         m.size = sizeof(resp);
+        m.som = true;
+        m.eom = true;
         con.send(m);
       }
       return true;
