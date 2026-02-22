@@ -23,14 +23,17 @@
 #include "packet_if.h"
 #include "protocol.h"
 
+#include "transport/seq.h"
 #include "transport_input.h"
 #include "transport_output.h"
-#include "util.h"
+#include "util.h" 
 
 struct transport_statistics {
-  uint64_t retransmitted, acked, sent, retransmissions;
+  uint64_t retransmitted;
+  seq_t acked;
+  uint64_t sent, retransmissions;
   double rtt;
-  transport_statistics(uint64_t retransmitted, uint64_t acked, uint64_t sent,
+  transport_statistics(uint64_t retransmitted, seq_t acked, uint64_t sent,
                        uint64_t retransmissions, uint64_t rtt_est)
       : retransmitted(retransmitted), acked(acked), sent(sent),
         retransmissions(retransmissions) {
@@ -42,31 +45,31 @@ struct transport_statistics {
 };
 
 template <typename D> struct seq_observer {
-  void process_seq(uint64_t seq) {
+  void process_seq(seq_t seq) {
     static_cast<D &>(*this).process_seq_impl(seq);
   }
 };
 
 struct ack_scheduler : public seq_observer<ack_scheduler> {
-  uint64_t last_acked;
-  uint64_t last_sack;
+  seq_t last_acked;
+  seq_t last_sack;
   bool pending_from_retry;
-  void process_seq_impl(uint64_t seq) { pending_from_retry = seq < last_acked; }
+  void process_seq_impl(seq_t seq) { pending_from_retry = seq < last_acked; }
 
-  bool ack_pending(uint64_t seq) {
+  bool ack_pending(seq_t seq) {
     return pending_from_retry || seq > last_acked;
   }
 
-  bool sack_pending(uint64_t seq) {
+  bool sack_pending(seq_t seq) {
     return pending_from_retry || seq > last_sack;
   }
 
-  void ack_callback(uint64_t seq) {
+  void ack_callback(seq_t seq) {
     last_acked = seq;
     pending_from_retry = false;
   }
 
-  void sack_callback(uint64_t seq) {
+  void sack_callback(seq_t seq) {
     last_acked = seq;
     last_sack = seq;
     pending_from_retry = false;
@@ -88,7 +91,7 @@ public:
 
   transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
             const con_config &target)
-      : trx(min_seq, allocator), target(target), ttx(), scheduler(),
+      : trx(allocator), target(target), ttx(), scheduler(),
         allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
 
   void probe_timeout() {
@@ -116,7 +119,7 @@ public:
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     if (!msg)
       return;
-    ttx.record_ctrl_pkt(msg, [&](message *msg, uint64_t seq) {
+    ttx.record_ctrl_pkt(msg, [&](message *msg, seq_t seq) {
       protocol::prepare_ctrl_pkt(msg, seq, wnd);
     });
     pkt_if->consume_pkt(msg, sport, target);
@@ -128,8 +131,8 @@ public:
     assert(capacity());
     auto *mbuf = allocator->alloc_message(size);
     rte_memcpy(mbuf->data<uint8_t>(), buf, size);
-    auto ctor = [&](message *pkt, uint64_t seq) {
-      uint64_t ack = 0;
+    auto ctor = [&](message *pkt, seq_t seq) {
+      seq_t ack{0};
       uint32_t ts = 0;
       uint16_t wnd = trx.prepare_wnd_return();
       if (scheduler.ack_pending(seq)) {
@@ -149,7 +152,7 @@ public:
   bool acknowledge(uint64_t now = rte_get_timer_cycles()) {
     message *msg;
     bool is_sack = trx.has_holes();
-    uint64_t ack = trx.get_last_rcvd_in_seq();
+    seq_t ack = trx.get_last_rcvd_in_seq();
     if (is_sack) {
       if (!scheduler.sack_pending(trx.max_rx_in_window))
         return false;
@@ -179,7 +182,7 @@ public:
     auto ts = *msg->get_ts() - hdr->ts;
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
-      if (hdr->ack)
+      if (hdr->ackframe)
         ttx.acknowledge(hdr->ack, ts, hdr->sack);
       if (hdr->wnd)
         ttx.update_budget(hdr->wnd);
@@ -202,13 +205,13 @@ public:
           pkt_if->consume_for_retransmission(msg);
         });
       }
-      if (hdr->ack == min_seq)
+      if (hdr->ack == seq_t{0})
         cstate = connection_state::ESTABLISHED;
       assert(hdr->wnd == 0);
       msg->free();
       break;
     }
-    case protocol::pkt_type::FT_INIT: {
+    case protocol::pkt_type::FT_RDY_TO_RCV: {
       if (trx.is_set(hdr->seq)) {
         msg->free();
         return false;
@@ -218,7 +221,7 @@ public:
         ttx.update_budget(hdr->wnd);
       break;
     }
-    case protocol::pkt_type::FT_INIT_ACK: {
+    case protocol::pkt_type::FT_CLR_TO_SD: {
       ttx.acknowledge(hdr->ack, ts, hdr->sack);
       scheduler.process_seq(hdr->seq);
       if (trx.is_set(hdr->seq)) {
@@ -254,11 +257,11 @@ public:
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     assert(msg);
     ttx.record_ctrl_pkt(
-        msg, [budget = trx.prepare_wnd_return()](message *msg, uint64_t seq) {
+        msg, [budget = trx.prepare_wnd_return()](message *msg, seq_t seq) {
           protocol::prepare_init_header(msg, seq, budget);
         });
     auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
-    assert(hdr->type == protocol::FT_INIT);
+    assert(hdr->type == protocol::FT_CLR_TO_SD);
     FASTT_LOG_DEBUG("Sent init header to peer %u %u\n", target.ip, target.port);
     pkt_if->consume_pkt(msg, sport, target);
   }
@@ -267,8 +270,8 @@ public:
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     assert(msg);
     ttx.record_ctrl_pkt(
-        msg, [budget = trx.prepare_wnd_return()](message *msg, uint64_t seq) {
-          protocol::prepare_init_ack_header(msg, seq, min_seq, budget);
+        msg, [budget = trx.prepare_wnd_return()](message *msg, seq_t seq) {
+          protocol::prepare_init_ack_header(msg, seq, seq, budget);
         });
     FASTT_LOG_DEBUG("Sent ack for init");
     pkt_if->consume_pkt(msg, sport, target);

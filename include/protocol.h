@@ -1,6 +1,7 @@
 #pragma once
 
 #include "message.h"
+#include "transport/seq.h"
 #include <cstdint>
 #include <rte_common.h>
 #include <rte_ether.h>
@@ -13,8 +14,8 @@ namespace protocol {
 enum pkt_type : uint8_t {
   FT_MSG = 0,
   FT_ACK = 1,
-  FT_INIT = 2,
-  FT_INIT_ACK = 3,
+  FT_RDY_TO_RCV = 2,
+  FT_CLR_TO_SD = 3,
   FT_CRTL = 4,
 };
 
@@ -22,17 +23,18 @@ struct __rte_packed_begin ft_header {
   uint16_t sport;
   uint16_t dport;
   pkt_type type : 3;
-  uint64_t wnd : 16;
-  uint64_t end : 1;
-  uint64_t sack : 1;
-  uint64_t start : 1;
-  uint64_t ts : 26;
-  uint64_t len: 16; 
-  uint64_t seq;
-  uint64_t ack;
+  uint32_t ackframe :1;
+  uint32_t start :1;
+  uint32_t end :1;
+  uint32_t sack :1;
+  uint32_t ts :25;
+  uint32_t len: 16;
+  uint32_t wnd: 16;
+  seq_t seq;
+  seq_t ack;
 } __rte_packed_end;
 
-static_assert(sizeof(ft_header) == 28, "");
+static_assert(sizeof(ft_header) == 20, "");
 
 struct __rte_packed_begin ft_sack_payload {
   using interval = std::pair<uint64_t, uint64_t>;  
@@ -48,14 +50,14 @@ struct __rte_packed_begin ft_sack_payload {
 #endif
 } __rte_packed_end;
 
-void prepare_ft_header(message *msg, uint64_t seq, uint64_t ack, uint16_t wnd, 
+void prepare_ft_header(message *msg, seq_t seq, seq_t ack, uint16_t wnd, 
                        bool start, bool fini, uint32_t us = 0, bool is_sack = false);
-void prepare_ack_pkt(message *msg, uint64_t ack, uint32_t us,
+void prepare_ack_pkt(message *msg, seq_t ack, uint32_t us,
                      bool is_sack = false);
-void prepare_init_header(message *msg, uint64_t seq, uint16_t budget);
-void prepare_init_ack_header(message *msg, uint64_t seq, uint64_t ack,
+void prepare_init_header(message *msg, seq_t seq, uint16_t budget);
+void prepare_init_ack_header(message *msg, seq_t seq, seq_t ack,
                              uint16_t wnd);
-void prepare_ctrl_pkt(message *msg, uint64_t seq, uint16_t wnd);
+void prepare_ctrl_pkt(message *msg, seq_t seq, uint16_t wnd);
 
 namespace defs {
 static constexpr uint16_t kipOffset = sizeof(rte_ether_hdr);

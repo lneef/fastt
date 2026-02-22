@@ -24,21 +24,22 @@ static __inline constexpr float fast_inv_sqrt(float val) {
 }
 
 struct swift {
+  static constexpr float mss = 1024;
   static constexpr float ai = 32;
   static constexpr float beta = 0.8;
   static constexpr float max_md = 0.5;
   static constexpr uint64_t reset_threshold = 64;
-  uint64_t least_in_window, retransmit_cnt, last_decrease;
+  uint64_t retransmit_cnt, last_decrease;
   float base_target_delay, cwnd_size;
   float pacing = 0;
   const uint64_t min_wd_size;
 
   swift(std::size_t initial_len, uint64_t target_delay)
-      : least_in_window(0), retransmit_cnt(0), last_decrease(0),
+      :  retransmit_cnt(0), last_decrease(0),
         base_target_delay(target_delay), cwnd_size(initial_len),
         min_wd_size(std::max<uint64_t>(initial_len >> 8, 1)) {}
 
-  void on_ack(uint64_t ack, uint64_t now, uint64_t srtt, uint64_t delay) {
+  void on_ack(uint64_t acked, uint64_t now, uint64_t srtt, uint64_t delay) {
     retransmit_cnt = 0;
     bool can_decrease = now - last_decrease > srtt * get_ticks_us();
 
@@ -48,18 +49,13 @@ struct swift {
         std::max<float>(
             std::min<float>(fast_inv_sqrt(cwnd_size) * 5.4 - 0.48, 5), 0);
     if (delay < target_delay) {
-      cwnd_size += ai / cwnd_size * (ack - least_in_window);
+      cwnd_size += ai / cwnd_size * (acked);
     } else if (can_decrease) {
       cwnd_size *= std::max<float>(1 - beta * (delay - target_delay) / delay,
                                    1 - max_md);
       last_decrease = now;
     }
-    least_in_window = ack;
     update_stats();
-  }
-
-  bool has_space(uint64_t seq) const {
-    return seq < least_in_window + cwnd_size;
   }
 
   void on_retransmission_timeout(std::size_t nb, uint64_t rtt, uint64_t now) {
@@ -89,10 +85,12 @@ struct swift {
   void update_stats() {
     // TODO: fix this according to real impl
     // but we currently dont have a pacer
-    cwnd_size = std::clamp<float>(cwnd_size, 1, 128);
+    cwnd_size = std::clamp<float>(cwnd_size, 0.1 * mss, 128 * mss);
   }
 
-  unsigned space(uint64_t seq) const {
-    return std::max<unsigned>(cwnd_size - (seq - least_in_window - 1), 0);
+  unsigned space(uint64_t inflight, uint64_t next_to_send) const {
+    // cwnd could have been decreased by a loss or excess rtt  
+    return std::min<unsigned>(next_to_send,
+                              std::max<unsigned>(cwnd_size - inflight, 0));
   }
 };

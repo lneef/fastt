@@ -10,17 +10,16 @@
 #include "filter.h"
 #include "message.h"
 #include "protocol.h"
+#include "transport/seq.h"
 #include "util.h"
-
-static constexpr uint64_t min_seq = 1;
 
 struct sender_entry {
   message *packet;
-  uint64_t seq;
+  seq_t seq;
   bool sacked : 4;
   bool retransmitted : 4;
   sender_entry() : packet(nullptr), seq(0), retransmitted(false) {}
-  sender_entry(message *packet, uint64_t seq, bool retransmitted)
+  sender_entry(message *packet, seq_t seq, bool retransmitted)
       : packet(packet), seq(seq), sacked(false), retransmitted(retransmitted) {}
 
   bool requires_retry(uint64_t now, uint64_t rto) {
@@ -34,11 +33,12 @@ struct sender_entry {
 class transport_input {
 public:
   struct statistics {
-    uint64_t acked, retransmitted, rtt;
+    seq_t acked;
+    uint64_t retransmitted, rtt;
     statistics() : acked(0), retransmitted(0) {}
   };
   transport_input()
-      :  seq(min_seq), rtt() {}
+      :  rtt() {}
 
   unsigned get_current_wnd() const {
     return budget;
@@ -52,7 +52,7 @@ public:
 
   void rearm(uint64_t now) { timeout = now + rto; }
 
-  uint64_t cleanup_acked_pkts(uint64_t seq, uint64_t ts) {
+  uint64_t cleanup_acked_pkts(seq_t seq, uint64_t ts) {
     uint64_t burst_rtt = 0;
     while (!unacked.empty() && unacked.front().seq < seq) {
       auto &desc = unacked.front();
@@ -112,7 +112,7 @@ public:
     entry->retransmitted = true;
   }
 
-  void acknowledge(uint64_t seq, uint64_t ts, bool is_sack) {
+  void acknowledge(seq_t seq, uint64_t ts, bool is_sack) {
     if (seq < least_unacked_pkt)
       return;
     stats.acked = seq;
@@ -163,7 +163,7 @@ public:
     stats.rtt = rtt;
   }
 
-  uint64_t get_seq() const { return seq; }
+  seq_t get_seq() const { return seq; }
   uint64_t get_srtt() const { return rtt; }
 
   bool all_acked() const { return least_unacked_pkt == seq; }
@@ -179,8 +179,8 @@ private:
   statistics stats;
   std::deque<sender_entry> unacked;
   uint32_t budget = 0;
-  uint64_t seq;
-  uint64_t least_unacked_pkt = min_seq;
+  seq_t seq{0};
+  seq_t least_unacked_pkt{0};
   uint64_t rtt;
   uint64_t rto = get_ticks_ms() * 5;
   uint64_t timeout;

@@ -103,7 +103,7 @@ public:
     FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n", ft.sip,
                     rte_be_to_cpu_16(ft.sport));
     auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
-    if (unlikely(header->type == protocol::FT_INIT))
+    if (unlikely(header->type == protocol::FT_RDY_TO_RCV))
       register_request(pkt, ft);
     else {
       auto it = flows.find(ft);

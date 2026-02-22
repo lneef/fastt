@@ -2,7 +2,7 @@
 
 #include "message.h"
 #include "protocol.h"
-#include "transport/transport_input.h"
+#include "transport/seq.h"
 #include "util.h"
 
 #include <algorithm>
@@ -17,10 +17,10 @@
 #include <rte_mbuf.h>
 
 struct reorder_buffer {
-  using msg_desc_t = std::pair<uint64_t, message *>;
+  using msg_desc_t = std::pair<seq_t, message *>;
   std::deque<msg_desc_t> msg_desc;
 
-  void insert(uint64_t seq, message *msg) {
+  void insert(seq_t seq, message *msg) {
     if (msg_desc.empty()) {
       msg_desc.emplace_back(seq, msg);
       return;
@@ -39,7 +39,7 @@ struct reorder_buffer {
     }
   }
 
-  uint64_t next_buffered_seq() { return msg_desc.front().first; }
+  seq_t next_buffered_seq() { return msg_desc.front().first; }
 
   bool has_elements() const { return msg_desc.size() > 0; }
 
@@ -52,12 +52,12 @@ struct transport_output {
   // reserve some headroom
   static constexpr unsigned kLowThreshold = 2048;
   static constexpr unsigned kMaxWndSize = 128;
-  transport_output(uint64_t min_seq, message_allocator *port_allocator)
-      : port_allocator(port_allocator),  max_rx_in_window(), next_seq(min_seq){}
+  transport_output(message_allocator *port_allocator)
+      : port_allocator(port_allocator), max_rx_in_window() {}
 
-  uint64_t get_last_rcvd_in_seq() const { return next_seq - 1; }
+  seq_t get_last_rcvd_in_seq() const { return seq_t{next_seq - 1}; }
 
-  bool set(uint64_t seq, message *msg) {
+  bool set(seq_t seq, message *msg) {
     auto idx = index(seq);
     if (beyond_window(seq) || wnd[idx])
       return false;
@@ -75,13 +75,11 @@ struct transport_output {
     return true;
   }
 
-  bool is_set(uint64_t seq) {
+  bool is_set(seq_t seq) {
     return seq < next_seq || (seq < next_seq + kMaxWndSize && wnd[index(seq)]);
   }
 
-  bool beyond_window(uint64_t seq) {
-    return seq >= next_seq + kMaxWndSize;
-  }
+  bool beyond_window(seq_t seq) { return seq >= next_seq + kMaxWndSize; }
 
   template <typename F> bool advance(F &&f) {
     if (out.empty())
@@ -96,9 +94,9 @@ struct transport_output {
   void reassemble_single_msg(message *mbuf) {
     auto *hdr = mbuf->data<protocol::ft_header>();
     // control frames are freed
-    if(hdr->type != protocol::pkt_type::FT_MSG){
-        mbuf->free();
-        return;
+    if (hdr->type != protocol::pkt_type::FT_MSG) {
+      mbuf->free();
+      return;
     }
     bool end = hdr->end;
     mbuf->shrink_headroom(sizeof(protocol::ft_header));
@@ -110,7 +108,7 @@ struct transport_output {
     }
   }
 
-  void reassemble(uint64_t seq, message *msg) {
+  void reassemble(seq_t seq, message *msg) {
     if (seq != next_seq) {
       rb.insert(seq, msg);
     } else {
@@ -130,24 +128,26 @@ struct transport_output {
     }
   }
 
-  bool inside(uint64_t seq) {
+  bool inside(seq_t seq) {
     return seq >= next_seq && seq < next_seq + kMaxWndSize;
   }
 
-  std::size_t __inline index(std::size_t i) {
+  std::size_t __inline index(seq_t i) {
     assert(i >= next_seq);
-    return (i - min_seq) & (kMaxWndSize - 1);
+    return (i.v) & (kMaxWndSize - 1);
   }
 
   bool has_holes() { return max_rx_in_window != next_seq - 1; }
 
   uint16_t copy_bitset(protocol::ft_sack_payload *data) {
     uint16_t id = 0;
-    auto highest_seq = std::min(
-        next_seq + protocol::ft_sack_payload::kBitMapLen * 64, max_rx_in_window);
+    seq_t highest_seq = next_seq + protocol::ft_sack_payload::kBitMapLen * 64;
+    if (likely(highest_seq > max_rx_in_window))
+      highest_seq = max_rx_in_window;
+
     std::memset(
         data->bit_map, 0,
-        (highest_seq - next_seq + 1 + 63) / 64 *
+        protocol::ft_sack_payload::kBitMapLen *
             sizeof(
                 uint64_t)); /* 64 since least_in_window is part of the window */
     assert(protocol::ft_sack_payload::kBitMapLen * 64 >=
@@ -189,10 +189,10 @@ struct transport_output {
   }
 
   size_t read(msg_hdr &hdr) {
-    hdr.flags = -ENODATA;  
+    hdr.flags = -ENODATA;
     if (out.empty())
       return read_partial_msg(hdr);
-    
+
     hdr.flags = 0;
     auto *msg = out.front();
     auto to_copy = std::min<size_t>(msg->pkt_len - off, hdr.size);
@@ -216,9 +216,7 @@ struct transport_output {
 
   uint64_t get_ts() { return ts; }
 
-  unsigned get_available_wnd() const {
-      return grant_to_return;
-  }
+  unsigned get_available_wnd() const { return grant_to_return; }
 
   unsigned prepare_wnd_return() {
     auto wnd = get_available_wnd();
@@ -226,9 +224,7 @@ struct transport_output {
     return wnd;
   }
 
-  bool check_wnd_return() const {
-    return grant_to_return >= kMaxWndSize >> 1;
-  }
+  bool check_wnd_return() const { return grant_to_return >= kMaxWndSize >> 1; }
 
   // pkt reassmbly and buffering
   message *first = nullptr, *last = nullptr;
@@ -239,8 +235,8 @@ struct transport_output {
 
   // connection state
   std::bitset<kMaxWndSize> wnd;
-  uint64_t max_rx_in_window;
-  uint64_t next_seq;
+  seq_t max_rx_in_window;
+  seq_t next_seq;
   uint64_t grant_to_return = kMaxWndSize;
   uint64_t ts = 0;
 };
