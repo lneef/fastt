@@ -109,6 +109,9 @@ int lcore_server_fun(void *arg) {
         m.iov[0].iov_base = reinterpret_cast<uint8_t*>(&req);
         m.iov[0].iov_len = sizeof(req);
         auto sz = con.recv(m);
+        if(sz == 0)
+            // connection has been closed
+            return false;
         assert(sz == sizeof(req));
         serve(&resp, &req);
         m.iov = &iov;
