@@ -185,7 +185,7 @@ private:
   uint32_t budget = 0;
   seq_t seq{0};
   seq_t least_unacked_pkt{0};
-  uint64_t rtt;
+  uint64_t rtt = 0;
   uint64_t rto = get_ticks_ms() * 5;
   uint64_t timeout;
 };

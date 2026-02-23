@@ -53,7 +53,7 @@ struct transport_output {
   static constexpr unsigned kLowThreshold = 128;
   static constexpr unsigned kMaxWndSize = 128;
   transport_output(message_allocator *port_allocator)
-      : port_allocator(port_allocator), max_rx_in_window() {}
+      : port_allocator(port_allocator), max_rx_in_window(), next_seq() {}
 
   seq_t get_last_rcvd_in_seq() const { return seq_t{next_seq - 1}; }
 
