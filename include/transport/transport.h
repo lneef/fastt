@@ -138,8 +138,8 @@ public:
           msg, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
       trx.copy_bitset(sack_payload);
       scheduler.sack_callback(ack, total_rcvd_pkts);
-      FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %lu\n",
-                      sack_payload->bit_map_len, ack);
+      FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %u\n",
+                      sack_payload->bit_map_len, ack.v);
     } else {
       if (!scheduler.ack_pending(ack))
         return false;
@@ -160,6 +160,7 @@ public:
     auto ts = *msg->get_ts() - hdr->ts;
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
+      FASTT_LOG_DEBUG("Got new msg seq=%u ack=%u ackframe=%u wnd=%u\n", hdr->seq.v, hdr->ack.v, hdr->ackframe, hdr->wnd);
       scheduler.process_seq(hdr->seq);
       if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
                                                     stats.retransmissions)) {
@@ -174,6 +175,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_ACK: {
+      FASTT_LOG_DEBUG("Got ACK ack=%u sack=%u\n", hdr->ack.v, hdr->sack);
       ttx.acknowledge(hdr->ack, ts, hdr->sack);
       if (hdr->sack) {
         auto *sack_payload =
@@ -189,6 +191,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_RDY_TO_RCV: {
+      FASTT_LOG_DEBUG("Got RDY_TO_RCV seq=%u wnd=%u\n", hdr->seq.v, hdr->wnd);
       scheduler.process_seq(hdr->seq);
       if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
                                                     stats.retransmissions)) {
@@ -201,6 +204,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_CLR_TO_SD: {
+      FASTT_LOG_DEBUG("Got CLR_TO_SD seq=%u ack=%u wnd=%u\n", hdr->seq.v, hdr->ack.v, hdr->wnd);
       scheduler.process_seq(hdr->seq);
       if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
                                                     stats.retransmissions)) {
@@ -215,6 +219,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_WND_RET: {
+      FASTT_LOG_DEBUG("Got WND_RET seq=%u wnd=%u\n", hdr->seq.v, hdr->wnd);
       scheduler.process_seq(hdr->seq);
       if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
                                                     stats.retransmissions)) {
@@ -226,6 +231,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_DONE: {
+      FASTT_LOG_DEBUG("Got DONE seq=%u ack=%u\n", hdr->seq.v, hdr->ack.v);
       scheduler.process_seq(hdr->seq);
       if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
                                                     stats.retransmissions)) {
@@ -266,7 +272,7 @@ public:
         });
     auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     assert(hdr->type == protocol::FT_RDY_TO_RCV);
-    FASTT_LOG_DEBUG("Sent init header to peer %u %u\n", target.ip, target.port);
+    FASTT_LOG_DEBUG("Sent RDY_TO_RCV seq=%u wnd=%u flow=%s\n", hdr->seq.v, hdr->wnd, get_flow_tuple().print().c_str());
     pkt_if->consume_pkt(msg, cfg);
   }
 
@@ -277,7 +283,8 @@ public:
         msg, [&, budget = trx.prepare_wnd_return()](message *msg, seq_t seq) {
           builder.prepare_init_ack_header(msg, seq, seq, budget);
         });
-    FASTT_LOG_DEBUG("Sent ack for init");
+    auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
+    FASTT_LOG_DEBUG("Sent CLR_TO_SD seq=%u ack=%u wnd=%u flow=%s\n", hdr->seq.v, hdr->ack.v, hdr->wnd, get_flow_tuple().print().c_str());
     pkt_if->consume_pkt(msg, cfg);
   }
 
@@ -328,17 +335,21 @@ public:
           auto retval = send_single(&hdr.iov[i], i == 0, i == hdr.iov_len - 1);
           if(retval <= 0){
               hdr.flags = retval;
+              FASTT_LOG_DEBUG("send failed iov=%u retval=%zd\n", i, retval);
               return retval;
           }
           sent += retval;
       }
+      FASTT_LOG_DEBUG("send iov_len=%u total=%zd\n", hdr.iov_len, sent);
       return sent;
   }
 
   ssize_t recv(msg_hdr &hdr) {
     if (connection_state::ESTABLISHED != cstate)
       return 0;
-    return trx.read(hdr);
+    auto ret = trx.read(hdr);
+    FASTT_LOG_DEBUG("recv ret=%zd\n", ret);
+    return ret;
   }
 
   transport_statistics get_stats() const {

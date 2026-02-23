@@ -8,6 +8,7 @@
 #include <ranges>
 #include <utility>
 
+#include "debug.h"
 #include "dev.h"
 #include "message.h"
 #include "packet_if.h"
@@ -102,13 +103,14 @@ public:
         flush_timeout(get_ticks_us()) {}
 
   void handle_pkt(message *pkt, flow_tuple &ft) {
-    FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n", ft.sip,
-                    rte_be_to_cpu_16(ft.sport));
+      
+    FASTT_LOG_DEBUG("Got pkt via UDP ports: %s \n", ft.print().c_str());
     auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
     if (unlikely(header->type == protocol::FT_RDY_TO_RCV))
       register_request(pkt, ft);
     else {
       protocol::extract_ports(ft, pkt);
+      FASTT_LOG_DEBUG("Got packet via %s\n", ft.print().c_str());
       auto it = flows.find(ft);
       if (likely(it != flows.end()))
         it->second->process_pkt(pkt);
@@ -156,6 +158,8 @@ public:
     // find transport level queue pair
     dev.nic_arch->find_port_pair(cfg.ip, sip, cfg.transport_ports.dport,
                                  cfg.transport_ports.sport, target);
+    FASTT_LOG_DEBUG("Found pair for incoming: %u -> %u\n", ntohs(cfg.transport_ports.dport),
+                    ntohs(cfg.transport_ports.sport));
     auto [it, inserted] = flows.emplace(
         ft, std::make_unique<connection>(allocator.get(), &pkt_if, cfg, sport,
                                          dport, this, is_client));
@@ -239,7 +243,10 @@ public:
     cfg.ip = tuple.sip;
     cfg.transport_ports.dport = tuple.sport;
     cfg.transport_ports.sport = tuple.dport;
+    FASTT_LOG_DEBUG("Found pair: %u -> %u\n", ntohs(cfg.transport_ports.sport),
+                    ntohs(cfg.transport_ports.dport));
     protocol::extract_ports(tuple, pkt);
+    FASTT_LOG_DEBUG("New Connection %s \n", tuple.print().c_str());
     // swap ports since we need the rx port as src
     auto [it, inserted] = flows.emplace(
         tuple,
