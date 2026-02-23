@@ -251,6 +251,7 @@ public:
       active.push_front(*it->second);
       ++open_connections;
     } else if (it->second->down()) {
+        active.push_front(*it->second);
       // if the connection has been closed, replace it
       it->second.reset();
       it->second = std::make_unique<connection>(allocator.get(), &pkt_if, cfg,
