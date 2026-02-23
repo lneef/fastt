@@ -240,6 +240,7 @@ public:
         return false;
       }
       ttx.acknowledge(hdr->ack, hdr->ts, hdr->sack);
+      trx.insert(hdr->seq, msg);
       // for now we assume all rpc/exchange has completed
       // ack for FT_DONE will be sent from the event loop
       assert(ttx.all_acked());
