@@ -285,9 +285,9 @@ public:
   ~connection_manager() {}
 
 private:
+  std::shared_ptr<message_allocator> allocator;
   std::deque<std::pair<message *, flow_tuple>> connection_requests;
   flow_table<flow_tuple, std::unique_ptr<connection>> flows;
-  std::shared_ptr<message_allocator> allocator;
   qpair dev;
   packet_scheduler scheduler;
   packet_if pkt_if;
