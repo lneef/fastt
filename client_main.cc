@@ -127,6 +127,7 @@ static int lcore_fn(void *arg) {
       rcvd = kv.recv(&resp, sizeof(resp));
       if(!rcvd)
           continue;
+      assert(resp.payload.key == kv[resp.id].key);
       kv.complete(resp.id);
       ++c;
   }
