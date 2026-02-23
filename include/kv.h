@@ -3,8 +3,8 @@
 #include "client.h"
 #include "connection.h"
 #include "message.h"
-#include "slot.h"
 #include "util.h"
+#include <bits/types/struct_iovec.h>
 #include <cstddef>
 #include <cstdint>
 #include <generic/rte_cycles.h>
@@ -13,7 +13,6 @@
 #include <rte_timer.h>
 
 #include "kv_protocol.h"
-#include <random>
 #include <vector>
 
 inline void create_get_request(message *msg, int64_t key, uint64_t id) {
@@ -60,17 +59,22 @@ class kv_proxy {
 public:
   kv_proxy(client_iface *ifc) : ifc(ifc), slots(128) {}
 
-  int connect(const con_config &con_cfg, uint16_t n, rte_ether_addr &dmac) {
+  int connect(const con_config &con_cfg, uint16_t n, uint16_t rtid, rte_ether_addr &dmac) {
     con_config cfg = con_cfg;
     for (uint16_t i = 0; i < n; ++i) {
-      con = ifc->open_connection(cfg, dmac);
+      con = ifc->open_connection(cfg, rtid, dmac);
       if (!con)
         return -1;
       while (!ifc->probe_connection_setup_done(con))
         ;
-      con->acknowledge_all();
+      con->acknowledge_all(rte_get_timer_cycles());
+      ifc->flush();
     }
     return 0;
+  }
+
+  kv_slot& operator[](size_t i){
+      return slots.slots[i];
   }
 
   kv_slot *start() {
@@ -87,11 +91,24 @@ public:
   }
 
   ssize_t recv(void* buf, size_t sz){
-      return con->recv(buf, sz);
+      iovec iov;
+      msg_hdr m;
+      m.iov = &iov;
+      m.iov_len = 1;
+      m.iov->iov_base = buf;
+      m.iov->iov_len = sz;
+      m.remaining = 0;
+      return con->recv(m);
   }
 
   ssize_t send(void* buf, size_t sz){
-      return con->send(buf, sz, {true, true});
+      iovec iov;
+      msg_hdr m;
+      m.iov = &iov;
+      m.iov_len = 1;
+      m.iov->iov_base = buf;
+      m.iov->iov_len = sz;
+      return con->send(m);
   }
 
   void lookup(int64_t key, message *msg, uint64_t id) {
@@ -102,7 +119,7 @@ public:
   }
 
   void acknowledge_all() {
-    con->acknowledge_all();  
+    con->acknowledge_all(rte_get_timer_cycles());  
   }
 
   template <typename F> void handle_active(F &&fun) { ifc->manager.poll(fun); }

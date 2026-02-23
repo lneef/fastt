@@ -98,7 +98,7 @@ static int lcore_fn(void *arg) {
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
   kv_proxy kv(&cif);
-  kv.connect(adapter->cfg, 1, adapter->dmac);
+  kv.connect(adapter->cfg, 1, rte_lcore_id(), adapter->dmac);
   uint64_t t = 0;
   uint64_t c = 0;
 
@@ -109,13 +109,16 @@ static int lcore_fn(void *arg) {
   while(t < dur){
       cif.poll();
       while((rcvd = kv.recv(&resp, sizeof(resp)) > 0)){
+          assert(resp.payload.key == kv[resp.id].key);
           kv.complete(resp.id);
           ++c;
       }
       auto *tx = kv.start();
       if(!tx)
           continue;
-      kv::create_kv_request(reinterpret_cast<uint8_t*>(&req), tx->id, dist(rng));
+      int64_t key = dist(rng);
+      kv::create_kv_request(reinterpret_cast<uint8_t*>(&req), tx->id, key);
+      tx->key = key;
       kv.send(&req, sizeof(req));
       ++t;
   }
@@ -168,7 +171,7 @@ int run(netconfig &conf) {
     adapter.allocator[i] = std::move(allocators[i]);
     adapter.cifs[i] = std::make_unique<client_iface>(
         port, txq, rxq, adapter.allocator[i],
-        con_config{conf.sip, conf.sports[i]}, lcore_id);
+        con_config{conf.sip, conf.sports[i]});
     ++i;
   }
 

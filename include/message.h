@@ -1,6 +1,7 @@
 #pragma once
 #include "debug.h"
 
+#include <bits/types/struct_iovec.h>
 #include <cstddef>
 #include <cstdint>
 #include <rte_ether.h>
@@ -9,8 +10,15 @@
 #include <rte_memory.h>
 #include <rte_mempool.h>
 
-struct msg_meta {
-  bool som, eom;
+struct msg_hdr {
+  struct iovec *iov;
+  uint16_t iov_len;
+  union {
+    struct {
+      size_t remaining;
+    };
+  };
+  int flags;
 };
 
 struct message : public rte_mbuf {
@@ -21,7 +29,7 @@ struct message : public rte_mbuf {
   void inc_refcnt() {
     auto *buf = static_cast<rte_mbuf *>(this);
     while (buf) {
-      rte_pktmbuf_refcnt_update(this, 1);
+      rte_pktmbuf_refcnt_update(buf, 1);
       buf = buf->next;
     }
   }
@@ -47,6 +55,8 @@ struct message : public rte_mbuf {
   uint16_t len() { return data_len; }
 
   void set_size(uint16_t len) { pkt_len = len; }
+
+  uint16_t ref_cnt() const{ return this->refcnt; }
 
   template <typename T> T *move_headroom() {
     rte_pktmbuf_prepend(this, sizeof(T));
@@ -86,13 +96,9 @@ public:
     return prepare(mbuf, data_size);
   }
 
-  size_t get_remaining_space() const{
-      return rte_mempool_avail_count(pool);
-  }
+  size_t get_remaining_space() const { return rte_mempool_avail_count(pool); }
 
-  rte_mempool* get(){
-      return pool;
-  }
+  rte_mempool *get() { return pool; }
 
   static void deallocate(message *msg) { rte_pktmbuf_free(msg); }
 

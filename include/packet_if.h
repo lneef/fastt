@@ -5,36 +5,30 @@
 #include "packet_scheduler.h"
 #include "util.h"
 #include <cstdint>
+#include <netinet/in.h>
 #include <rte_byteorder.h>
 #include <rte_ether.h>
+#include <rte_gro.h>
 #include <rte_ip.h>
 #include <rte_ip4.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 #include <rte_memory.h>
 #include <rte_udp.h>
-#include <rte_gro.h>
 
 class packet_if {
   static constexpr uint16_t kdefaultTTL = 64;
-  static constexpr uint16_t kdefaultARPTableSize = 1024;
-  static constexpr uint16_t kMaxFlowNum = 32;
-  static constexpr uint16_t kMaxPktPerFlow = 128;
 
 public:
   packet_if(packet_scheduler *scheduler, uint32_t sip, uint16_t port)
-      : arp_table(kdefaultARPTableSize), scheduler(scheduler), sip(sip) {
+      : arp_table(), scheduler(scheduler), sip(sip) {
     rte_eth_macaddr_get(port, &smac);
-    gro_param.gro_types = RTE_GRO_UDP_IPV4;
-    gro_param.socket_id = SOCKET_ID_ANY;
-    gro_param.max_flow_num = kMaxFlowNum;
-    gro_param.max_item_per_flow = kMaxPktPerFlow;
   }
 
   rte_udp_hdr *udp_header(message *msg, uint16_t sport, uint16_t dport) {
     auto *udp = msg->move_headroom<rte_udp_hdr>();
-    udp->src_port = rte_cpu_to_be_16(sport);
-    udp->dst_port = rte_cpu_to_be_16(dport);
+    udp->src_port = sport;
+    udp->dst_port = dport;
     udp->dgram_cksum = 0;
     udp->dgram_len = rte_cpu_to_be_16(msg->pkt_len);
     msg->l4_len = sizeof(rte_udp_hdr);
@@ -46,10 +40,10 @@ public:
     auto *ipv4 = msg->move_headroom<rte_ipv4_hdr>();
     ipv4->src_addr = source;
     ipv4->dst_addr = target;
-    ipv4->fragment_offset = rte_cpu_to_be_16(RTE_IPV4_HDR_DF_FLAG);
+    ipv4->fragment_offset = htons(RTE_IPV4_HDR_DF_FLAG);
     ipv4->next_proto_id = IPPROTO_UDP;
     ipv4->time_to_live = kdefaultTTL;
-    ipv4->total_length = rte_cpu_to_be_16(msg->pkt_len);
+    ipv4->total_length = htons(msg->pkt_len);
     ipv4->hdr_checksum = 0;
     ipv4->version_ihl = RTE_IPV4_VHL_DEF;
     ipv4->type_of_service = 0;
@@ -71,15 +65,15 @@ public:
     msg->l2_len = sizeof(rte_ether_hdr);
   }
 
-  void consume_pkt(message *msg, uint16_t sport,
-                   const con_config &tcon_config) {
-    auto *udp = udp_header(msg, sport, tcon_config.port);
-    ip_header(msg, udp, sip, tcon_config.ip);
-    auto *addr = arp_table.lookup(tcon_config.ip);
-    assert(addr);
-    eth_header(msg, smac, *addr);
+  void consume_pkt(message *pkt, transport_config &cfg) {
+    auto *udp =
+        udp_header(pkt, cfg.transport_ports.sport, cfg.transport_ports.dport);
+    ip_header(pkt, udp, sip, cfg.ip);
+    auto it = arp_table.find(cfg.ip);
+    assert(it != arp_table.end());
+    eth_header(pkt, smac, it->second);
     FASTT_DUMP_PKT(msg, msg->len());
-    scheduler->add_pkt(static_cast<rte_mbuf *>(msg));
+    scheduler->add_pkt(static_cast<rte_mbuf *>(pkt));
   }
 
   void consume_for_retransmission(message *msg) { scheduler->add_pkt(msg); }
@@ -130,12 +124,12 @@ public:
       return nullptr;
     }
 
-    if (!check_ip_cksum(mbuf)){
+    if (!check_ip_cksum(mbuf)) {
       broken_packet(mbuf);
       return nullptr;
     }
 
-    if (!check_udp_cksum(mbuf)){
+    if (!check_udp_cksum(mbuf)) {
       broken_packet(mbuf);
       return nullptr;
     }
@@ -143,15 +137,14 @@ public:
     return static_cast<message *>(mbuf);
   }
 
-  void strip_header(message* msg, flow_tuple& ft){
-      strip_ether_ip(msg, ft);
-      strip_udp(msg, ft);
+  void strip_header(message *msg, flow_tuple &ft) {
+    strip_ether_ip(msg, ft);
+    strip_udp(msg, ft);
   }
 
 private:
-  fixed_size_hash_table<uint32_t, rte_ether_addr> arp_table;
+  flow_table<uint32_t, rte_ether_addr> arp_table;
   rte_ether_addr smac;
   packet_scheduler *scheduler;
   uint32_t sip;
-  rte_gro_param gro_param;
 };
