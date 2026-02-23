@@ -73,7 +73,7 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
     pending_from_retry = false;
   }
 
-  ack_scheduler() : last_acked(), last_sack(), pending_from_retry(false) {}
+  ack_scheduler() : last_acked(~0u), last_sack(), pending_from_retry(false) {}
 };
 
 enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING, DISCONNECTED };
@@ -284,6 +284,8 @@ public:
         msg, [&, budget = trx.prepare_wnd_return()](message *msg, seq_t seq) {
           builder.prepare_init_ack_header(msg, seq, seq, budget);
         });
+    // TODO: move this up
+    ttx.rearm(rte_get_timer_cycles());
     auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     FASTT_LOG_DEBUG("Sent CLR_TO_SD seq=%u ack=%u wnd=%u flow=%s\n", hdr->seq.v, hdr->ack.v, hdr->wnd, get_flow_tuple().print().c_str());
     pkt_if->consume_pkt(msg, cfg);
