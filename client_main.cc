@@ -131,6 +131,7 @@ static int lcore_fn(void *arg) {
       kv.complete(resp.id);
       ++c;
   }
+  kv.con->close();
   kv.acknowledge_all();
   kv.flush();
   auto stats = kv.con->get_transport_stats();

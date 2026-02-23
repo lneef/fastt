@@ -75,11 +75,6 @@ public:
 
   void close() { transport_impl->close_connection(); }
 
-  ~connection() {
-    if (!down())
-      close();
-  }
-
 private:
   friend class connection_manager;
   message_allocator *allocator;
