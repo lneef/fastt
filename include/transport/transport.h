@@ -145,6 +145,7 @@ public:
         return false;
       msg = allocator->alloc_message(sizeof(protocol::ft_header));
       scheduler.ack_callback(ack);
+      FASTT_LOG_DEBUG("Sending ACK ack=%u\n", ack.v);
     }
     if(cstate == connection_state::DISCONNECTING)
         cstate = connection_state::DISCONNECTED;
