@@ -1,7 +1,6 @@
 #pragma once
 
 #include "connection.h"
-#include "debug.h"
 #include "message.h"
 #include "util.h"
 #include <cstdint>
@@ -31,8 +30,11 @@ public:
       manager.poll_client();
   }
 
-  message *recv_message(connection *con);
   connection *open_connection(const con_config &target, uint16_t rtid, rte_ether_addr &dmac);
+
+  void close(connection* con){
+      manager.close(con);
+  }
 
   void flush() { manager.flush(); }
 

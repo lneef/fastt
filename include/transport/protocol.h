@@ -127,6 +127,7 @@ struct builder {
       ft->seq = seq;
       ft->ack = ack;
       ft->ackframe = true;
+      ft->type = protocol::pkt_type::FT_DONE;
   }
 };
 

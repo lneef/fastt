@@ -144,7 +144,6 @@ static void run(lcore_function_t *f, void *args) {
   rte_eal_mp_remote_launch(f, args, CALL_MAIN);
   rte_eal_mp_wait_lcore();
 }
-
 int run(netconfig &conf) {
   if (fastt::init())
     return -1;

@@ -208,9 +208,8 @@ public:
         return false;
       }
       ttx.acknowledge(hdr->ack, ts, hdr->sack);
-      ttx.update_budget(hdr->wnd);
-
       assert(hdr->wnd > 0);
+      ttx.update_budget(hdr->wnd);
       trx.insert(hdr->seq, msg);
       cstate = connection_state::ESTABLISHED;
       break;
@@ -233,7 +232,7 @@ public:
         msg->free();
         return false;
       }
-      ttx.acknowledge(hdr->seq, hdr->ts, hdr->sack);
+      ttx.acknowledge(hdr->ack, hdr->ts, hdr->sack);
       // for now we assume all rpc/exchange has completed
       // ack for FT_DONE will be sent from the event loop
       assert(ttx.all_acked());
@@ -346,6 +345,14 @@ public:
     auto &rt_stats = ttx.get_stats();
     return {rt_stats.retransmitted, rt_stats.acked, stats.sent,
             stats.retransmissions, rt_stats.rtt};
+  }
+
+  flow_tuple get_flow_tuple() const{
+      flow_tuple ft;
+      ft.dport = builder.sport;
+      ft.sport = builder.dport;
+      ft.sip = cfg.ip;
+      return ft;
   }
 
 private:

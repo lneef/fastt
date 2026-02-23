@@ -42,9 +42,7 @@ public:
 
   void check_timeout(uint64_t now) { transport_impl->check_timeout(now); }
 
-  size_t send(msg_hdr &hdr) {
-    return transport_impl->send(hdr);
-  }
+  size_t send(msg_hdr &hdr) { return transport_impl->send(hdr); }
 
   ssize_t recv(msg_hdr &hdr) { return transport_impl->recv(hdr); }
 
@@ -71,6 +69,15 @@ public:
   bool can_recv() { return transport_impl->can_recv(); }
 
   connection_manager *get_manager() { return manager; }
+
+  flow_tuple get_flow_tuple() const { return transport_impl->get_flow_tuple(); }
+
+  void close() { transport_impl->close_connection(); }
+
+  ~connection() {
+    if (!down())
+      close();
+  }
 
 private:
   friend class connection_manager;
@@ -115,14 +122,20 @@ public:
   void check_timeouts() {
     auto now = rte_get_timer_cycles();
     for (auto &con : active) {
+      con.transport_ctrl();
       con.check_timeout(now);
     }
   }
 
-  void acknowledge_all() {
+  void acknowledge_all_and_reap() {
     auto now = rte_get_timer_cycles();
-    for (auto &con : active)
+    for (auto it = active.begin(), end = active.end(); it != end;) {
+      auto &con = *it;
+      ++it;
       con.acknowledge_all(now);
+      if (con.down())
+        con.link.unlink();
+    }
   }
 
   void add_mac(uint32_t ip, rte_ether_addr &mac) {
@@ -130,7 +143,7 @@ public:
   }
 
   connection *open_connection(uint16_t sport, uint16_t dport,
-                              const uint32_t sip, const uint32_t dip, 
+                              const uint32_t sip, const uint32_t dip,
                               const uint16_t target) {
     transport_config cfg;
     cfg.ip = dip;
@@ -143,10 +156,9 @@ public:
     // find transport level queue pair
     dev.nic_arch->find_port_pair(cfg.ip, sip, cfg.transport_ports.dport,
                                  cfg.transport_ports.sport, target);
-    auto [it, inserted] =
-        flows.emplace(ft, std::make_unique<connection>(
-                              allocator.get(), &pkt_if, cfg,
-                              sport, dport, this, is_client));
+    auto [it, inserted] = flows.emplace(
+        ft, std::make_unique<connection>(allocator.get(), &pkt_if, cfg, sport,
+                                         dport, this, is_client));
     if (!inserted)
       return nullptr;
     it->second->open_connection();
@@ -158,22 +170,17 @@ public:
 
   template <typename F> void poll(F &&handler) {
     fetch_from_qpair();
-    intrusive_list_t<connection> blocked;
-    if (!is_client)
-      accept_connection();
-    acknowledge_all();
+    accept_connection();
+    acknowledge_all_and_reap();
     flush();
-    for (auto &con : active) {
+    for (auto &con : active)
       handler(con);
-      con.transport_ctrl();
-    }
     check_timeouts();
   }
 
   void poll_client() {
     fetch_from_qpair();
-    for (auto &con : active)
-      con.acknowledge_all(rte_get_timer_cycles());
+    acknowledge_all_and_reap();
     check_timeouts();
     flush();
   }
@@ -241,12 +248,13 @@ public:
     if (inserted) {
       active.push_front(*it->second);
       ++open_connections;
-    }else if(it->second->down()){
-        // if the connection has been closed, replace it
-        it->second.reset();
-        it->second = std::make_unique<connection>(allocator.get(), &pkt_if, cfg, tuple.dport,
-                                     tuple.sport, this, is_client);
-        inserted = true;
+    } else if (it->second->down()) {
+      // if the connection has been closed, replace it
+      it->second.reset();
+      it->second = std::make_unique<connection>(allocator.get(), &pkt_if, cfg,
+                                                tuple.dport, tuple.sport, this,
+                                                is_client);
+      inserted = true;
     }
     return {it->second.get(), inserted};
   }
@@ -261,6 +269,12 @@ public:
     sts.total_rx_polled = dev.total_rx;
     sts.ts = std::move(stats);
     return sts;
+  }
+
+  void close(connection *con) {
+    auto ft = con->get_flow_tuple();
+    ft.dip = pkt_if.get_sip();
+    flows.erase(ft);
   }
 
   void flush() { scheduler.flush(); }
