@@ -105,7 +105,7 @@ static int lcore_fn(void *arg) {
   kv::kv_packet<kv::kv_request> req;
   kv::kv_packet<kv::kv_completion> resp;
   auto now = rte_get_timer_cycles();
-  size_t rcvd = 0;
+  ssize_t rcvd = 0;
   while(t < dur){
       cif.poll();
       while((rcvd = kv.recv(&resp, sizeof(resp)) > 0)){
@@ -125,11 +125,13 @@ static int lcore_fn(void *arg) {
   while(c < dur){
       cif.poll();
       rcvd = kv.recv(&resp, sizeof(resp));
-      if(!rcvd)
+      if(rcvd <= 0)
           continue;
+      assert(resp.payload.key == kv[resp.id].key);
       kv.complete(resp.id);
       ++c;
   }
+  kv.con->close();
   kv.acknowledge_all();
   kv.flush();
   auto stats = kv.con->get_transport_stats();
@@ -145,7 +147,7 @@ static void run(lcore_function_t *f, void *args) {
   rte_eal_mp_wait_lcore();
 }
 
-int run(netconfig &conf) {
+[[gnu::noinline]] int run(netconfig &conf) {
   if (fastt::init())
     return -1;
 

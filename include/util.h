@@ -4,7 +4,10 @@
 #include <boost/intrusive/list_hook.hpp>
 #include <boost/intrusive/options.hpp>
 #include <cstddef>
+#include <arpa/inet.h>
 #include <cstdint>
+#include <format>
+#include <string>
 #include <generic/rte_cycles.h>
 #include <rte_ether.h>
 #include <rte_mbuf.h>
@@ -117,6 +120,14 @@ get_bit_indices_64(unsigned i) {
 struct flow_tuple {
   uint32_t sip, dip;
   uint16_t sport, dport;
+
+  std::string print() const {
+    return std::format("{}.{}.{}.{}:{} -> {}.{}.{}.{}:{}",
+           sip & 0xff, (sip >> 8) & 0xff, (sip >> 16) & 0xff, sip >> 24,
+           ntohs(sport),
+           dip & 0xff, (dip >> 8) & 0xff, (dip >> 16) & 0xff, dip >> 24,
+           ntohs(dport));
+  }
 
   friend bool operator==(const flow_tuple &lhs, const flow_tuple &rhs);
 };

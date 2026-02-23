@@ -89,7 +89,7 @@ public:
     msg->inc_refcnt();
     *msg->get_ts() = 0;
     unacked.emplace_back(msg, seq++, false);
-    FASTT_LOG_DEBUG("Enqueue pkt with %lu new budget %u\n", seq - 1, budget);
+    FASTT_LOG_DEBUG("Enqueue pkt with %u new budget %u\n", (seq - 1).v, budget);
     return true;
   }
 
@@ -100,7 +100,7 @@ public:
         continue;
       if (entry.sacked)
         continue;
-      FASTT_LOG_DEBUG("Retransmitting packet: %lu\n", entry.seq);
+      FASTT_LOG_DEBUG("Retransmitting packet: %u\n", entry.seq.v);
       prepare_retransmit(&entry);
       cb(msg);
     }
@@ -150,7 +150,7 @@ public:
       ++it;
     }
     timeout = rte_get_timer_cycles() + rto;
-    FASTT_LOG_DEBUG("Largest set seq num %lu\n", largest_acked);
+    FASTT_LOG_DEBUG("Largest set seq num %u\n", largest_acked->seq.v);
     if (largest_acked) 
       update_srtt(largest_acked, ts);
   }
@@ -185,7 +185,7 @@ private:
   uint32_t budget = 0;
   seq_t seq{0};
   seq_t least_unacked_pkt{0};
-  uint64_t rtt;
+  uint64_t rtt = 0;
   uint64_t rto = get_ticks_ms() * 5;
   uint64_t timeout;
 };

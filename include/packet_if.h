@@ -142,6 +142,10 @@ public:
     strip_udp(msg, ft);
   }
 
+  uint32_t get_sip() const{
+      return sip;
+  }
+
 private:
   flow_table<uint32_t, rte_ether_addr> arp_table;
   rte_ether_addr smac;

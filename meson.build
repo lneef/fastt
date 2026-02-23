@@ -22,3 +22,25 @@ fastt_lib = static_library('fastt', sources, include_directories: include_direct
 executable('client', 'client_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep], link_with: fastt_lib, link_args: ['-lcap'])
 executable('server', 'server_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep, tlx_dep], link_with: fastt_lib, link_args: ['-lcap'])
 executable('uring', 'uring_peer.cc', include_directories: include_directories('include'), dependencies: [tlx_dep], link_args: ['-luring'])
+
+# testing
+gtest_dep = dependency('gtest', required: true)
+gtest_main_dep = dependency('gtest_main', required: true)
+test_inc = include_directories('include', 'tests')
+
+transport_output_test = executable('transport_output_test',
+  'tests/transport_output_test.cc',
+  include_directories: test_inc,
+  dependencies: [dpdk_dep, gtest_dep, gtest_main_dep],
+  link_with: fastt_lib,
+  link_args: ['-lcap'])
+
+transport_input_test = executable('transport_input_test',
+  'tests/transport_input_test.cc',
+  include_directories: test_inc,
+  dependencies: [dpdk_dep, gtest_dep, gtest_main_dep],
+  link_with: fastt_lib,
+  link_args: ['-lcap'])
+
+test('transport_output_test', transport_output_test)
+test('transport_input_test', transport_input_test)
