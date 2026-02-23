@@ -125,7 +125,7 @@ static int lcore_fn(void *arg) {
   while(c < dur){
       cif.poll();
       rcvd = kv.recv(&resp, sizeof(resp));
-      if(!rcvd)
+      if(rcvd <= 0)
           continue;
       assert(resp.payload.key == kv[resp.id].key);
       kv.complete(resp.id);
