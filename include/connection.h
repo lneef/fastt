@@ -3,16 +3,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <generic/rte_cycles.h>
 #include <memory>
+#include <netinet/in.h>
 #include <ranges>
 #include <utility>
 
 #include "dev.h"
 #include "message.h"
 #include "packet_if.h"
-#include "protocol.h"
 #include "task.h"
+#include "transport/protocol.h"
 #include "transport/transport.h"
 #include "util.h"
 
@@ -30,27 +30,23 @@ class connection {
 
 public:
   connection(message_allocator *allocator, packet_if *pkt_if,
-             const con_config &target, uint16_t sport,
+             const transport_config &cfg, uint16_t sport, uint16_t dport,
              connection_manager *manager, bool is_client)
       : allocator(allocator), transport_impl(std::make_unique<transport>(
-                                  allocator, pkt_if, sport, target)),
-        manager(manager), is_client(is_client) {
-  }
+                                  allocator, pkt_if, cfg, sport, dport)),
+        manager(manager), is_client(is_client) {}
   void process_pkt(rte_mbuf *pkt);
   void acknowledge_all(uint64_t now);
   void accept();
-  uint16_t receive_message(message **msgs, uint16_t cnt);
   void open_connection();
-
-  unsigned capacity() { return transport_impl->capacity(); }
 
   void check_timeout(uint64_t now) { transport_impl->check_timeout(now); }
 
-  size_t send(msg_hdr& hdr) {
-    return transport_impl->send(hdr.buf, hdr.size, hdr.som, hdr.eom);
+  size_t send(msg_hdr &hdr) {
+    return transport_impl->send(hdr);
   }
 
-  ssize_t recv(msg_hdr& hdr) { return transport_impl->recv(hdr); }
+  ssize_t recv(msg_hdr &hdr) { return transport_impl->recv(hdr); }
 
   concurrency::send_awaitable send(concurrency::scheduler &schdlr, message *msg,
                                    bool first, bool last);
@@ -62,15 +58,15 @@ public:
     return transport_impl->get_stats();
   }
 
-  void transport_ctrl(){
-      transport_impl->check_ctrl();
-  }
+  void transport_ctrl() { transport_impl->check_ctrl(); }
 
   void make_progress();
 
-  bool up() const { return transport_impl->active(); }
+  bool up() const { return transport_impl->up(); }
 
-  bool can_send() { return transport_impl->capacity() > 0; }
+  bool down() const { return transport_impl->disconnected(); }
+
+  bool can_send() { return transport_impl->can_send(); }
 
   bool can_recv() { return transport_impl->can_recv(); }
 
@@ -82,8 +78,8 @@ private:
   std::unique_ptr<transport> transport_impl;
   connection_manager *manager;
   bool is_client;
-public:
 
+public:
   std::optional<concurrency::coro_handle> coro;
   list_hook link;
 };
@@ -96,8 +92,7 @@ public:
                      uint32_t sip, std::shared_ptr<message_allocator> allocator)
       : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
         pkt_if(&scheduler, sip, port), active(), is_client(is_client),
-        flush_timeout(get_ticks_us()) {
-  }
+        flush_timeout(get_ticks_us()) {}
 
   void handle_pkt(message *pkt, flow_tuple &ft) {
     FASTT_LOG_DEBUG("Got new pkt from: %d, %d\n", ft.sip,
@@ -106,6 +101,7 @@ public:
     if (unlikely(header->type == protocol::FT_RDY_TO_RCV))
       register_request(pkt, ft);
     else {
+      protocol::extract_ports(ft, pkt);
       auto it = flows.find(ft);
       if (likely(it != flows.end()))
         it->second->process_pkt(pkt);
@@ -133,15 +129,24 @@ public:
     pkt_if.add_mapping(ip, mac);
   }
 
-  connection *open_connection(const con_config &source,
-                              const con_config &target) {
-    flow_tuple ft(target.ip, source.ip, rte_cpu_to_be_16(target.port),
-                  rte_cpu_to_be_16(source.port));
+  connection *open_connection(uint16_t sport, uint16_t dport,
+                              const uint32_t sip, const uint32_t dip, 
+                              const uint16_t target) {
+    transport_config cfg;
+    cfg.ip = dip;
+    sport = htons(sport);
+    dport = htons(dport);
+    flow_tuple ft(cfg.ip, sip, dport, sport);
     FASTT_LOG_DEBUG("Opened new connection to %d %d\n", ft.sip,
-                    rte_be_to_cpu_16(ft.sport));
-    auto [it, inserted] = flows.emplace(
-        ft, std::make_unique<connection>(allocator.get(), &pkt_if, target,
-                                         source.port, this, is_client));
+                    ntohs(ft.sport));
+
+    // find transport level queue pair
+    dev.nic_arch->find_port_pair(cfg.ip, sip, cfg.transport_ports.dport,
+                                 cfg.transport_ports.sport, target);
+    auto [it, inserted] =
+        flows.emplace(ft, std::make_unique<connection>(
+                              allocator.get(), &pkt_if, cfg,
+                              sport, dport, this, is_client));
     if (!inserted)
       return nullptr;
     it->second->open_connection();
@@ -158,9 +163,9 @@ public:
       accept_connection();
     acknowledge_all();
     flush();
-    for(auto& con: active){
-        handler(con);
-        con.transport_ctrl();
+    for (auto &con : active) {
+      handler(con);
+      con.transport_ctrl();
     }
     check_timeouts();
   }
@@ -212,7 +217,7 @@ public:
       return nullptr;
     auto [pkt, ft] = connection_requests.front();
     connection_requests.pop_front();
-    auto [con, inserted] = add_connection(ft, rte_be_to_cpu_16(ft.dport));
+    auto [con, inserted] = add_connection(ft, pkt);
     con->process_pkt(pkt);
     if (inserted) {
       con->accept();
@@ -221,16 +226,27 @@ public:
     return con;
   }
 
-  std::pair<connection *, bool> add_connection(const flow_tuple &tuple,
-                                               uint16_t port) {
+  std::pair<connection *, bool> add_connection(flow_tuple &tuple,
+                                               message *pkt) {
+    transport_config cfg;
+    cfg.ip = tuple.sip;
+    cfg.transport_ports.dport = tuple.sport;
+    cfg.transport_ports.sport = tuple.dport;
+    protocol::extract_ports(tuple, pkt);
+    // swap ports since we need the rx port as src
     auto [it, inserted] = flows.emplace(
-        tuple, std::make_unique<connection>(
-                   allocator.get(), &pkt_if,
-                   con_config{tuple.sip, rte_be_to_cpu_16(tuple.sport)}, port,
-                   this, is_client));
+        tuple,
+        std::make_unique<connection>(allocator.get(), &pkt_if, cfg, tuple.dport,
+                                     tuple.sport, this, is_client));
     if (inserted) {
       active.push_front(*it->second);
       ++open_connections;
+    }else if(it->second->down()){
+        // if the connection has been closed, replace it
+        it->second.reset();
+        it->second = std::make_unique<connection>(allocator.get(), &pkt_if, cfg, tuple.dport,
+                                     tuple.sport, this, is_client);
+        inserted = true;
     }
     return {it->second.get(), inserted};
   }
@@ -252,7 +268,6 @@ public:
   ~connection_manager() {}
 
 private:
- 
   std::deque<std::pair<message *, flow_tuple>> connection_requests;
   flow_table<flow_tuple, std::unique_ptr<connection>> flows;
   std::shared_ptr<message_allocator> allocator;
@@ -264,5 +279,4 @@ private:
   uint32_t open_connections = 0;
   uint64_t flush_timeout;
   packet_vector<kdefaultBurstSize> vec;
-
 };

@@ -54,23 +54,6 @@ inline uint32_t toeplitz_hash(uint32_t src_ip,
 }
 
 struct ena : public nic{
-  unsigned best = 0;
-  unsigned best_idx = 0;
-  std::vector<uint64_t> ids;
-  std::vector<uint64_t> values;
-
-  void update(int port) override{
-    best = UINT64_MAX;
-    best_idx = 0;
-    rte_eth_xstats_get_by_id(port, ids.data(), values.data(), ids.size());
-    for (unsigned i = 0; i < ids.size(); ++i) {
-      if (values[i] < best) {
-        best = values[i];
-        best_idx = i;
-      }
-    }
-  }
-
   uint64_t calc_rss_hash(uint32_t sip, uint32_t dip, uint16_t sport, uint16_t dport) override{
       return toeplitz_hash(sip, dip, sport, dport);
   }
@@ -80,22 +63,15 @@ struct ena : public nic{
           for(uint16_t d = 0; d < UINT16_MAX; ++d){
               auto hash = calc_rss_hash(sip, dip, htons(s), htons(d)); 
               if(hash % rtid == 0){
-                  sport = s;
-                  dport = d;
+                  sport = htons(s);
+                  dport = htons(d);
                   return;
               }
           }
       }
-
   }
 
-  unsigned best_queue() const override { return best_idx; }
-
-  ena(unsigned n_qpair) : nic(n_qpair), ids(n_qpair), values(n_qpair) {
-    unsigned i = 0;
-    for (auto &id : ids)
-      id = kQueueByteOffset + i++ * kQueueByteStep;
-  }
+  ~ena() override = default;
 };
 
 } // namespace ena

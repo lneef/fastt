@@ -28,6 +28,12 @@ struct sender_entry {
   message *get() { return packet; }
 
   sender_entry(const sender_entry &) = delete;
+
+  ~sender_entry(){
+      assert(packet != nullptr);
+      packet->free();
+      packet = nullptr;
+  }
 };
 
 class transport_input {
@@ -57,14 +63,12 @@ public:
     while (!unacked.empty() && unacked.front().seq < seq) {
       auto &desc = unacked.front();
       assert(desc.packet);
-      rte_pktmbuf_free(desc.packet);
       unacked.pop_front();
     }
     assert(!unacked.empty());
 
     auto &srtt_desc = unacked.front();
     update_srtt(&srtt_desc, ts);
-    rte_pktmbuf_free(srtt_desc.packet);
     unacked.pop_front();
     return burst_rtt;
   }

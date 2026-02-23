@@ -5,6 +5,7 @@
 #include "server.h"
 #include <arpa/inet.h>
 #include <atomic>
+#include <bits/types/struct_iovec.h>
 #include <cstdint>
 #include <getopt.h>
 #include <memory>
@@ -95,6 +96,7 @@ int lcore_server_fun(void *arg) {
 
   kv::kv_packet<kv::kv_request> req;
   kv::kv_packet<kv::kv_completion> resp;
+  struct iovec iov;
 
   while (!terminate) {
     server->poll([&](connection &con) -> bool {
@@ -102,16 +104,19 @@ int lcore_server_fun(void *arg) {
         if (!con.can_recv() || !con.can_send())
           return false;
         msg_hdr m;
-        m.buf = reinterpret_cast<uint8_t*>(&req);
-        m.size = sizeof(req);
+        m.iov = &iov;
+        m.iov_len = 1;
+        m.iov[0].iov_base = reinterpret_cast<uint8_t*>(&req);
+        m.iov[0].iov_len = sizeof(req);
         auto sz = con.recv(m);
         assert(sz == sizeof(req));
         serve(&resp, &req);
-        m.buf = reinterpret_cast<uint8_t*>(&resp);
-        m.size = sizeof(resp);
-        m.som = true;
-        m.eom = true;
-        con.send(m);
+        m.iov = &iov;
+        m.iov_len = 1;
+        m.iov[0].iov_base= reinterpret_cast<uint8_t*>(&resp);
+        m.iov[0].iov_len = sizeof(resp);
+        auto sent = con.send(m);
+        assert(sent == sizeof(resp));
       }
       return true;
     });

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <cerrno>
 #include <cstdint>
 #include <generic/rte_cycles.h>
 #include <message.h>
@@ -17,6 +18,7 @@
 #include <rte_mempool.h>
 #include <rte_ring.h>
 #include <rte_ring_core.h>
+#include <sys/types.h>
 
 #include "debug.h"
 #include "message.h"
@@ -26,7 +28,7 @@
 #include "transport/seq.h"
 #include "transport_input.h"
 #include "transport_output.h"
-#include "util.h" 
+#include "util.h"
 
 struct transport_statistics {
   uint64_t retransmitted;
@@ -45,23 +47,19 @@ struct transport_statistics {
 };
 
 template <typename D> struct seq_observer {
-  void process_seq(seq_t seq) {
-    static_cast<D &>(*this).process_seq_impl(seq);
-  }
+  void process_seq(seq_t seq) { static_cast<D &>(*this).process_seq_impl(seq); }
 };
 
 struct ack_scheduler : public seq_observer<ack_scheduler> {
   seq_t last_acked;
-  seq_t last_sack;
+  uint64_t last_sack;
   bool pending_from_retry;
   void process_seq_impl(seq_t seq) { pending_from_retry = seq < last_acked; }
 
-  bool ack_pending(seq_t seq) {
-    return pending_from_retry || seq > last_acked;
-  }
+  bool ack_pending(seq_t seq) { return pending_from_retry || seq > last_acked; }
 
-  bool sack_pending(seq_t seq) {
-    return pending_from_retry || seq > last_sack;
+  bool sack_pending(uint64_t rcvd_pkts) {
+    return pending_from_retry || last_sack != rcvd_pkts;
   }
 
   void ack_callback(seq_t seq) {
@@ -69,19 +67,20 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
     pending_from_retry = false;
   }
 
-  void sack_callback(seq_t seq) {
+  void sack_callback(seq_t seq, uint64_t rcvd_pkts) {
     last_acked = seq;
-    last_sack = seq;
+    last_sack = rcvd_pkts;
     pending_from_retry = false;
   }
 
-  ack_scheduler() : last_acked(0), last_sack(1), pending_from_retry(false) {}
+  ack_scheduler() : last_acked(), last_sack(), pending_from_retry(false) {}
 };
+
+enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING, DISCONNECTED };
 
 class connection;
 class transport {
   friend class connection;
-  enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING };
 
 public:
   struct {
@@ -89,10 +88,10 @@ public:
     uint64_t retransmissions = 0;
   } stats;
 
-  transport(message_allocator *allocator, packet_if *pkt_sink, uint16_t sport,
-            const con_config &target)
-      : trx(allocator), target(target), ttx(), scheduler(),
-        allocator(allocator), pkt_if(pkt_sink), sport(sport) {}
+  transport(message_allocator *allocator, packet_if *pkt_sink,
+            transport_config cfg, uint16_t sport, uint16_t dport)
+      : trx(allocator), builder(sport, dport), cfg(cfg), ttx(), scheduler(),
+        allocator(allocator), pkt_if(pkt_sink) {}
 
   void probe_timeout() {
     ttx.probe_retransmit(
@@ -100,7 +99,7 @@ public:
   }
 
   void check_timeout(uint64_t now) {
-    if (cstate != connection_state::ESTABLISHED)
+    if (cstate == connection_state::DISCONNECTED)
       return;
     if (ttx.all_acked())
       return;
@@ -120,48 +119,25 @@ public:
     if (!msg)
       return;
     ttx.record_ctrl_pkt(msg, [&](message *msg, seq_t seq) {
-      protocol::prepare_ctrl_pkt(msg, seq, wnd);
+      builder.prepare_ctrl_pkt(msg, seq, wnd);
     });
-    pkt_if->consume_pkt(msg, sport, target);
-  }
-
-  size_t send(void *buf, size_t size, bool start, bool end) {
-    static constexpr uint16_t kMaxPayload = 2048;
-    assert(size < kMaxPayload);
-    assert(capacity());
-    auto *mbuf = allocator->alloc_message(size);
-    rte_memcpy(mbuf->data<uint8_t>(), buf, size);
-    auto ctor = [&](message *pkt, seq_t seq) {
-      seq_t ack{0};
-      uint32_t ts = 0;
-      uint16_t wnd = trx.prepare_wnd_return();
-      if (scheduler.ack_pending(seq)) {
-        ack = trx.get_last_rcvd_in_seq();
-        ts = rte_get_timer_cycles() / get_ticks_us() - trx.get_ts();
-        scheduler.ack_callback(ack);
-      }
-
-      protocol::prepare_ft_header(pkt, seq, ack, wnd, start, end, ts, false);
-    };
-    auto inserted = ttx.record_pkt(mbuf, ctor);
-    if (inserted)
-      pkt_if->consume_pkt(mbuf, sport, target);
-    return size;
+    pkt_if->consume_pkt(msg, cfg);
   }
 
   bool acknowledge(uint64_t now = rte_get_timer_cycles()) {
     message *msg;
     bool is_sack = trx.has_holes();
     seq_t ack = trx.get_last_rcvd_in_seq();
+    auto total_rcvd_pkts = trx.get_total_rcvd_pkts();
     if (is_sack) {
-      if (!scheduler.sack_pending(trx.max_rx_in_window))
+      if (!scheduler.sack_pending(total_rcvd_pkts))
         return false;
       msg = allocator->alloc_message(sizeof(protocol::ft_header) +
                                      sizeof(protocol::ft_sack_payload));
       auto *sack_payload = rte_pktmbuf_mtod_offset(
           msg, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
       trx.copy_bitset(sack_payload);
-      scheduler.sack_callback(trx.max_rx_in_window);
+      scheduler.sack_callback(ack, total_rcvd_pkts);
       FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %lu\n",
                       sack_payload->bit_map_len, ack);
     } else {
@@ -170,30 +146,31 @@ public:
       msg = allocator->alloc_message(sizeof(protocol::ft_header));
       scheduler.ack_callback(ack);
     }
-    FASTT_LOG_DEBUG("Return %u capacity to peer\n", trx.get_available_wnd());
-    protocol::prepare_ack_pkt(msg, ack, now / get_ticks_us() - trx.get_ts(),
-                              is_sack);
-    pkt_if->consume_pkt(msg, sport, target);
+    if(cstate == connection_state::DISCONNECTING)
+        cstate = connection_state::DISCONNECTED;
+
+    builder.prepare_ack_pkt(msg, ack, now / get_ticks_us() - trx.get_ts(),
+                            is_sack);
+    pkt_if->consume_pkt(msg, cfg);
     return true;
   }
 
   bool process_pkt(message *msg) {
-    auto *hdr = msg->data<protocol::ft_header>();
+    auto *hdr = msg->data<const protocol::ft_header>();
     auto ts = *msg->get_ts() - hdr->ts;
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
+      scheduler.process_seq(hdr->seq);
+      if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
+                                                    stats.retransmissions)) {
+        msg->free();
+        return false;
+      }
       if (hdr->ackframe)
         ttx.acknowledge(hdr->ack, ts, hdr->sack);
       if (hdr->wnd)
         ttx.update_budget(hdr->wnd);
-
-      scheduler.process_seq(hdr->seq);
-      if (trx.is_set(hdr->seq)) {
-        ++stats.retransmissions;
-        msg->free();
-        return false;
-      } else
-        trx.set(hdr->seq, msg);
+      trx.insert(hdr->seq, msg);
       break;
     }
     case protocol::pkt_type::FT_ACK: {
@@ -205,47 +182,65 @@ public:
           pkt_if->consume_for_retransmission(msg);
         });
       }
-      if (hdr->ack == seq_t{0})
-        cstate = connection_state::ESTABLISHED;
+      if (cstate == connection_state::DISCONNECTING && ttx.all_acked())
+        cstate = connection_state::DISCONNECTED;
       assert(hdr->wnd == 0);
       msg->free();
       break;
     }
     case protocol::pkt_type::FT_RDY_TO_RCV: {
-      if (trx.is_set(hdr->seq)) {
-        msg->free();
-        return false;
-      } else
-        trx.set(hdr->seq, msg);
-      if (hdr->wnd)
-        ttx.update_budget(hdr->wnd);
-      break;
-    }
-    case protocol::pkt_type::FT_CLR_TO_SD: {
-      ttx.acknowledge(hdr->ack, ts, hdr->sack);
       scheduler.process_seq(hdr->seq);
-      if (trx.is_set(hdr->seq)) {
+      if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
+                                                    stats.retransmissions)) {
         msg->free();
         return false;
-      } else {
-        trx.set(hdr->seq, msg);
       }
-      assert(hdr->wnd > 0);
       ttx.update_budget(hdr->wnd);
+      trx.insert(hdr->seq, msg);
       cstate = connection_state::ESTABLISHED;
       break;
     }
-    case protocol::pkt_type::FT_CRTL: {
-      if (trx.is_set(hdr->seq)) {
+    case protocol::pkt_type::FT_CLR_TO_SD: {
+      scheduler.process_seq(hdr->seq);
+      if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
+                                                    stats.retransmissions)) {
         msg->free();
         return false;
       }
-      trx.set(hdr->seq, msg);
-      assert(hdr->wnd > 0);
+      ttx.acknowledge(hdr->ack, ts, hdr->sack);
       ttx.update_budget(hdr->wnd);
-      msg->free();
+
+      assert(hdr->wnd > 0);
+      trx.insert(hdr->seq, msg);
+      cstate = connection_state::ESTABLISHED;
       break;
-    };
+    }
+    case protocol::pkt_type::FT_WND_RET: {
+      scheduler.process_seq(hdr->seq);
+      if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
+                                                    stats.retransmissions)) {
+        msg->free();
+        return false;
+      }
+      ttx.update_budget(hdr->wnd);
+      trx.insert(hdr->seq, msg);
+      break;
+    }
+    case protocol::pkt_type::FT_DONE: {
+      scheduler.process_seq(hdr->seq);
+      if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
+                                                    stats.retransmissions)) {
+        msg->free();
+        return false;
+      }
+      ttx.acknowledge(hdr->seq, hdr->ts, hdr->sack);
+      // for now we assume all rpc/exchange has completed
+      // ack for FT_DONE will be sent from the event loop
+      assert(ttx.all_acked());
+      assert(trx.empty());
+      cstate = connection_state::DISCONNECTING;
+      break;
+    }
     default:
       msg->free();
       break;
@@ -253,39 +248,99 @@ public:
     return true;
   }
 
+  void close_connection() {
+    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
+    ttx.record_ctrl_pkt(msg, [&](message *msg, seq_t seq) {
+      scheduler.ack_callback(trx.get_last_rcvd_in_seq());
+      builder.prepare_done_header(msg, seq, trx.get_last_rcvd_in_seq());
+    });
+    cstate = connection_state::DISCONNECTING;
+    pkt_if->consume_pkt(msg, cfg);
+  }
+
   void open_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     assert(msg);
     ttx.record_ctrl_pkt(
-        msg, [budget = trx.prepare_wnd_return()](message *msg, seq_t seq) {
-          protocol::prepare_init_header(msg, seq, budget);
+        msg, [&, budget = trx.prepare_wnd_return()](message *msg, seq_t seq) {
+          builder.prepare_init_header(msg, seq, budget);
         });
     auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
-    assert(hdr->type == protocol::FT_CLR_TO_SD);
+    assert(hdr->type == protocol::FT_RDY_TO_RCV);
     FASTT_LOG_DEBUG("Sent init header to peer %u %u\n", target.ip, target.port);
-    pkt_if->consume_pkt(msg, sport, target);
+    pkt_if->consume_pkt(msg, cfg);
   }
 
   void accept_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     assert(msg);
     ttx.record_ctrl_pkt(
-        msg, [budget = trx.prepare_wnd_return()](message *msg, seq_t seq) {
-          protocol::prepare_init_ack_header(msg, seq, seq, budget);
+        msg, [&, budget = trx.prepare_wnd_return()](message *msg, seq_t seq) {
+          builder.prepare_init_ack_header(msg, seq, seq, budget);
         });
     FASTT_LOG_DEBUG("Sent ack for init");
-    pkt_if->consume_pkt(msg, sport, target);
+    pkt_if->consume_pkt(msg, cfg);
   }
 
-  bool active() { return connection_state::ESTABLISHED == cstate; }
+  bool up() { return connection_state::ESTABLISHED == cstate; }
+
+  bool disconnected() { return connection_state::DISCONNECTED == cstate; }
 
   template <typename F> void receive_messages(F &&f) { trx.advance(f); }
 
-  unsigned capacity() { return ttx.get_current_wnd(); }
+  bool can_recv() {
+    return trx.has_buffered_messages_frags() ||
+           cstate != connection_state::ESTABLISHED;
+  }
 
-  bool can_recv() { return trx.has_buffered_messages_frags(); }
+  bool can_send() {
+    return ttx.get_current_wnd() > 0 || cstate != connection_state::ESTABLISHED;
+  }
 
-  ssize_t recv(msg_hdr &hdr) { return trx.read(hdr); }
+  ssize_t send_single(struct iovec *iov, bool som, bool eom) {
+    static constexpr uint16_t kMaxPayload = 1500 - protocol::defs::kHeaderMTUlen;
+    if(iov->iov_len > kMaxPayload)
+        return -ENOMEM;
+    if(!ttx.get_current_wnd())
+        return -EAGAIN;
+    if (connection_state::ESTABLISHED != cstate)
+      return 0;
+    auto *mbuf = allocator->alloc_message(iov->iov_len);
+    rte_memcpy(mbuf->data<uint8_t>(), iov->iov_base, iov->iov_len);
+    auto ctor = [&](message *pkt, seq_t seq) {
+      uint16_t wnd = trx.prepare_wnd_return();
+      seq_t ack = trx.get_last_rcvd_in_seq();
+      bool is_ack_frame = true;
+      uint32_t ts = rte_get_timer_cycles() / get_ticks_us() - trx.get_ts();
+      scheduler.ack_callback(ack);
+
+      builder.prepare_ft_header(pkt, seq, ack, wnd, som, eom, ts,
+                                is_ack_frame, false);
+    };
+    auto inserted = ttx.record_pkt(mbuf, ctor);
+    if (inserted)
+      pkt_if->consume_pkt(mbuf, cfg);
+    return iov->iov_len;
+  }
+
+  ssize_t send(msg_hdr& hdr){
+      ssize_t sent = 0;
+      for(uint16_t i = 0; i < hdr.iov_len; ++i){
+          auto retval = send_single(&hdr.iov[i], i == 0, i == hdr.iov_len - 1);
+          if(retval <= 0){
+              hdr.flags = retval;
+              return retval;
+          }
+          sent += retval;
+      }
+      return sent;
+  }
+
+  ssize_t recv(msg_hdr &hdr) {
+    if (connection_state::ESTABLISHED != cstate)
+      return 0;
+    return trx.read(hdr);
+  }
 
   transport_statistics get_stats() const {
     auto &rt_stats = ttx.get_stats();
@@ -295,12 +350,12 @@ public:
 
 private:
   transport_output trx;
-  con_config target;
+  protocol::builder builder;
+  transport_config cfg;
   transport_input ttx;
   ack_scheduler scheduler;
   message_allocator *allocator;
   packet_if *pkt_if;
-  uint16_t sport;
   uint64_t rto = get_ticks_ms() * 10;
   connection_state cstate = connection_state::ESTABLISHING;
 };

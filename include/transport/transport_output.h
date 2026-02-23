@@ -50,36 +50,45 @@ struct reorder_buffer {
 
 struct transport_output {
   // reserve some headroom
-  static constexpr unsigned kLowThreshold = 2048;
+  static constexpr unsigned kLowThreshold = 128;
   static constexpr unsigned kMaxWndSize = 128;
   transport_output(message_allocator *port_allocator)
       : port_allocator(port_allocator), max_rx_in_window() {}
 
   seq_t get_last_rcvd_in_seq() const { return seq_t{next_seq - 1}; }
 
-  bool set(seq_t seq, message *msg) {
-    auto idx = index(seq);
-    if (beyond_window(seq) || wnd[idx])
-      return false;
+  bool is_retransmission_or_exceeds_capacity(seq_t seq,
+                                             uint64_t &retransmission_cnt) {
+    if (is_retransmission(seq)) {
+      ++retransmission_cnt;
+      return true;
+    }
+    return exceeds_capacity(seq) || may_cause_buffer_exhaustion(seq);
+  }
+
+  bool is_retransmission(seq_t seq) {
+    return seq < next_seq || (seq < next_seq + kMaxWndSize && wnd[index(seq)]);
+  }
+
+  bool exceeds_capacity(seq_t seq) { return seq >= next_seq + kMaxWndSize; }
+
+  bool may_cause_buffer_exhaustion(seq_t seq) const {
+    return seq != next_seq &&
+           port_allocator->get_remaining_space() < kLowThreshold;
+  }
+
+  void insert(seq_t seq, message *msg) {
+    assert(inside(seq));
+    assert(!wnd.test(index(seq)));
+    assert(msg->ref_cnt() > 0);
     if (seq > max_rx_in_window) {
       max_rx_in_window = seq;
       ts = *msg->get_ts();
     }
-
-    // dont buffer in case of imminent buffer exhaustion
-    if (unlikely(seq != next_seq &&
-                 port_allocator->get_remaining_space() < kLowThreshold))
-      return false;
+    ++rcvd_pkts;
     wnd.set(index(seq));
     reassemble(seq, msg);
-    return true;
   }
-
-  bool is_set(seq_t seq) {
-    return seq < next_seq || (seq < next_seq + kMaxWndSize && wnd[index(seq)]);
-  }
-
-  bool beyond_window(seq_t seq) { return seq >= next_seq + kMaxWndSize; }
 
   template <typename F> bool advance(F &&f) {
     if (out.empty())
@@ -107,6 +116,8 @@ struct transport_output {
       out.push_back(msg);
     }
   }
+
+  bool empty() const { return out.empty() && first == nullptr; }
 
   void reassemble(seq_t seq, message *msg) {
     if (seq != next_seq) {
@@ -164,12 +175,12 @@ struct transport_output {
 
   ssize_t read_partial_msg(msg_hdr &hdr) {
     if (!first)
-      return 0;
-    auto to_copy = std::min<size_t>(first->pkt_len - off, hdr.size);
+      return -EAGAIN;
+    auto to_copy = std::min<size_t>(first->pkt_len - off, hdr.iov->iov_len);
     if (first->nb_segs > 1)
-      rte_pktmbuf_read(first, off, to_copy, hdr.buf);
+      rte_pktmbuf_read(first, off, to_copy, hdr.iov->iov_base);
     else
-      std::memcpy(hdr.buf, first->data<uint8_t>() + off, to_copy);
+      std::memcpy(hdr.iov->iov_base, first->data<uint8_t>() + off, to_copy);
     off += to_copy;
     if (off == first->pkt_len) {
       grant_to_return += first->nb_segs;
@@ -180,7 +191,6 @@ struct transport_output {
     } else {
       hdr.remaining = first->pkt_len - off;
     }
-    hdr.flags = 0;
     return to_copy;
   }
 
@@ -188,18 +198,18 @@ struct transport_output {
     return out.size() > 0 || first != nullptr;
   }
 
-  size_t read(msg_hdr &hdr) {
-    hdr.flags = -ENODATA;
+  ssize_t read(msg_hdr &hdr) {
+    hdr.flags = -EAGAIN;
     if (out.empty())
       return read_partial_msg(hdr);
 
     hdr.flags = 0;
     auto *msg = out.front();
-    auto to_copy = std::min<size_t>(msg->pkt_len - off, hdr.size);
+    auto to_copy = std::min<size_t>(msg->pkt_len - off, hdr.iov->iov_len);
     if (msg->nb_segs > 1)
-      rte_pktmbuf_read(msg, off, to_copy, hdr.buf);
+      rte_pktmbuf_read(msg, off, to_copy, hdr.iov->iov_base);
     else
-      std::memcpy(hdr.buf, msg->data<uint8_t>() + off, to_copy);
+      std::memcpy(hdr.iov->iov_base, msg->data<uint8_t>() + off, to_copy);
     off += to_copy;
 
     if (off == msg->pkt_len) {
@@ -214,7 +224,7 @@ struct transport_output {
     return to_copy;
   }
 
-  uint64_t get_ts() { return ts; }
+  uint64_t get_ts() const { return ts; }
 
   unsigned get_available_wnd() const { return grant_to_return; }
 
@@ -225,6 +235,8 @@ struct transport_output {
   }
 
   bool check_wnd_return() const { return grant_to_return >= kMaxWndSize >> 1; }
+
+  uint64_t get_total_rcvd_pkts() const { return rcvd_pkts; }
 
   // pkt reassmbly and buffering
   message *first = nullptr, *last = nullptr;
@@ -238,5 +250,6 @@ struct transport_output {
   seq_t max_rx_in_window;
   seq_t next_seq;
   uint64_t grant_to_return = kMaxWndSize;
+  uint64_t rcvd_pkts = 0;
   uint64_t ts = 0;
 };

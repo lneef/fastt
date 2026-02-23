@@ -1,9 +1,9 @@
 #pragma once
 
 #include "message.h"
-#include "transport/msg_fragment.h"
 #include <coroutine>
 #include <deque>
+#include <sys/types.h>
 
 
 class connection;
@@ -11,10 +11,15 @@ class connection;
 namespace concurrency {
 class scheduler;
 
+struct msg_hdr_wrapper{
+    msg_hdr *hdr;
+    ssize_t retval = 0; 
+};
+
 enum class io_yield_type { recv_yield = 0, send_yield };
 struct task {
   struct promise_type {
-        msg_hdr hdr;  
+        msg_hdr_wrapper* hdr;  
         io_yield_type yt;
         scheduler *schdlr;
     
@@ -48,11 +53,9 @@ using coro_handle = std::coroutine_handle<task::promise_type>;
 struct io_awaitable {
   scheduler &schdlr;
   connection &con;
-
-  msg_hdr hdr;
-
+  msg_hdr_wrapper hdr;
   io_awaitable(scheduler &schdlr, connection &con, msg_hdr &hdr)
-      : schdlr(schdlr), con(con), hdr(hdr) {}
+      : schdlr(schdlr), con(con), hdr(&hdr) {}
 };
 
 struct send_awaitable : public io_awaitable {  
@@ -64,7 +67,7 @@ struct send_awaitable : public io_awaitable {
   void await_suspend(std::coroutine_handle<task::promise_type> caller);
 
   ssize_t await_resume() noexcept{
-      return hdr.size;
+      return hdr.retval;
   };
 };
 
@@ -78,7 +81,7 @@ struct recv_awaitable :  io_awaitable{
   void await_suspend(std::coroutine_handle<task::promise_type> caller);
 
   ssize_t await_resume() noexcept{
-      return hdr.size;
+      return hdr.retval;
   };
 };
 

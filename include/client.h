@@ -16,7 +16,7 @@ class client_iface {
 public:
   client_iface(uint16_t port, uint16_t txq, uint16_t rxq,
                std::shared_ptr<message_allocator> pool,
-               const con_config &scon_config, [[maybe_unused]] uint16_t lcore_id)
+               const con_config &scon_config)
       : scon_config(scon_config),
         manager(true, port, txq, rxq, scon_config.ip, pool) {}
 
@@ -32,7 +32,7 @@ public:
   }
 
   message *recv_message(connection *con);
-  connection *open_connection(const con_config &target, rte_ether_addr &dmac);
+  connection *open_connection(const con_config &target, uint16_t rtid, rte_ether_addr &dmac);
 
   void flush() { manager.flush(); }
 

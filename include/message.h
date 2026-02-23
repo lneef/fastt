@@ -1,6 +1,7 @@
 #pragma once
 #include "debug.h"
 
+#include <bits/types/struct_iovec.h>
 #include <cstddef>
 #include <cstdint>
 #include <rte_ether.h>
@@ -10,69 +11,14 @@
 #include <rte_mempool.h>
 
 struct msg_hdr {
-  // user provided
-  uint8_t *buf;
-  ssize_t size;
-
+  struct iovec *iov;
+  uint16_t iov_len;
   union {
-    struct {
-      bool som, eom;
-    };
-
     struct {
       size_t remaining;
     };
   };
-
   int flags;
-};
-
-struct msg_buf {
-  static int timestamp;
-  static int init();
-  rte_mbuf *mbuf;
-
-  uint64_t *get_ts() { return RTE_MBUF_DYNFIELD(mbuf, timestamp, uint64_t *); }
-
-  void inc_refcnt() {
-    auto *buf = mbuf;
-    while (buf) {
-      rte_pktmbuf_refcnt_update(buf, 1);
-      buf = buf->next;
-    }
-  }
-
-  static inline void merge(msg_buf &first, msg_buf &last, msg_buf seg) {
-    if (!first.mbuf) {
-      first = seg;
-      last = seg;
-    } else {
-      last.mbuf->next = seg.mbuf;
-      first.mbuf->nb_segs += seg.mbuf->nb_segs;
-      first.mbuf->pkt_len += seg.mbuf->pkt_len;
-      last.mbuf = rte_pktmbuf_lastseg(seg.mbuf);
-    }
-  }
-
-  template <typename T> T *data() { return rte_pktmbuf_mtod(mbuf, T *); }
-
-  template <typename T> T *data(uint16_t off) {
-    return rte_pktmbuf_mtod_offset(mbuf, T *, off);
-  }
-  void *data() { return rte_pktmbuf_mtod(mbuf, void *); }
-  uint16_t len() { return mbuf->data_len; }
-
-  uint32_t pkt_len() const { return mbuf->pkt_len; }
-
-
-  template <typename T> T *move_headroom() {
-    rte_pktmbuf_prepend(mbuf, sizeof(T));
-    return rte_pktmbuf_mtod(mbuf, T *);
-  }
-
-  void free() { rte_pktmbuf_free(mbuf); }
-
-  void shrink_headroom(uint16_t len) { rte_pktmbuf_adj(mbuf, len); }
 };
 
 struct message : public rte_mbuf {
@@ -109,6 +55,8 @@ struct message : public rte_mbuf {
   uint16_t len() { return data_len; }
 
   void set_size(uint16_t len) { pkt_len = len; }
+
+  uint16_t ref_cnt() const{ return this->refcnt; }
 
   template <typename T> T *move_headroom() {
     rte_pktmbuf_prepend(this, sizeof(T));

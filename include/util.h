@@ -5,13 +5,11 @@
 #include <boost/intrusive/options.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <generic/rte_cycles.h>
 #include <rte_ether.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 #include <utility>
-#include <vector>
 
 #include <boost/intrusive/list.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
@@ -24,31 +22,28 @@ extern uint64_t to_ms;
 
 void init_timing();
 
-using list_hook = bi::list_member_hook<bi::link_mode<bi::link_mode_type::auto_unlink>>;
+using list_hook =
+    bi::list_member_hook<bi::link_mode<bi::link_mode_type::auto_unlink>>;
 
-template<typename Key, typename T>
+template <typename Key, typename T>
 using flow_table = bu::unordered_flat_map<Key, T>;
 
-template<typename T, list_hook T::*link  = &T::link>
-using intrusive_list_t = bi::list<T, bi::member_hook<T, list_hook, link>, bi::constant_time_size<false>>;
+template <typename T, list_hook T::*link = &T::link>
+using intrusive_list_t = bi::list<T, bi::member_hook<T, list_hook, link>,
+                                  bi::constant_time_size<false>>;
 
-__inline uint64_t get_ticks_us(){
-    return to_us;
-}
+__inline uint64_t get_ticks_us() { return to_us; }
 
-__inline uint64_t get_ticks_ms(){
-    return to_ms;
-}
+__inline uint64_t get_ticks_ms() { return to_ms; }
 
-template<unsigned N>
-struct packet_vector{
-    std::array<message*, N> pkts;
-    uint16_t i = 0;
+template <unsigned N> struct packet_vector {
+  std::array<message *, N> pkts;
+  uint16_t i = 0;
 
-    constexpr void clear(){ i = 0; }
+  constexpr void clear() { i = 0; }
 
-    auto begin() {return pkts.begin();}
-    auto end() {return pkts.begin() + i; }
+  auto begin() { return pkts.begin(); }
+  auto end() { return pkts.begin() + i; }
 };
 
 //-------------------------------------------------------------------------------
@@ -114,8 +109,9 @@ static inline uint32_t jhash_3words(uint32_t a, uint32_t b, uint32_t c,
 
 //-------------------------------------------------------------------------------
 
-__inline constexpr std::pair<unsigned, unsigned> get_bit_indices_64(unsigned i){
-    return {i / 64, i & 63};
+__inline constexpr std::pair<unsigned, unsigned>
+get_bit_indices_64(unsigned i) {
+  return {i / 64, i & 63};
 }
 
 struct flow_tuple {
@@ -135,53 +131,13 @@ template <> inline uint32_t calc_hash<uint32_t>(const uint32_t &val) {
   return jhash_3words(val, 0, 0);
 }
 
-inline std::size_t hash_value(const flow_tuple& ft) {
-    return calc_hash(ft);
-}
+inline std::size_t hash_value(const flow_tuple &ft) { return calc_hash(ft); }
 
-template <typename K, typename V> struct fixed_size_hash_table {
-  using hash_t = uint32_t;
-  struct entry_t {
-    bool occupied;
-    K key;
-    V val;
-    entry_t() : occupied(false) {}
-  };
-
-  std::vector<entry_t> table;
-  uint32_t mask;
-
-  V *lookup(const K &key) {
-    auto i = calc_hash(key) & mask;
-    auto searched = 0u;
-    for (; searched < table.size(); i = (i + 1) & mask, ++searched) {
-      if (!table[i].occupied)
-        break;
-      if (key == table[i].key)
-        return &table[i].val;
-    }
-    return nullptr;
-  }
-
-  template <typename... Args>
-  std::pair<V *, bool> emplace(const K &key, Args &&...args) {
-    auto i = calc_hash(key) & mask;
-    auto searched = 0u;
-    for (; searched < table.size(); i = (i + 1) & mask, ++searched) {
-      if (!table[i].occupied) {
-        table[i].occupied = true;
-        table[i].key = key;
-        new (&table[i].val) V(std::forward<Args>(args)...);
-        return {&table[i].val, true};
-      }
-
-      if (table[i].key == key)
-        return {&table[i].val, false};
-    }
-    return {nullptr, false};
-  }
-
-  fixed_size_hash_table(std::size_t size) : table(size), mask(size - 1) {}
+struct transport_config {
+  uint32_t ip;
+  struct {
+    uint16_t sport, dport;
+  } transport_ports;
 };
 
 struct con_config {

@@ -3,8 +3,11 @@
 #include "debug.h"
 #include "message.h"
 #include "util.h"
+#include "arch/nic.h"
+#include "arch/ena.h"
 #include <cstdint>
 #include <generic/rte_cycles.h>
+#include <memory>
 #include <rte_cycles.h>
 #include <rte_ethdev.h>
 
@@ -15,7 +18,7 @@ class qpair {
 
 public:
   qpair(uint16_t port, uint16_t txq, uint16_t rxq)
-      : port(port), txq(txq), rxq(rxq) {};
+      : port(port), txq(txq), rxq(rxq), nic_arch(std::make_unique<ena::ena>()) {};
 
   uint16_t tx_burst(rte_mbuf **pkts, uint16_t cnt) {
     auto now = rte_get_timer_cycles() / get_ticks_us();
@@ -54,6 +57,8 @@ private:
   uint16_t rxq;
 
 public:
+
+  std::unique_ptr<nic> nic_arch;
   uint64_t no_rx = 0;
   uint64_t total_rx = 0;
 };

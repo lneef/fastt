@@ -4,6 +4,7 @@
 #include "connection.h"
 #include "message.h"
 #include "util.h"
+#include <bits/types/struct_iovec.h>
 #include <cstddef>
 #include <cstdint>
 #include <generic/rte_cycles.h>
@@ -58,10 +59,10 @@ class kv_proxy {
 public:
   kv_proxy(client_iface *ifc) : ifc(ifc), slots(128) {}
 
-  int connect(const con_config &con_cfg, uint16_t n, rte_ether_addr &dmac) {
+  int connect(const con_config &con_cfg, uint16_t n, uint16_t rtid, rte_ether_addr &dmac) {
     con_config cfg = con_cfg;
     for (uint16_t i = 0; i < n; ++i) {
-      con = ifc->open_connection(cfg, dmac);
+      con = ifc->open_connection(cfg, rtid, dmac);
       if (!con)
         return -1;
       while (!ifc->probe_connection_setup_done(con))
@@ -90,19 +91,23 @@ public:
   }
 
   ssize_t recv(void* buf, size_t sz){
+      iovec iov;
       msg_hdr m;
-      m.buf = static_cast<uint8_t*>(buf);
-      m.size = sz;
+      m.iov = &iov;
+      m.iov_len = 1;
+      m.iov->iov_base = buf;
+      m.iov->iov_len = sz;
       m.remaining = 0;
       return con->recv(m);
   }
 
   ssize_t send(void* buf, size_t sz){
+      iovec iov;
       msg_hdr m;
-      m.buf = static_cast<uint8_t*>(buf);
-      m.size = sz;
-      m.som = true;
-      m.eom = true;
+      m.iov = &iov;
+      m.iov_len = 1;
+      m.iov->iov_base = buf;
+      m.iov->iov_len = sz;
       return con->send(m);
   }
 
