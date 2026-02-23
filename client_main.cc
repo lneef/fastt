@@ -105,7 +105,7 @@ static int lcore_fn(void *arg) {
   kv::kv_packet<kv::kv_request> req;
   kv::kv_packet<kv::kv_completion> resp;
   auto now = rte_get_timer_cycles();
-  size_t rcvd = 0;
+  ssize_t rcvd = 0;
   while(t < dur){
       cif.poll();
       while((rcvd = kv.recv(&resp, sizeof(resp)) > 0)){
