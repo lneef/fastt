@@ -33,7 +33,7 @@ public:
   connection(message_allocator *allocator, packet_if *pkt_if,
              const transport_config &cfg, uint16_t sport, uint16_t dport,
              connection_manager *manager, bool is_client)
-      : allocator(allocator), transport_impl(std::make_unique<transport>(
+      : allocator(allocator), transport_impl(std::make_unique<transport<>>(
                                   allocator, pkt_if, cfg, sport, dport)),
         manager(manager), is_client(is_client) {}
   void process_pkt(rte_mbuf *pkt);
@@ -78,7 +78,7 @@ public:
 private:
   friend class connection_manager;
   message_allocator *allocator;
-  std::unique_ptr<transport> transport_impl;
+  std::unique_ptr<transport<>> transport_impl;
   connection_manager *manager;
   bool is_client;
 
@@ -170,10 +170,10 @@ public:
   template <typename F> void poll(F &&handler) {
     fetch_from_qpair();
     accept_connection();
-    acknowledge_all_and_reap();
     flush();
     for (auto &con : active)
       handler(con);
+    acknowledge_all_and_reap();
     check_timeouts();
   }
 

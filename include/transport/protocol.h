@@ -25,13 +25,13 @@ struct __rte_packed_begin ft_header {
   uint16_t sport;
   uint16_t dport;
   pkt_type type : 3;
-  uint32_t ackframe :1;
-  uint32_t start :1;
-  uint32_t end :1;
-  uint32_t sack :1;
-  uint32_t ts :25;
-  uint32_t len: 16;
-  uint32_t wnd: 16;
+  uint32_t ackframe : 1;
+  uint32_t start : 1;
+  uint32_t end : 1;
+  uint32_t sack : 1;
+  uint32_t ts : 25;
+  uint32_t len : 16;
+  uint32_t wnd : 16;
   seq_t seq;
   seq_t ack;
 } __rte_packed_end;
@@ -39,24 +39,25 @@ struct __rte_packed_begin ft_header {
 static_assert(sizeof(ft_header) == 20, "");
 
 struct __rte_packed_begin ft_sack_payload {
-  using interval = std::pair<uint64_t, uint64_t>;  
+  using interval = std::pair<uint64_t, uint64_t>;
   static constexpr uint16_t kBitMapLen = 4;
   static constexpr uint16_t kMaxIntervalCnt = 64;
   uint64_t bit_map[kBitMapLen];
   uint16_t bit_map_len;
 } __rte_packed_end;
 
-inline void extract_ports(flow_tuple& ft, message* pkt){
-    auto *hdr = pkt->data<protocol::ft_header>();
-    ft.sport = hdr->sport;
-    ft.dport = hdr->dport;
+inline void extract_ports(flow_tuple &ft, message *pkt) {
+  auto *hdr = pkt->data<protocol::ft_header>();
+  ft.sport = hdr->sport;
+  ft.dport = hdr->dport;
 }
 
 struct builder {
   uint16_t sport, dport;
   builder(uint16_t sport, uint16_t dport) : sport(sport), dport(dport) {}
-  inline void prepare_ft_header(message *msg, seq_t seq, seq_t ack, uint16_t wnd,
-                         bool start, bool end, uint32_t us, bool is_ack_frame, bool is_sack) {
+  inline void prepare_ft_header(message *msg, seq_t seq, seq_t ack,
+                                uint16_t wnd, bool start, bool end, uint32_t us,
+                                bool is_ack_frame, bool is_sack) {
     auto *ft = msg->move_headroom<protocol::ft_header>();
     ft->sport = sport;
     ft->dport = dport;
@@ -66,12 +67,13 @@ struct builder {
     ft->start = start;
     ft->end = end;
     ft->ts = us;
-    ft->ackframe = is_ack_frame; 
+    ft->ackframe = is_ack_frame;
     ft->sack = is_sack;
     ft->type = protocol::pkt_type::FT_MSG;
   }
 
-  inline void prepare_ack_pkt(message *msg, seq_t ack, uint32_t us, bool is_sack) {
+  inline void prepare_ack_pkt(message *msg, seq_t ack, uint32_t us,
+                              bool is_sack) {
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     ft->sport = sport;
     ft->dport = dport;
@@ -105,7 +107,7 @@ struct builder {
   }
 
   inline void prepare_init_ack_header(message *msg, seq_t seq, seq_t ack,
-                               uint16_t wnd) {
+                                      uint16_t wnd) {
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     ft->sport = sport;
     ft->dport = dport;
@@ -120,14 +122,14 @@ struct builder {
     ft->type = protocol::pkt_type::FT_CLR_TO_SD;
   }
 
-  inline void prepare_done_header(message *msg, seq_t seq, seq_t ack){
-      auto *ft = msg->data<protocol::ft_header>();
-      ft->sport = sport;
-      ft->dport = dport;
-      ft->seq = seq;
-      ft->ack = ack;
-      ft->ackframe = true;
-      ft->type = protocol::pkt_type::FT_DONE;
+  inline void prepare_done_header(message *msg, seq_t seq, seq_t ack) {
+    auto *ft = msg->data<protocol::ft_header>();
+    ft->sport = sport;
+    ft->dport = dport;
+    ft->seq = seq;
+    ft->ack = ack;
+    ft->ackframe = true;
+    ft->type = protocol::pkt_type::FT_DONE;
   }
 };
 

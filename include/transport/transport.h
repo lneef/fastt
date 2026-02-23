@@ -51,15 +51,22 @@ template <typename D> struct seq_observer {
 };
 
 struct ack_scheduler : public seq_observer<ack_scheduler> {
+  static constexpr uint64_t kDefaultRttTimeout = 20;  
   seq_t last_acked;
   uint64_t last_sack;
+  uint64_t time_last_sack = 0;
   bool pending_from_retry;
   void process_seq_impl(seq_t seq) { pending_from_retry = seq < last_acked; }
 
   bool ack_pending(seq_t seq) { return pending_from_retry || seq > last_acked; }
 
-  bool sack_pending(uint64_t rcvd_pkts) {
-    return pending_from_retry || last_sack != rcvd_pkts;
+  bool sack_pending(uint64_t rcvd_pkts, uint64_t now, uint64_t rtt) {
+    if(pending_from_retry)
+        return true;
+    rtt = std::max(kDefaultRttTimeout * get_ticks_us(), rtt * get_ticks_us()) >> 1;
+    if(now - time_last_sack >= rtt)
+        return last_sack != rcvd_pkts;
+    return false;
   }
 
   void ack_callback(seq_t seq) {
@@ -67,9 +74,10 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
     pending_from_retry = false;
   }
 
-  void sack_callback(seq_t seq, uint64_t rcvd_pkts) {
+  void sack_callback(seq_t seq, uint64_t rcvd_pkts, uint64_t now) {
     last_acked = seq;
     last_sack = rcvd_pkts;
+    time_last_sack = now;
     pending_from_retry = false;
   }
 
@@ -79,6 +87,7 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
 enum class connection_state { ESTABLISHING, ESTABLISHED, DISCONNECTING, DISCONNECTED };
 
 class connection;
+template<typename P = packet_if>
 class transport {
   friend class connection;
 
@@ -88,7 +97,7 @@ public:
     uint64_t retransmissions = 0;
   } stats;
 
-  transport(message_allocator *allocator, packet_if *pkt_sink,
+  transport(message_allocator *allocator, P *pkt_sink,
             transport_config cfg, uint16_t sport, uint16_t dport)
       : trx(allocator), builder(sport, dport), cfg(cfg), ttx(), scheduler(),
         allocator(allocator), pkt_if(pkt_sink) {}
@@ -130,14 +139,14 @@ public:
     seq_t ack = trx.get_last_rcvd_in_seq();
     auto total_rcvd_pkts = trx.get_total_rcvd_pkts();
     if (is_sack) {
-      if (!scheduler.sack_pending(total_rcvd_pkts))
+      if (!scheduler.sack_pending(total_rcvd_pkts, now, ttx.get_srtt()))
         return false;
       msg = allocator->alloc_message(sizeof(protocol::ft_header) +
                                      sizeof(protocol::ft_sack_payload));
       auto *sack_payload = rte_pktmbuf_mtod_offset(
           msg, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
       trx.copy_bitset(sack_payload);
-      scheduler.sack_callback(ack, total_rcvd_pkts);
+      scheduler.sack_callback(ack, total_rcvd_pkts, now);
       FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %u\n",
                       sack_payload->bit_map_len, ack.v);
     } else {
@@ -377,7 +386,7 @@ private:
   transport_input ttx;
   ack_scheduler scheduler;
   message_allocator *allocator;
-  packet_if *pkt_if;
+  P *pkt_if;
   uint64_t rto = get_ticks_ms() * 10;
   connection_state cstate = connection_state::ESTABLISHING;
 };

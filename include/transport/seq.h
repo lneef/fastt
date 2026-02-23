@@ -10,6 +10,7 @@ struct seq_t {
   friend bool operator<(seq_t a, seq_t b) {
     return std::bit_cast<int32_t>(a.v - b.v) < 0;
   }
+
   friend bool operator>(seq_t a, seq_t b) { return std::bit_cast<int32_t>(a.v - b.v) > 0; }
   friend bool operator<=(seq_t a, seq_t b) { return std::bit_cast<int32_t>(a.v - b.v) <= 0; }
   friend bool operator>=(seq_t a, seq_t b) { return std::bit_cast<int32_t>(a.v - b.v) >= 0; }
