@@ -116,6 +116,9 @@ int lcore_server_fun(void *arg) {
         m.iov[0].iov_base= reinterpret_cast<uint8_t*>(&resp);
         m.iov[0].iov_len = sizeof(resp);
         auto sent = con.send(m);
+        if(sent == 0)
+            // connection closed (no again)
+            return false;
         assert(sent == sizeof(resp));
       }
       return true;
