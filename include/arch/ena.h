@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <rte_ethdev.h>
+#include <rte_lcore.h>
 #include <vector>
 #include <array>
 #include <cstring>
@@ -62,7 +63,7 @@ struct ena : public nic{
       for(uint16_t s = 0; s < UINT16_MAX; ++s){
           for(uint16_t d = 0; d < UINT16_MAX; ++d){
               auto hash = calc_rss_hash(sip, dip, htons(s), htons(d)); 
-              if(hash % rtid == 0){
+              if(hash % rte_lcore_count() == rtid){
                   sport = htons(s);
                   dport = htons(d);
                   return;
