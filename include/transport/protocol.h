@@ -97,12 +97,16 @@ struct builder {
     ft->type = protocol::pkt_type::FT_RDY_TO_RCV;
   }
 
-  inline void prepare_ctrl_pkt(message *msg, seq_t seq, uint16_t wnd) {
+  inline void prepare_ctrl_pkt(message *msg, seq_t seq, seq_t ack, uint16_t wnd,
+                               uint32_t ts, bool is_ack_frame) {
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     ft->sport = sport;
     ft->dport = dport;
     ft->seq = seq;
+    ft->ack = ack;
     ft->wnd = wnd;
+    ft->ts = ts;
+    ft->ackframe = is_ack_frame;
     ft->type = protocol::pkt_type::FT_WND_RET;
   }
 

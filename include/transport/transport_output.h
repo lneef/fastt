@@ -173,54 +173,29 @@ struct transport_output {
     return id;
   }
 
-  ssize_t read_partial_msg(msg_hdr &hdr) {
-    if (!first)
-      return -EAGAIN;
-    auto to_copy = std::min<size_t>(first->pkt_len - off, hdr.iov->iov_len);
-    if (first->nb_segs > 1)
-      rte_pktmbuf_read(first, off, to_copy, hdr.iov->iov_base);
-    else
-      std::memcpy(hdr.iov->iov_base, first->data<uint8_t>() + off, to_copy);
-    off += to_copy;
-    if (off == first->pkt_len) {
-      grant_to_return += first->nb_segs;
-      first->free();
-      first = last = nullptr;
-      off = 0;
-      hdr.remaining = 0;
-    } else {
-      hdr.remaining = first->pkt_len - off;
-    }
-    return to_copy;
-  }
-
   bool has_buffered_messages_frags() const {
     return out.size() > 0 || first != nullptr;
   }
 
-  ssize_t read(msg_hdr &hdr) {
-    hdr.flags = -EAGAIN;
+  ssize_t read(void *buf, size_t size, size_t &remaining) {
     if (out.empty())
-      return read_partial_msg(hdr);
-
-    hdr.flags = 0;
+      return -EAGAIN;
     auto *msg = out.front();
-    auto to_copy = std::min<size_t>(msg->pkt_len - off, hdr.iov->iov_len);
-    if (msg->nb_segs > 1)
-      rte_pktmbuf_read(msg, off, to_copy, hdr.iov->iov_base);
-    else
-      std::memcpy(hdr.iov->iov_base, msg->data<uint8_t>() + off, to_copy);
-    off += to_copy;
-
-    if (off == msg->pkt_len) {
-      grant_to_return += msg->nb_segs;
-      out.pop_front();
-      msg->free();
-      hdr.remaining = 0;
-      off = 0;
-    } else {
-      hdr.remaining = msg->pkt_len - off;
+    if (msg->pkt_len > size) {
+      remaining = msg->pkt_len;
+      return -EMSGSIZE;
     }
+    auto to_copy = std::min<size_t>(msg->pkt_len - off, size);
+    if (msg->nb_segs > 1)
+      rte_pktmbuf_read(msg, off, to_copy, buf);
+    else
+      std::memcpy(buf, msg->data<uint8_t>() + off, to_copy);
+    off += to_copy;
+    grant_to_return += msg->nb_segs;
+    out.pop_front();
+    msg->free();
+    remaining = 0;
+    off = 0;
     return to_copy;
   }
 

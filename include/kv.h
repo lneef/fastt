@@ -90,24 +90,14 @@ public:
       slots.put(id);
   }
 
-  ssize_t recv(void* buf, size_t sz){
-      iovec iov;
-      msg_hdr m;
-      m.iov = &iov;
-      m.iov_len = 1;
-      m.iov->iov_base = buf;
-      m.iov->iov_len = sz;
-      m.remaining = 0;
-      return con->recv(m);
+  ssize_t recv(void* buf, size_t sz){;
+      size_t remaining = 0;
+      return con->recv(buf, sz, remaining);
   }
 
   ssize_t send(void* buf, size_t sz){
-      iovec iov;
       msg_hdr m;
-      m.iov = &iov;
-      m.iov_len = 1;
-      m.iov->iov_base = buf;
-      m.iov->iov_len = sz;
+      m.set_data(buf, sz);
       return con->send(m);
   }
 

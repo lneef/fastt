@@ -43,15 +43,16 @@ public:
 
   void check_timeout(uint64_t now) { transport_impl->check_timeout(now); }
 
-  size_t send(msg_hdr &hdr) { return transport_impl->send(hdr); }
+  ssize_t send(msg_hdr &hdr) { return transport_impl->send(hdr); }
 
-  ssize_t recv(msg_hdr &hdr) { return transport_impl->recv(hdr); }
+  ssize_t recv(void *buf, size_t size, size_t &remaining) {
+    return transport_impl->recv(buf, size, remaining);
+  }
 
-  concurrency::send_awaitable send(concurrency::scheduler &schdlr, message *msg,
-                                   bool first, bool last);
+  concurrency::send_awaitable send(concurrency::scheduler &schdlr, msg_hdr& hdr);
 
   concurrency::recv_awaitable recv(concurrency::scheduler &schdlr,
-                                   message **msg);
+                                   void* buf, size_t len, size_t &remaining);
 
   transport_statistics get_transport_stats() const {
     return transport_impl->get_stats();
@@ -98,7 +99,7 @@ public:
         flush_timeout(get_ticks_us()) {}
 
   void handle_pkt(message *pkt, flow_tuple &ft) {
-      
+
     FASTT_LOG_DEBUG("Got pkt via UDP ports: %s \n", ft.print().c_str());
     auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
     if (unlikely(header->type == protocol::FT_RDY_TO_RCV))
@@ -153,7 +154,8 @@ public:
     // find transport level queue pair
     dev.nic_arch->find_port_pair(cfg.ip, sip, cfg.transport_ports.dport,
                                  cfg.transport_ports.sport, target);
-    FASTT_LOG_DEBUG("Found pair for incoming: %u -> %u\n", ntohs(cfg.transport_ports.dport),
+    FASTT_LOG_DEBUG("Found pair for incoming: %u -> %u\n",
+                    ntohs(cfg.transport_ports.dport),
                     ntohs(cfg.transport_ports.sport));
     auto [it, inserted] = flows.emplace(
         ft, std::make_unique<connection>(allocator.get(), &pkt_if, cfg, sport,

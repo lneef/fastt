@@ -11,14 +11,15 @@
 #include <rte_mempool.h>
 
 struct msg_hdr {
-  struct iovec *iov;
-  uint16_t iov_len;
-  union {
-    struct {
-      size_t remaining;
-    };
-  };
-  int flags;
+  void *buf;
+  size_t len;
+  size_t off = 0;
+
+  void set_data(void *mbuf, size_t mlen){
+      buf = mbuf;
+      len = mlen;
+      off = 0;
+  }
 };
 
 struct message : public rte_mbuf {

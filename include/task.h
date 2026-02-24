@@ -1,28 +1,48 @@
 #pragma once
 
 #include "message.h"
+#include <bits/types/struct_iovec.h>
 #include <coroutine>
 #include <deque>
 #include <sys/types.h>
-
 
 class connection;
 
 namespace concurrency {
 class scheduler;
 
-struct msg_hdr_wrapper{
-    msg_hdr *hdr;
-    ssize_t retval = 0; 
+struct msg_hdr_wrapper {
+  union {
+    struct {
+      msg_hdr *hdr;
+    };
+    struct {
+      void *buf;
+      size_t len;
+      size_t *remaining;
+    };
+  };
+  ssize_t retval = 0;
 };
+
+inline unsigned convert_to_iovec_entry(iovec *vec, unsigned iovec_len,
+                                       ssize_t size) {
+  unsigned i = 0;
+  for (; i < iovec_len; ++i) {
+    if (static_cast<ssize_t>(vec[i].iov_len) > size)
+      return i;
+    size -= vec[i].iov_len;
+  }
+  return i;
+}
 
 enum class io_yield_type { recv_yield = 0, send_yield };
 struct task {
   struct promise_type {
-        msg_hdr_wrapper* hdr;  
-        io_yield_type yt;
-        scheduler *schdlr;
-    
+    msg_hdr_wrapper *hdr;
+    io_yield_type yt;
+    scheduler *schdlr;
+
     task get_return_object() {
       return task{std::coroutine_handle<promise_type>::from_promise(*this)};
     }
@@ -53,36 +73,38 @@ using coro_handle = std::coroutine_handle<task::promise_type>;
 struct io_awaitable {
   scheduler &schdlr;
   connection &con;
-  msg_hdr_wrapper hdr;
-  io_awaitable(scheduler &schdlr, connection &con, msg_hdr &hdr)
-      : schdlr(schdlr), con(con), hdr(&hdr) {}
+  msg_hdr_wrapper mhdr;
+  io_awaitable(scheduler &schdlr, connection &con) : schdlr(schdlr), con(con) {}
 };
 
-struct send_awaitable : public io_awaitable {  
-  send_awaitable(scheduler &schdlr, connection &con, msg_hdr& hdr)
-      : io_awaitable(schdlr, con, hdr) {}
+struct send_awaitable : public io_awaitable {
+  send_awaitable(scheduler &schdlr, connection &con, msg_hdr &hdr)
+      : io_awaitable(schdlr, con) {
+    mhdr.hdr = &hdr;
+  }
 
   bool await_ready() noexcept;
 
   void await_suspend(std::coroutine_handle<task::promise_type> caller);
 
-  ssize_t await_resume() noexcept{
-      return hdr.retval;
-  };
+  ssize_t await_resume() noexcept { return mhdr.retval; };
 };
 
-struct recv_awaitable :  io_awaitable{
+struct recv_awaitable : io_awaitable {
 
-  recv_awaitable(scheduler &schdlr, connection &con, msg_hdr &hdr)
-      : io_awaitable(schdlr, con, hdr) {}
+  recv_awaitable(scheduler &schdlr, connection &con, void *buf, size_t len,
+                 size_t &remaining)
+      : io_awaitable(schdlr, con) {
+    mhdr.buf = buf;
+    mhdr.remaining = &remaining;
+    mhdr.len = len;
+  }
 
   bool await_ready() noexcept;
 
   void await_suspend(std::coroutine_handle<task::promise_type> caller);
 
-  ssize_t await_resume() noexcept{
-      return hdr.retval;
-  };
+  ssize_t await_resume() noexcept { return mhdr.retval; };
 };
 
 class scheduler {

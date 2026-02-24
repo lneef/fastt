@@ -30,24 +30,24 @@ void connection::make_progress() {
     return;
   auto &prms = coro->promise();
   bool op_completed = false;
+  auto &mwrapper = *prms.hdr;
   switch (prms.yt) {
   case concurrency::io_yield_type::recv_yield:
     if (can_recv()) {
-      auto rcvd = recv(*prms.hdr->hdr);
-      prms.hdr->retval += rcvd;
-      if (static_cast<size_t>(prms.hdr->retval) ==
-              prms.hdr->hdr->iov->iov_len ||
-          prms.hdr->hdr->flags == 0)
-        op_completed = true;
+      auto rcvd = recv(mwrapper.buf, mwrapper.len, *mwrapper.remaining);
+      if (rcvd == -EAGAIN)
+        return;
+      mwrapper.retval = rcvd;
+      op_completed = rcvd <= 0 || *mwrapper.remaining == 0;
     }
     break;
   case concurrency::io_yield_type::send_yield:
     if (can_send()) {
       auto retval = send(*prms.hdr->hdr);
-      if (retval <= 0)
-        op_completed = true;
-      if (retval == prms.hdr->hdr->iov_len)
-        op_completed = true;
+      if (retval == -EAGAIN)
+        mwrapper.retval = retval > 0 ? retval + mwrapper.retval : retval;
+      op_completed = retval <= 0 ||
+                     mwrapper.retval == static_cast<ssize_t>(mwrapper.hdr->len);
     }
     break;
   }
@@ -55,4 +55,15 @@ void connection::make_progress() {
     prms.schdlr->schedule(*coro);
     coro.reset();
   }
+}
+
+concurrency::send_awaitable connection::send(concurrency::scheduler &schdlr,
+                                             msg_hdr &hdr) {
+  return concurrency::send_awaitable(schdlr, *this, hdr);
+}
+
+concurrency::recv_awaitable connection::recv(concurrency::scheduler &schdlr,
+                                             void *buf, size_t len,
+                                             size_t &remaining) {
+  return concurrency::recv_awaitable(schdlr, *this, buf, len, remaining);
 }
