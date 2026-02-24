@@ -28,19 +28,14 @@ gtest_dep = dependency('gtest', required: true)
 gtest_main_dep = dependency('gtest_main', required: true)
 test_inc = include_directories('include', 'tests')
 
-transport_output_test = executable('transport_output_test',
-  'tests/transport_output_test.cc',
-  include_directories: test_inc,
-  dependencies: [dpdk_dep, gtest_dep, gtest_main_dep],
-  link_with: fastt_lib,
-  link_args: ['-lcap'])
-
-transport_input_test = executable('transport_input_test',
+test_srcs = files('tests/test.cc',
   'tests/transport_input_test.cc',
+'tests/transport_output_test.cc')
+
+unit_tests = executable('unit_tests',
+  test_srcs,
   include_directories: test_inc,
   dependencies: [dpdk_dep, gtest_dep, gtest_main_dep],
   link_with: fastt_lib,
   link_args: ['-lcap'])
-
-test('transport_output_test', transport_output_test)
-test('transport_input_test', transport_input_test)
+test('unit_tests', unit_tests, protocol: 'gtest')

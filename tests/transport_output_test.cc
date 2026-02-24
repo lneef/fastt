@@ -5,6 +5,7 @@
 #include "transport/seq.h"
 #include "transport/transport_output.h"
 
+#include <algorithm>
 #include <bit>
 #include <ranges>
 
@@ -40,11 +41,11 @@ protected:
   transport_output *to;
 };
 
-TEST_F(TransportOutputTest, Placeholder) {
+TEST_F(TransportOutputTest, Reordered) {
     std::vector<seq_t> seqs{{0}, {2}, {3}, {4}, {5}, {6}, {65}};
     std::vector<message*> msgs;
     msgs.reserve(seqs.size());
-    for(auto seq : seqs)
+    for(auto seq : seqs | std::ranges::views::reverse)
         msgs.emplace_back(make_msg(seq));
     for(auto [i, msg] : std::ranges::enumerate_view(msgs))
         to->insert(seqs[i], msg);
