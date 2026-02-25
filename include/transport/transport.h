@@ -95,10 +95,10 @@ enum class connection_state {
 
 class connection;
 template <typename P = packet_if> class transport {
-  static constexpr uint16_t kMaxPayload = 1500 - protocol::defs::kHeaderMTUlen;
   friend class connection;
-
 public:
+
+  static constexpr uint16_t kMaxPayload = 1500 - protocol::defs::kHeaderMTUlen;
   struct {
     uint64_t sent = 0;
     uint64_t retransmissions = 0;
@@ -259,7 +259,8 @@ public:
       scheduler.process_seq(hdr->seq);
       if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
                                                     stats.retransmissions)) {
-        msg->free();
+        // retransmissions should be acknowledged
+        acknowledge();
         return false;
       }
       ttx.acknowledge(hdr->ack, hdr->ts, hdr->sack);
@@ -322,6 +323,8 @@ public:
 
   bool disconnected() { return connection_state::DISCONNECTED == cstate; }
 
+  connection_state get_state() const { return cstate; }
+
   template <typename F> void receive_messages(F &&f) { trx.advance(f); }
 
   bool can_recv() {
@@ -364,7 +367,7 @@ public:
     for (; off < hdr.len; off += kMaxPayload) {
       auto retval = send_single(static_cast<uint8_t *>(hdr.buf) + off,
                                 std::min<size_t>(hdr.len - off, kMaxPayload),
-                                off == 0, off + kMaxPayload > hdr.len);
+                                off == 0, off + kMaxPayload >= hdr.len);
       if (retval < 0) {
         sent = sent == 0 ? retval : sent;
         break;

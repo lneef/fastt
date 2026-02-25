@@ -3,12 +3,13 @@
 #include "message.h"
 #include <bits/types/struct_iovec.h>
 #include <coroutine>
-#include <deque>
 #include <sys/types.h>
-
-class connection;
+#include <optional>
+#include <deque>
 
 namespace concurrency {
+
+enum class io_yield_type { recv_yield = 0, send_yield };
 class scheduler;
 
 struct msg_hdr_wrapper {
@@ -25,18 +26,7 @@ struct msg_hdr_wrapper {
   ssize_t retval = 0;
 };
 
-inline unsigned convert_to_iovec_entry(iovec *vec, unsigned iovec_len,
-                                       ssize_t size) {
-  unsigned i = 0;
-  for (; i < iovec_len; ++i) {
-    if (static_cast<ssize_t>(vec[i].iov_len) > size)
-      return i;
-    size -= vec[i].iov_len;
-  }
-  return i;
-}
 
-enum class io_yield_type { recv_yield = 0, send_yield };
 struct task {
   struct promise_type {
     msg_hdr_wrapper *hdr;
@@ -68,41 +58,112 @@ struct task {
   std::coroutine_handle<promise_type> handle;
 };
 
-using coro_handle = std::coroutine_handle<task::promise_type>;
+template <typename C> void make_progress(C &con) {
+  if (con.coro == std::nullopt)
+    return;
+  auto &prms = con.coro->promise();
+  bool op_completed = false;
+  auto &mwrapper = *prms.hdr;
+  switch (prms.yt) {
+  case concurrency::io_yield_type::recv_yield:
+    if (con.can_recv()) {
+      auto rcvd = con.recv(mwrapper.buf, mwrapper.len, *mwrapper.remaining);
+      if (rcvd == -EAGAIN)
+        return;
+      mwrapper.retval = rcvd;
+      op_completed = rcvd <= 0 || *mwrapper.remaining == 0;
+    }
+    break;
+  case concurrency::io_yield_type::send_yield:
+    if (con.can_send()) {
+      auto retval = con.send(*prms.hdr->hdr);
+      if (retval == -EAGAIN)
+        return;
+      mwrapper.retval = retval > 0 ? retval + mwrapper.retval : retval;
+      op_completed = retval <= 0 ||
+                     mwrapper.retval == static_cast<ssize_t>(mwrapper.hdr->len);
+    }
+    break;
+  }
+  if (op_completed) {
+    prms.schdlr->schedule(*con.coro);
+    con.coro.reset();
+  }
+}
 
-struct io_awaitable {
+class scheduler;
+
+template <typename C> struct io_awaitable {
   scheduler &schdlr;
-  connection &con;
+  C &con;
   msg_hdr_wrapper mhdr;
-  io_awaitable(scheduler &schdlr, connection &con) : schdlr(schdlr), con(con) {}
+  io_awaitable(scheduler &schdlr, C &con)
+      : schdlr(schdlr), con(con), mhdr() {}
 };
 
-struct send_awaitable : public io_awaitable {
-  send_awaitable(scheduler &schdlr, connection &con, msg_hdr &hdr)
-      : io_awaitable(schdlr, con) {
+template <typename C> struct send_awaitable : public io_awaitable<C> {
+  using io_awaitable<C>::con;
+  using io_awaitable<C>::mhdr;
+  using io_awaitable<C>::schdlr;
+  send_awaitable(scheduler &schdlr, C &con, msg_hdr &hdr)
+      : io_awaitable<C>(schdlr, con) {
     mhdr.hdr = &hdr;
   }
 
-  bool await_ready() noexcept;
+  bool await_ready() noexcept {
+    if (!con.can_send())
+      return false;
+    auto sent = con.send(*mhdr.hdr);
+    mhdr.retval = sent;
+    if (sent == -EAGAIN)
+      return false;
+    if (sent <= 0)
+      return true;
+    return mhdr.retval == static_cast<ssize_t>(mhdr.hdr->len);
+  }
 
-  void await_suspend(std::coroutine_handle<task::promise_type> caller);
+  void await_suspend(std::coroutine_handle<task::promise_type> caller) {
+    con.coro = caller;
+    auto &prms = caller.promise();
+    prms.hdr = &mhdr;
+    prms.yt = io_yield_type::send_yield;
+    prms.schdlr = &schdlr; 
+  }
 
   ssize_t await_resume() noexcept { return mhdr.retval; };
 };
 
-struct recv_awaitable : io_awaitable {
-
-  recv_awaitable(scheduler &schdlr, connection &con, void *buf, size_t len,
+template <typename C> struct recv_awaitable : io_awaitable<C> {
+  using io_awaitable<C>::con;
+  using io_awaitable<C>::mhdr;
+  using io_awaitable<C>::schdlr;
+  recv_awaitable(scheduler &schdlr, C &con, void *buf, size_t len,
                  size_t &remaining)
-      : io_awaitable(schdlr, con) {
+      : io_awaitable<C>(schdlr, con) {
     mhdr.buf = buf;
     mhdr.remaining = &remaining;
     mhdr.len = len;
   }
 
-  bool await_ready() noexcept;
+  bool await_ready() noexcept {
+    if (!con.can_recv())
+      return false;
+    auto rcvd = con.recv(mhdr.buf, mhdr.len, *mhdr.remaining);
+    mhdr.retval = rcvd;
+    if (rcvd == -EAGAIN)
+      return false;
+    if (rcvd <= 0)
+      return true;
+    return *mhdr.remaining == 0;
+  }
 
-  void await_suspend(std::coroutine_handle<task::promise_type> caller);
+  void await_suspend(std::coroutine_handle<task::promise_type> caller) {
+    con.coro = caller;
+    auto &prms = caller.promise();
+    prms.hdr = &mhdr;
+    prms.yt = io_yield_type::recv_yield;
+    prms.schdlr = &schdlr;
+  }
 
   ssize_t await_resume() noexcept { return mhdr.retval; };
 };
@@ -113,7 +174,7 @@ class scheduler {
 public:
   scheduler() = default;
 
-  void schedule(task_handle handle) { tasks.push_back(std::move(handle)); }
+  void schedule(task_handle handle) { tasks.push_back(handle); }
 
   void run() {
     run([]() { return false; });
@@ -123,13 +184,10 @@ public:
     auto task_num = tasks.size();
     for (auto i = 0u; i < task_num; ++i) {
       auto t = tasks.front();
+      tasks.pop_front();
       t.resume();
       if (t.done())
-        t.resume();
-      else {
-        tasks.pop_front();
-        tasks.push_back(t);
-      }
+        t.destroy();
 
       if (cb())
         return;
@@ -139,4 +197,8 @@ public:
 private:
   std::deque<task_handle> tasks;
 };
+
+
+using coro_handle = std::coroutine_handle<task::promise_type>;
+
 } // namespace concurrency

@@ -3,23 +3,27 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <generic/rte_cycles.h>
 #include <memory>
 #include <netinet/in.h>
 #include <ranges>
+#include <type_traits>
 #include <utility>
 
 #include "debug.h"
 #include "dev.h"
 #include "message.h"
 #include "packet_if.h"
-#include "task.h"
 #include "transport/protocol.h"
 #include "transport/transport.h"
 #include "util.h"
+#include "task.h"
 
 class iface;
-class connection_manager;
 class coro_handle;
+class server_iface;
+class client_iface;
+class connection_manager;
 
 struct statistics {
   std::vector<transport_statistics> ts;
@@ -49,10 +53,11 @@ public:
     return transport_impl->recv(buf, size, remaining);
   }
 
-  concurrency::send_awaitable send(concurrency::scheduler &schdlr, msg_hdr& hdr);
+  concurrency::send_awaitable<connection> send(concurrency::scheduler &schdlr,
+                                   msg_hdr &hdr);
 
-  concurrency::recv_awaitable recv(concurrency::scheduler &schdlr,
-                                   void* buf, size_t len, size_t &remaining);
+  concurrency::recv_awaitable<connection> recv(concurrency::scheduler &schdlr, void *buf,
+                                   size_t len, size_t &remaining);
 
   transport_statistics get_transport_stats() const {
     return transport_impl->get_stats();
@@ -60,9 +65,11 @@ public:
 
   void transport_ctrl() { transport_impl->check_ctrl(); }
 
-  void make_progress();
-
   bool up() const { return transport_impl->up(); }
+
+  bool disconnecting() const {
+    return transport_impl->get_state() == connection_state::DISCONNECTING;
+  }
 
   bool down() const { return transport_impl->disconnected(); }
 
@@ -75,6 +82,12 @@ public:
   flow_tuple get_flow_tuple() const { return transport_impl->get_flow_tuple(); }
 
   void close() { transport_impl->close_connection(); }
+
+  void accept_close() { 
+      assert(link.is_linked());
+      transport_impl->acknowledge(); 
+      link.unlink();
+  }
 
 private:
   friend class connection_manager;
@@ -92,11 +105,17 @@ class connection_manager {
   static constexpr uint16_t kdefaultBurstSize = 64;
 
 public:
+  template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
-                     uint32_t sip, std::shared_ptr<message_allocator> allocator)
+                     uint32_t sip, std::shared_ptr<message_allocator> allocator,
+                     P *parent)
       : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
-        pkt_if(&scheduler, sip, port), active(), is_client(is_client),
-        flush_timeout(get_ticks_us()) {}
+        pkt_if(&scheduler, sip, port), active(), is_client(is_client) {
+    if constexpr (std::is_same_v<client_iface, P>)
+      client_parent = parent;
+    else
+      server_parent = parent;
+  }
 
   void handle_pkt(message *pkt, flow_tuple &ft) {
 
@@ -136,6 +155,15 @@ public:
     }
   }
 
+  void acknowledge() {
+    auto now = rte_get_timer_cycles();
+    for (auto &con : active) {
+      if (con.disconnecting())
+        continue;
+      con.acknowledge_all(now);
+    }
+  }
+
   void add_mac(uint32_t ip, rte_ether_addr &mac) {
     pkt_if.add_mapping(ip, mac);
   }
@@ -171,11 +199,11 @@ public:
 
   template <typename F> void poll(F &&handler) {
     fetch_from_qpair();
-    accept_connection();
+    accept_connections([](connection*){});
     flush();
     for (auto &con : active)
       handler(con);
-    acknowledge_all_and_reap();
+    acknowledge();
     check_timeouts();
   }
 
@@ -186,12 +214,7 @@ public:
     flush();
   }
 
-  template <typename S, typename F> void run(S &scheduler, F &&handler) {
-    fetch_from_qpair();
-    if (!is_client)
-      accept_connection();
-    scheduler.run();
-  }
+  void run(concurrency::scheduler &scheduler); 
 
   void fetch_from_qpair() {
     std::array<flow_tuple, kdefaultBurstSize> fts;
@@ -220,18 +243,19 @@ public:
     connection_requests.emplace_back(pkt, ft);
   }
 
-  connection *accept_connection() {
-    if (connection_requests.empty())
-      return nullptr;
-    auto [pkt, ft] = connection_requests.front();
-    connection_requests.pop_front();
-    auto [con, inserted] = add_connection(ft, pkt);
-    con->process_pkt(pkt);
-    if (inserted) {
-      con->accept();
-      FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);
+  template<typename F>
+  void accept_connections(F&& cb) {
+    while (!connection_requests.empty()) {
+      auto [pkt, ft] = connection_requests.front();
+      connection_requests.pop_front();
+      auto [con, inserted] = add_connection(ft, pkt);
+      con->process_pkt(pkt);
+      if (inserted) {
+        con->accept();
+        FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);
+        cb(con);
+      }
     }
-    return con;
   }
 
   std::pair<connection *, bool> add_connection(flow_tuple &tuple,
@@ -296,6 +320,9 @@ private:
   intrusive_list_t<connection> active;
   bool is_client;
   uint32_t open_connections = 0;
-  uint64_t flush_timeout;
   packet_vector<kdefaultBurstSize> vec;
+  union {
+    client_iface *client_parent;
+    server_iface *server_parent;
+  };
 };

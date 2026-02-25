@@ -13,7 +13,7 @@ add_project_arguments('-D_POSIX_C_SOURCE=200809L', language: 'c')
 add_project_arguments('-Wpedantic', language: 'c')
 add_project_arguments('-fno-omit-frame-pointer', language: 'cpp')
 
-sources = files('src/client.cc', 'src/connection.cc', 'src/iface.cc', 'src/message.cc', 'src/packet_scheduler.cc', 'src/util.cc', 'src/log.cc')
+sources = files('src/client.cc', 'src/connection.cc', 'src/iface.cc', 'src/message.cc', 'src/packet_scheduler.cc', 'src/util.cc', 'src/log.cc',  'src/task.cc')
 
 fastt_lib = static_library('fastt', sources, include_directories: include_directories('include'), 
   dependencies: [dpdk_dep], link_args: ['-lcap', '-Wl,--allow-multiple-definition', '-Wl,--whole-archive'])
@@ -30,7 +30,8 @@ test_inc = include_directories('include', 'tests')
 
 test_srcs = files('tests/test.cc',
   'tests/transport_input_test.cc',
-'tests/transport_output_test.cc')
+  'tests/transport_output_test.cc',
+  'tests/transport_coro_test.cc')
 
 unit_tests = executable('unit_tests',
   test_srcs,

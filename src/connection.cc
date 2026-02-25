@@ -1,11 +1,11 @@
 #include "connection.h"
 #include "debug.h"
 #include "message.h"
+#include "server.h"
 #include "task.h"
 
 #include <cassert>
 #include <cstdint>
-#include <optional>
 #include <rte_branch_prediction.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
@@ -25,45 +25,26 @@ void connection::accept() { transport_impl->accept_connection(); }
 
 void connection::open_connection() { transport_impl->open_connection(); }
 
-void connection::make_progress() {
-  if (coro == std::nullopt)
-    return;
-  auto &prms = coro->promise();
-  bool op_completed = false;
-  auto &mwrapper = *prms.hdr;
-  switch (prms.yt) {
-  case concurrency::io_yield_type::recv_yield:
-    if (can_recv()) {
-      auto rcvd = recv(mwrapper.buf, mwrapper.len, *mwrapper.remaining);
-      if (rcvd == -EAGAIN)
-        return;
-      mwrapper.retval = rcvd;
-      op_completed = rcvd <= 0 || *mwrapper.remaining == 0;
-    }
-    break;
-  case concurrency::io_yield_type::send_yield:
-    if (can_send()) {
-      auto retval = send(*prms.hdr->hdr);
-      if (retval == -EAGAIN)
-        mwrapper.retval = retval > 0 ? retval + mwrapper.retval : retval;
-      op_completed = retval <= 0 ||
-                     mwrapper.retval == static_cast<ssize_t>(mwrapper.hdr->len);
-    }
-    break;
-  }
-  if (op_completed) {
-    prms.schdlr->schedule(*coro);
-    coro.reset();
-  }
-}
-
-concurrency::send_awaitable connection::send(concurrency::scheduler &schdlr,
+concurrency::send_awaitable<connection> connection::send(concurrency::scheduler &schdlr,
                                              msg_hdr &hdr) {
-  return concurrency::send_awaitable(schdlr, *this, hdr);
+  return concurrency::send_awaitable<connection>(schdlr, *this, hdr);
 }
 
-concurrency::recv_awaitable connection::recv(concurrency::scheduler &schdlr,
+concurrency::recv_awaitable<connection> connection::recv(concurrency::scheduler &schdlr,
                                              void *buf, size_t len,
                                              size_t &remaining) {
-  return concurrency::recv_awaitable(schdlr, *this, buf, len, remaining);
+  return concurrency::recv_awaitable<connection>(schdlr, *this, buf, len, remaining);
+}
+
+void connection_manager::run(concurrency::scheduler &scheduler) {
+  fetch_from_qpair();
+  accept_connections([&](connection *con) {
+    auto service_handler =
+        server_parent->services[ntohs(con->get_flow_tuple().dport)];
+    scheduler.schedule(service_handler(scheduler, *con).handle);
+  });
+  for (auto &con : active)
+    concurrency::make_progress(con);
+  scheduler.run();
+  acknowledge_all_and_reap();
 }

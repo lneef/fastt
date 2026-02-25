@@ -29,7 +29,7 @@ struct netconfig {
 };
 
 struct lcore_server_adapter {
-  std::unique_ptr<server_iface<>> iface;
+  std::unique_ptr<server_iface> iface;
   std::shared_ptr<message_allocator> allocator;
 };
 
@@ -103,9 +103,11 @@ int lcore_server_fun(void *arg) {
           return false;
         size_t rem = 0;
         auto sz = con.recv(&req, sizeof(req), rem);
-        if(sz == 0)
+        if(sz == 0){
             // connection has been closed
+            con.accept_close();
             return false;
+            }
         assert(sz == sizeof(req));
         serve(&resp, &req);
         msg_hdr m;
@@ -149,7 +151,7 @@ int run(netconfig &conf) {
     auto &adapter = adapters[i];
     auto [port, txq, rxq] = ifc->get_slice(i);
     adapter.allocator = std::move(allocators[i]);
-    adapter.iface = std::make_unique<server_iface<>>(
+    adapter.iface = std::make_unique<server_iface>(
         port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator,
         lcore_id);
     ++i;
