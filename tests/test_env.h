@@ -21,6 +21,3 @@ public:
       rte_eal_cleanup();
   }
 };
-
-inline testing::Environment *const dpdk_env =
-    testing::AddGlobalTestEnvironment(new DpdkEnvironment);

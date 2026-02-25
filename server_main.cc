@@ -29,7 +29,7 @@ struct netconfig {
 };
 
 struct lcore_server_adapter {
-  std::unique_ptr<server_iface<>> iface;
+  std::unique_ptr<server_iface> iface;
   std::shared_ptr<message_allocator> allocator;
 };
 
@@ -96,28 +96,22 @@ int lcore_server_fun(void *arg) {
 
   kv::kv_packet<kv::kv_request> req;
   kv::kv_packet<kv::kv_completion> resp;
-  struct iovec iov;
-
   while (!terminate) {
     server->poll([&](connection &con) -> bool {
       while (true) {
         if (!con.can_recv() || !con.can_send())
           return false;
-        msg_hdr m;
-        m.iov = &iov;
-        m.iov_len = 1;
-        m.iov[0].iov_base = reinterpret_cast<uint8_t*>(&req);
-        m.iov[0].iov_len = sizeof(req);
-        auto sz = con.recv(m);
-        if(sz == 0)
+        size_t rem = 0;
+        auto sz = con.recv(&req, sizeof(req), rem);
+        if(sz == 0){
             // connection has been closed
+            con.accept_close();
             return false;
+            }
         assert(sz == sizeof(req));
         serve(&resp, &req);
-        m.iov = &iov;
-        m.iov_len = 1;
-        m.iov[0].iov_base= reinterpret_cast<uint8_t*>(&resp);
-        m.iov[0].iov_len = sizeof(resp);
+        msg_hdr m;
+        m.set_data(&resp, sizeof(resp));
         auto sent = con.send(m);
         if(sent == 0)
             // connection closed (no again)
@@ -157,7 +151,7 @@ int run(netconfig &conf) {
     auto &adapter = adapters[i];
     auto [port, txq, rxq] = ifc->get_slice(i);
     adapter.allocator = std::move(allocators[i]);
-    adapter.iface = std::make_unique<server_iface<>>(
+    adapter.iface = std::make_unique<server_iface>(
         port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator,
         lcore_id);
     ++i;
