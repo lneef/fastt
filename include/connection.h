@@ -201,8 +201,11 @@ public:
     fetch_from_qpair();
     accept_connections([](connection*){});
     flush();
-    for (auto &con : active)
-      handler(con);
+    for (auto it = active.begin(), end = active.end(); it != end;){
+        auto &con = *it;
+        ++it;
+        handler(con);
+    }
     acknowledge();
     check_timeouts();
   }
