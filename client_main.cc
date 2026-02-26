@@ -173,7 +173,7 @@ static void run(lcore_function_t *f, void *args) {
     adapter.allocator[i] = std::move(allocators[i]);
     adapter.cifs[i] = std::make_unique<client_iface>(
         port, txq, rxq, adapter.allocator[i],
-        con_config{conf.sip, conf.sports[i]});
+        con_config{conf.sip, conf.sports[i]}, rte_lcore_count());
     ++i;
   }
 

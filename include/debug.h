@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <rte_log.h>
 
 //#define DEBUG 1
 struct message;

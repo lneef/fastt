@@ -5,8 +5,6 @@
 #include <memory>
 #include <vector>
 #include <rte_ethdev.h>
-#include <rte_ether.h>
-#include <rte_mempool.h>
 
 namespace fastt {
 int init();

@@ -8,9 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <generic/rte_cycles.h>
-#include <rte_ether.h>
-#include <rte_lcore.h>
-#include <rte_timer.h>
 
 #include "kv_protocol.h"
 #include <vector>

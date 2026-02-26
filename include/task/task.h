@@ -3,9 +3,9 @@
 #include "message.h"
 #include <bits/types/struct_iovec.h>
 #include <coroutine>
-#include <sys/types.h>
-#include <optional>
 #include <deque>
+#include <optional>
+#include <sys/types.h>
 
 namespace concurrency {
 
@@ -25,7 +25,6 @@ struct msg_hdr_wrapper {
   };
   ssize_t retval = 0;
 };
-
 
 struct task {
   struct promise_type {
@@ -65,25 +64,21 @@ template <typename C> void make_progress(C &con) {
   bool op_completed = false;
   auto &mwrapper = *prms.hdr;
   switch (prms.yt) {
-  case concurrency::io_yield_type::recv_yield:
-    if (con.can_recv()) {
-      auto rcvd = con.recv(mwrapper.buf, mwrapper.len, *mwrapper.remaining);
-      if (rcvd == -EAGAIN)
-        return;
-      mwrapper.retval = rcvd;
-      op_completed = rcvd <= 0 || *mwrapper.remaining == 0;
-    }
-    break;
-  case concurrency::io_yield_type::send_yield:
-    if (con.can_send()) {
-      auto retval = con.send(*prms.hdr->hdr);
-      if (retval == -EAGAIN)
-        return;
-      mwrapper.retval = retval > 0 ? retval + mwrapper.retval : retval;
-      op_completed = retval <= 0 ||
-                     mwrapper.retval == static_cast<ssize_t>(mwrapper.hdr->len);
-    }
-    break;
+  case concurrency::io_yield_type::recv_yield: {
+    auto rcvd = con.recv(mwrapper.buf, mwrapper.len, *mwrapper.remaining);
+    if (rcvd == -EAGAIN)
+      return;
+    mwrapper.retval = rcvd;
+    op_completed = rcvd <= 0 || *mwrapper.remaining == 0;
+  } break;
+  case concurrency::io_yield_type::send_yield: {
+    auto retval = con.send(*prms.hdr->hdr);
+    if (retval == -EAGAIN)
+      return;
+    mwrapper.retval = retval > 0 ? retval + mwrapper.retval : retval;
+    op_completed = retval <= 0 ||
+                   mwrapper.retval == static_cast<ssize_t>(mwrapper.hdr->len);
+  } break;
   }
   if (op_completed) {
     prms.schdlr->schedule(*con.coro);
@@ -97,8 +92,7 @@ template <typename C> struct io_awaitable {
   scheduler &schdlr;
   C &con;
   msg_hdr_wrapper mhdr;
-  io_awaitable(scheduler &schdlr, C &con)
-      : schdlr(schdlr), con(con), mhdr() {}
+  io_awaitable(scheduler &schdlr, C &con) : schdlr(schdlr), con(con), mhdr() {}
 };
 
 template <typename C> struct send_awaitable : public io_awaitable<C> {
@@ -111,14 +105,12 @@ template <typename C> struct send_awaitable : public io_awaitable<C> {
   }
 
   bool await_ready() noexcept {
-    if (!con.can_send())
-      return false;
     auto sent = con.send(*mhdr.hdr);
-    mhdr.retval = sent;
     if (sent == -EAGAIN)
       return false;
     if (sent <= 0)
       return true;
+    mhdr.retval = sent;
     return mhdr.retval == static_cast<ssize_t>(mhdr.hdr->len);
   }
 
@@ -127,7 +119,7 @@ template <typename C> struct send_awaitable : public io_awaitable<C> {
     auto &prms = caller.promise();
     prms.hdr = &mhdr;
     prms.yt = io_yield_type::send_yield;
-    prms.schdlr = &schdlr; 
+    prms.schdlr = &schdlr;
   }
 
   ssize_t await_resume() noexcept { return mhdr.retval; };
@@ -146,14 +138,12 @@ template <typename C> struct recv_awaitable : io_awaitable<C> {
   }
 
   bool await_ready() noexcept {
-    if (!con.can_recv())
-      return false;
     auto rcvd = con.recv(mhdr.buf, mhdr.len, *mhdr.remaining);
-    mhdr.retval = rcvd;
     if (rcvd == -EAGAIN)
       return false;
     if (rcvd <= 0)
       return true;
+    mhdr.retval = rcvd;
     return *mhdr.remaining == 0;
   }
 
@@ -197,7 +187,6 @@ public:
 private:
   std::deque<task_handle> tasks;
 };
-
 
 using coro_handle = std::coroutine_handle<task::promise_type>;
 

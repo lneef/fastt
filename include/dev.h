@@ -6,7 +6,6 @@
 #include "arch/nic.h"
 #include "arch/ena.h"
 #include <cstdint>
-#include <generic/rte_cycles.h>
 #include <memory>
 #include <rte_cycles.h>
 #include <rte_ethdev.h>

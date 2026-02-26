@@ -3,6 +3,7 @@
 #include "kv_protocol.h"
 #include "message.h"
 #include "server.h"
+#include "task/async.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <bits/types/struct_iovec.h>
@@ -19,6 +20,7 @@
 #include <rte_mempool.h>
 #include <signal.h>
 #include <utility>
+#include "task/async.h"
 
 #include <tlx/container/btree_map.hpp>
 
@@ -96,33 +98,31 @@ int lcore_server_fun(void *arg) {
 
   kv::kv_packet<kv::kv_request> req;
   kv::kv_packet<kv::kv_completion> resp;
-  while (!terminate) {
-    server->poll([&](connection &con) -> bool {
-      while (true) {
-        if (!con.can_recv() || !con.can_send())
-          return false;
-        size_t rem = 0;
-        auto sz = con.recv(&req, sizeof(req), rem);
-        if(sz == 0){
-            // connection has been closed
-            con.accept_close();
-            return false;
-            }
-        assert(sz == sizeof(req));
-        serve(&resp, &req);
-        msg_hdr m;
-        m.set_data(&resp, sizeof(resp));
-        auto sent = con.send(m);
-        if(sent == 0)
-            // connection closed (no again)
-            return false;
-        assert(sent == sizeof(resp));
-      }
-      return true;
-    });
+  server->register_service(2,
+                           [&](concurrency::scheduler &schdlr,
+                               connection &con) -> concurrency::task {
+                             size_t rem = 0;
+                             auto sz = co_await recv(schdlr, con, &req,
+                                                         sizeof(req), rem);
+                             if (sz == 0) {
+                               con.accept_close();
+                               co_return;
+                             }
+                             assert(sz == sizeof(req));
+                             serve(&resp, &req);
+                             msg_hdr m;
+                             m.set_data(&resp, sizeof(resp));
+                             auto sent = co_await send(schdlr, con, m);
+                             if (sent == 0) {
+                               con.accept_close();
+                               co_return;
+                             }
+                             assert(sent == sizeof(resp));
+                           });
+  while (!terminate)
+    server->run();
+  server->complete();
 
-    server->complete();
-  }
   return 0;
 }
 
@@ -153,7 +153,7 @@ int run(netconfig &conf) {
     adapter.allocator = std::move(allocators[i]);
     adapter.iface = std::make_unique<server_iface>(
         port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator,
-        lcore_id);
+        rte_lcore_count());
     ++i;
   }
 

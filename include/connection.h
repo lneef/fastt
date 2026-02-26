@@ -3,10 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <generic/rte_cycles.h>
 #include <memory>
 #include <netinet/in.h>
-#include <ranges>
 #include <type_traits>
 #include <utility>
 
@@ -17,10 +15,9 @@
 #include "transport/protocol.h"
 #include "transport/transport.h"
 #include "util.h"
-#include "task.h"
+#include "task/task.h"
 
 class iface;
-class coro_handle;
 class server_iface;
 class client_iface;
 class connection_manager;
@@ -52,12 +49,6 @@ public:
   ssize_t recv(void *buf, size_t size, size_t &remaining) {
     return transport_impl->recv(buf, size, remaining);
   }
-
-  concurrency::send_awaitable<connection> send(concurrency::scheduler &schdlr,
-                                   msg_hdr &hdr);
-
-  concurrency::recv_awaitable<connection> recv(concurrency::scheduler &schdlr, void *buf,
-                                   size_t len, size_t &remaining);
 
   transport_statistics get_transport_stats() const {
     return transport_impl->get_stats();
@@ -108,9 +99,9 @@ public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
                      uint32_t sip, std::shared_ptr<message_allocator> allocator,
-                     P *parent)
+                     P *parent, uint16_t cores)
       : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
-        pkt_if(&scheduler, sip, port), active(), is_client(is_client) {
+        pkt_if(&scheduler, sip, port), active(), cores(cores), is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
     else
@@ -181,7 +172,7 @@ public:
 
     // find transport level queue pair
     dev.nic_arch->find_port_pair(cfg.ip, sip, cfg.transport_ports.dport,
-                                 cfg.transport_ports.sport, target);
+                                 cfg.transport_ports.sport, target, cores);
     FASTT_LOG_DEBUG("Found pair for incoming: %u -> %u\n",
                     ntohs(cfg.transport_ports.dport),
                     ntohs(cfg.transport_ports.sport));
@@ -234,9 +225,12 @@ public:
     assert(i == 0);
     for (auto *msg : vec)
       pkt_if.strip_header(msg, fts[i++]);
-
-    for (auto [msg, ft] : std::ranges::zip_view(vec, fts))
-      handle_pkt(msg, ft);
+    i = 0;
+    for(; i < vec.i; ++i){
+        auto *msg = vec.pkts[i];
+        auto &ft = fts[i];
+        handle_pkt(msg, ft);
+    }
     vec.clear();
     assert(vec.i == 0);
   }
@@ -321,6 +315,7 @@ private:
   packet_scheduler scheduler;
   packet_if pkt_if;
   intrusive_list_t<connection> active;
+  uint16_t cores;
   bool is_client;
   uint32_t open_connections = 0;
   packet_vector<kdefaultBurstSize> vec;

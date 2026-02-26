@@ -2,10 +2,10 @@
 #include "debug.h"
 #include "message.h"
 #include "server.h"
-#include "task.h"
 
 #include <cassert>
 #include <cstdint>
+#include <netinet/in.h>
 #include <rte_branch_prediction.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
@@ -25,20 +25,11 @@ void connection::accept() { transport_impl->accept_connection(); }
 
 void connection::open_connection() { transport_impl->open_connection(); }
 
-concurrency::send_awaitable<connection> connection::send(concurrency::scheduler &schdlr,
-                                             msg_hdr &hdr) {
-  return concurrency::send_awaitable<connection>(schdlr, *this, hdr);
-}
-
-concurrency::recv_awaitable<connection> connection::recv(concurrency::scheduler &schdlr,
-                                             void *buf, size_t len,
-                                             size_t &remaining) {
-  return concurrency::recv_awaitable<connection>(schdlr, *this, buf, len, remaining);
-}
-
 void connection_manager::run(concurrency::scheduler &scheduler) {
   fetch_from_qpair();
   accept_connections([&](connection *con) {
+    assert(server_parent->services.find(ntohs(con->get_flow_tuple().dport)) !=
+           server_parent->services.end());
     auto service_handler =
         server_parent->services[ntohs(con->get_flow_tuple().dport)];
     scheduler.schedule(service_handler(scheduler, *con).handle);

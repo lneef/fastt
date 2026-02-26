@@ -14,7 +14,7 @@
 #include "util.h"
 
 struct sender_entry {
-  message *packet;
+  message *packet; //this is bad, but ok for now
   seq_t seq;
   bool sacked : 4;
   bool retransmitted : 4;

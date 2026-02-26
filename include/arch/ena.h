@@ -1,12 +1,9 @@
 #pragma once
 
 #include <cstdint>
-#include <rte_ethdev.h>
-#include <rte_lcore.h>
-#include <vector>
 #include <array>
 #include <cstring>
-
+#include <arpa/inet.h>
 #include "nic.h"
 namespace ena {
 static constexpr unsigned kQueueByteOffset = 9;
@@ -59,11 +56,11 @@ struct ena : public nic{
       return toeplitz_hash(sip, dip, sport, dport);
   }
 
-  void find_port_pair(uint32_t sip, uint32_t dip, uint16_t& sport, uint16_t &dport, uint16_t rtid) override{
+  void find_port_pair(uint32_t sip, uint32_t dip, uint16_t& sport, uint16_t &dport, uint16_t rtid, uint16_t cores) override{
       for(uint16_t s = 0; s < UINT16_MAX; ++s){
           for(uint16_t d = 0; d < UINT16_MAX; ++d){
               auto hash = calc_rss_hash(sip, dip, htons(s), htons(d)); 
-              if(hash % rte_lcore_count() == rtid){
+              if(hash % cores == rtid){
                   sport = htons(s);
                   dport = htons(d);
                   return;
