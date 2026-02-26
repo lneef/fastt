@@ -1,19 +1,24 @@
 #pragma once
 
-#include <bit>
 #include <cstdint>
-#include <type_traits>
+
+#include "util.h"
 
 struct seq_t {
   uint32_t v;
 
   friend bool operator<(seq_t a, seq_t b) {
-    return std::bit_cast<int32_t>(a.v - b.v) < 0;
+    return cast::bit_cast<int32_t>(a.v - b.v) < 0;
   }
-
-  friend bool operator>(seq_t a, seq_t b) { return std::bit_cast<int32_t>(a.v - b.v) > 0; }
-  friend bool operator<=(seq_t a, seq_t b) { return std::bit_cast<int32_t>(a.v - b.v) <= 0; }
-  friend bool operator>=(seq_t a, seq_t b) { return std::bit_cast<int32_t>(a.v - b.v) >= 0; }
+  friend bool operator>(seq_t a, seq_t b) {
+    return cast::bit_cast<int32_t>(a.v - b.v) > 0;
+  }
+  friend bool operator<=(seq_t a, seq_t b) {
+    return cast::bit_cast<int32_t>(a.v - b.v) <= 0;
+  }
+  friend bool operator>=(seq_t a, seq_t b) {
+    return cast::bit_cast<int32_t>(a.v - b.v) >= 0;
+  }
   friend bool operator==(seq_t a, seq_t b) { return a.v == b.v; }
   friend bool operator!=(seq_t a, seq_t b) { return a.v != b.v; }
 

@@ -5,8 +5,8 @@
 #include "transport/seq.h"
 #include "transport/transport_output.h"
 
-#include <algorithm>
 #include <bit>
+#include <gtest/gtest.h>
 #include <ranges>
 
 class TransportOutputTest : public ::testing::Test {
@@ -25,8 +25,8 @@ protected:
     return make_frag(seq, true, true);
   }
 
-  message *make_frag(seq_t seq, bool start, bool end) {
-    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
+  message *make_frag(seq_t seq, bool start, bool end, char payload = 'A') {
+    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header) + 1);
     EXPECT_NE(msg, nullptr);
     auto *hdr = msg->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_MSG;
@@ -34,6 +34,7 @@ protected:
     hdr->end = end;
     hdr->seq = seq;
     *msg->get_ts() = 0;
+    *msg->data<char>(sizeof(protocol::ft_header)) = payload;
     return msg;
   }
 
@@ -63,28 +64,57 @@ TEST_F(TransportOutputTest, Reordered) {
 }
 
 TEST_F(TransportOutputTest, MultiSegmentReassembly) {
-    to->insert({0}, make_frag({0}, true, false));
-    to->insert({1}, make_frag({1}, false, false));
-    to->insert({2}, make_frag({2}, false, true));
+    to->insert({0}, make_frag({0}, true, false, 'A'));
+    to->insert({1}, make_frag({1}, false, false, 'B'));
+    to->insert({2}, make_frag({2}, false, true, 'C'));
 
     EXPECT_EQ(to->out.size(), 1);
-    auto *msg = to->out.front();
+    auto *msg = to->out.front().first;
     EXPECT_EQ(msg->nb_segs, 3);
 
     to->insert({3}, make_msg({3}));
     EXPECT_EQ(to->out.size(), 2u);
-    EXPECT_EQ(to->out.back()->nb_segs, 1);
+    EXPECT_EQ(to->out.back().first->nb_segs, 1);
+}
+
+TEST_F(TransportOutputTest, ProactiveCreditReturnForBufferedMessage) {
+    to->prepare_wnd_return();
+
+    to->insert({0}, make_frag({0}, true, false, 'A'));
+    to->insert({1}, make_frag({1}, false, false, 'B'));
+    to->insert({2}, make_frag({2}, false, false, 'C'));
+
+    EXPECT_EQ(to->out.size(), 0u);
+    EXPECT_EQ(to->crds_in_reassembly, 3u);
+
+    char buf[64] = {};
+    size_t remaining = 0;
+    EXPECT_EQ(to->read(buf, sizeof(buf), remaining), -EAGAIN);
+    EXPECT_EQ(to->get_available_wnd(), 3u);
+    EXPECT_EQ(to->crds_in_reassembly, 0u);
+
+    // complete the message with the final fragment
+    to->insert({3}, make_frag({3}, false, true, 'D'));
+    EXPECT_EQ(to->out.size(), 1u);
+    EXPECT_EQ(to->out.front().second, 1u);
+
+    auto prev_wnd = to->get_available_wnd();
+    auto ret = to->read(buf, sizeof(buf), remaining);
+    EXPECT_GT(ret, 0);
+    EXPECT_EQ(to->get_available_wnd(), prev_wnd + 1);
+
+    EXPECT_STREQ(buf, "ABCD");;
 }
 
 TEST_F(TransportOutputTest, MultiSegmentReassemblyReordered) {
-    to->insert({0}, make_frag({0}, true, false));
-    to->insert({2}, make_frag({2}, false, true));
+    to->insert({0}, make_frag({0}, true, false, 'A'));
+    to->insert({2}, make_frag({2}, false, true, 'C'));
 
     EXPECT_EQ(to->out.size(), 0u);
     EXPECT_TRUE(to->has_holes());
 
-    to->insert({1}, make_frag({1}, false, false));
+    to->insert({1}, make_frag({1}, false, false, 'B'));
     EXPECT_EQ(to->out.size(), 1u);
-    EXPECT_EQ(to->out.front()->nb_segs, 3);
+    EXPECT_EQ(to->out.front().first->nb_segs, 3);
     EXPECT_FALSE(to->has_holes());
 }

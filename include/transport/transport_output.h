@@ -90,16 +90,6 @@ struct transport_output {
     reassemble(seq, msg);
   }
 
-  template <typename F> bool advance(F &&f) {
-    if (out.empty())
-      return false;
-    auto *msg = out.front();
-    out.pop_front();
-    grant_to_return += msg->nb_segs;
-    f(msg);
-    return true;
-  }
-
   void reassemble_single_msg(message *mbuf) {
     auto *hdr = mbuf->data<protocol::ft_header>();
     // control frames are freed
@@ -107,13 +97,15 @@ struct transport_output {
       mbuf->free();
       return;
     }
+    crds_in_reassembly += mbuf->nb_segs;
     bool end = hdr->end;
     mbuf->shrink_headroom(sizeof(protocol::ft_header));
     message::merge(first, last, mbuf);
     if (end) {
       auto *msg = first;
       first = last = nullptr;
-      out.push_back(msg);
+      out.emplace_back(msg, crds_in_reassembly);
+      crds_in_reassembly = 0;
     }
   }
 
@@ -178,9 +170,14 @@ struct transport_output {
   }
 
   ssize_t read(void *buf, size_t size, size_t &remaining) {
-    if (out.empty())
+    if (out.empty()){
+      // proactively return grant  
+      grant_to_return += crds_in_reassembly;
+      crds_in_reassembly = 0;
       return -EAGAIN;
-    auto *msg = out.front();
+    }
+    auto buffered = out.front();
+    auto* msg = buffered.first;
     if (msg->pkt_len > size) {
       remaining = msg->pkt_len;
       return -EMSGSIZE;
@@ -191,7 +188,7 @@ struct transport_output {
     else
       std::memcpy(buf, msg->data<uint8_t>() + off, to_copy);
     off += to_copy;
-    grant_to_return += msg->nb_segs;
+    grant_to_return += buffered.second;
     out.pop_front();
     msg->free();
     remaining = 0;
@@ -216,8 +213,9 @@ struct transport_output {
   // pkt reassmbly and buffering
   message *first = nullptr, *last = nullptr;
   message_allocator *port_allocator;
+  unsigned crds_in_reassembly = 0;
   reorder_buffer rb;
-  std::deque<message *> out;
+  std::deque<std::pair<message *, unsigned>> out;
   size_t off = 0;
 
   // connection state

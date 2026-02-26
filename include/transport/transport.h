@@ -325,8 +325,6 @@ public:
 
   connection_state get_state() const { return cstate; }
 
-  template <typename F> void receive_messages(F &&f) { trx.advance(f); }
-
   bool can_recv() {
     return trx.has_buffered_messages_frags() ||
            cstate != connection_state::ESTABLISHED;
@@ -362,6 +360,9 @@ public:
   }
 
   ssize_t send(msg_hdr &hdr) {
+    // large messages should be split up  
+    if(hdr.len > kMaxPayload * transport_output::kMaxWndSize * 0.5)
+        return -EMSGSIZE;
     auto &off = hdr.off;
     ssize_t sent = 0;
     for (; off < hdr.len; off += kMaxPayload) {

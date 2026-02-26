@@ -63,6 +63,7 @@ public:
     while (!unacked.empty() && unacked.front().seq < seq) {
       auto &desc = unacked.front();
       assert(desc.packet);
+      inflight -= desc.packet->pkt_len - protocol::defs::kuserDataOffset;
       unacked.pop_front();
     }
     assert(!unacked.empty());
@@ -86,6 +87,7 @@ public:
       return false;
     --budget;
     ctor(msg, seq);
+    inflight += msg->pkt_len;
     msg->inc_refcnt();
     *msg->get_ts() = 0;
     unacked.emplace_back(msg, seq++, false);
@@ -145,6 +147,7 @@ public:
       } else if (!desc.sacked) {
         /* we want the largest seq not acked yet */
         largest_acked = &(*it);
+        inflight -= desc.packet->pkt_len - protocol::defs::kuserDataOffset;
         desc.sacked = true;
       }
       ++it;
@@ -185,6 +188,7 @@ private:
   uint32_t budget = 0;
   seq_t seq{0};
   seq_t least_unacked_pkt{0};
+  uint64_t inflight = 0;
   uint64_t rtt = 0;
   uint64_t rto = get_ticks_ms() * 5;
   uint64_t timeout;

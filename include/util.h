@@ -23,6 +23,23 @@ namespace bu = boost::unordered;
 extern uint64_t to_us;
 extern uint64_t to_ms;
 
+/*
+ * bitcast
+ */
+namespace cast{
+template <typename To, typename From>
+typename std::enable_if<sizeof(To) == sizeof(From) && 
+    std::is_trivially_copyable<From>::value &&
+    std::is_trivially_copyable<To>::value,
+    To>::type
+
+bit_cast(const From& src) noexcept {
+    To dst;
+    std::memcpy(&dst, &src, sizeof(To));
+    return dst;
+}
+};
+
 void init_timing();
 
 using list_hook =
