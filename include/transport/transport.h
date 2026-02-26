@@ -308,11 +308,12 @@ public:
   void accept_connection() {
     auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
     assert(msg);
+    auto ack = trx.get_last_rcvd_in_seq();
     ttx.record_ctrl_pkt(msg, [&, budget = trx.prepare_wnd_return()](
                                  message *msg, seq_t seq) {
       FASTT_LOG_DEBUG("Sent CLR_TO_SD seq=%u ack=%u wnd=%u flow=%s\n", seq.v,
-                      ack.v, hdr->wnd, get_flow_tuple().print().c_str());
-      builder.prepare_init_ack_header(msg, seq, seq, budget);
+                      ack.v, budget, get_flow_tuple().print().c_str());
+      builder.prepare_init_ack_header(msg, seq, ack, budget);
     });
     // TODO: move this up
     ttx.rearm(rte_get_timer_cycles());

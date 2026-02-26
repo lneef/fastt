@@ -4,8 +4,10 @@
 #include "message.h"
 #include "packet_scheduler.h"
 #include "util.h"
+#include <chrono>
 #include <cstdint>
 #include <netinet/in.h>
+#include <random>
 #include <rte_byteorder.h>
 #include <rte_ether.h>
 #include <rte_gro.h>
@@ -16,6 +18,19 @@
 #include <rte_memory.h>
 #include <rte_udp.h>
 
+struct packet_drop_sim {
+  void set_rate(double rate) { threshold = rate * UINT32_MAX; }
+
+  bool should_drop() { return threshold && dist(rng) < threshold; }
+
+  packet_drop_sim()
+      : rng(std::chrono::steady_clock::now().time_since_epoch().count()) {}
+
+  uint32_t threshold = 0;
+  std::mt19937 rng;
+  std::uniform_int_distribution<uint32_t> dist{0, UINT32_MAX};
+};
+
 class packet_if {
   static constexpr uint16_t kdefaultTTL = 64;
 
@@ -23,6 +38,7 @@ public:
   packet_if(packet_scheduler *scheduler, uint32_t sip, uint16_t port)
       : arp_table(), scheduler(scheduler), sip(sip) {
     rte_eth_macaddr_get(port, &smac);
+    sim.set_rate(0.0);
   }
 
   rte_udp_hdr *udp_header(message *msg, uint16_t sport, uint16_t dport) {
@@ -134,6 +150,11 @@ public:
       return nullptr;
     }
 
+    if (sim.should_drop()) {
+      rte_pktmbuf_free(mbuf);
+      return nullptr;
+    }
+
     return static_cast<message *>(mbuf);
   }
 
@@ -142,11 +163,10 @@ public:
     strip_udp(msg, ft);
   }
 
-  uint32_t get_sip() const{
-      return sip;
-  }
+  uint32_t get_sip() const { return sip; }
 
 private:
+  packet_drop_sim sim;
   flow_table<uint32_t, rte_ether_addr> arp_table;
   rte_ether_addr smac;
   packet_scheduler *scheduler;
