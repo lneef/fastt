@@ -26,11 +26,6 @@ int fastt::init() {
   return msg_fragment::init();
 }
 
-static constexpr auto deleter = [](rte_mempool *pool) {
-  if (pool)
-    rte_mempool_free(pool);
-};
-
 static inline int setup_reta(uint16_t port, uint32_t nrx, uint32_t reta_size){
     auto groups = reta_size / RTE_ETH_RETA_GROUP_SIZE;
     std::vector<rte_eth_rss_reta_entry64> reta(groups);

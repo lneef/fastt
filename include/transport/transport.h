@@ -407,9 +407,10 @@ public:
 
   flow_tuple get_flow_tuple() const {
     flow_tuple ft;
+    ft.sip = pkt_if->get_sip();
     ft.dport = builder.sport;
     ft.sport = builder.dport;
-    ft.sip = cfg.ip;
+    ft.dip = cfg.ip;
     return ft;
   }
 
