@@ -94,12 +94,11 @@ int lcore_server_fun(void *arg) {
   auto myid = rte_lcore_index(rte_lcore_id());
   auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
   auto *server = adapters[myid].iface.get();
-
-  kv::kv_packet<kv::kv_request> req{};
-  kv::kv_packet<kv::kv_completion> resp{};
   server->register_service(2,
-                           [&, req , resp](concurrency::scheduler &schdlr,
-                               connection &con) mutable -> concurrency::task {
+                           [&](concurrency::scheduler &schdlr,
+                               connection &con) -> concurrency::task {
+                             kv::kv_packet<kv::kv_request> req;
+                             kv::kv_packet<kv::kv_completion> resp;
                              while (true) {
                                size_t rem = 0;
                                auto sz = co_await recv(schdlr, con, &req,
