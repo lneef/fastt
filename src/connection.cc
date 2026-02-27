@@ -22,12 +22,13 @@ void connection::open_connection() { transport_impl->open_connection(); }
 void connection_manager::run(concurrency::scheduler &scheduler) {
   fetch_from_qpair();
   accept_connections([&](connection *con) {
-    assert(server_parent->services.find(ntohs(con->get_flow_tuple().dport)) !=
+    assert(server_parent->services.find(ntohs(con->get_flow_tuple().sport)) !=
            server_parent->services.end());
     auto service_handler =
         server_parent->services[ntohs(con->get_flow_tuple().dport)];
     scheduler.schedule(service_handler(scheduler, *con).handle);
   });
+  flush();
   for (auto &con : active)
     concurrency::make_progress(con);
   scheduler.run();

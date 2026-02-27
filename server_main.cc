@@ -20,7 +20,6 @@
 #include <rte_mempool.h>
 #include <signal.h>
 #include <utility>
-#include "task/async.h"
 
 #include <tlx/container/btree_map.hpp>
 
@@ -101,24 +100,27 @@ int lcore_server_fun(void *arg) {
   server->register_service(2,
                            [&](concurrency::scheduler &schdlr,
                                connection &con) -> concurrency::task {
-                             size_t rem = 0;
-                             auto sz = co_await recv(schdlr, con, &req,
-                                                         sizeof(req), rem);
-                             if (sz == 0) {
-                               con.accept_close();
-                               co_return;
+                             while (true) {
+                               size_t rem = 0;
+                               auto sz = co_await recv(schdlr, con, &req,
+                                                       sizeof(req), rem);
+                               if (sz == 0) {
+                                 con.accept_close();
+                                 co_return;
+                               }
+                               assert(sz == sizeof(req));
+                               serve(&resp, &req);
+                               msg_hdr m;
+                               m.set_data(&resp, sizeof(resp));
+                               auto sent = co_await send(schdlr, con, m);
+                               if (sent == 0) {
+                                 con.accept_close();
+                                 co_return;
+                               }
+                               assert(sent == sizeof(resp));
                              }
-                             assert(sz == sizeof(req));
-                             serve(&resp, &req);
-                             msg_hdr m;
-                             m.set_data(&resp, sizeof(resp));
-                             auto sent = co_await send(schdlr, con, m);
-                             if (sent == 0) {
-                               con.accept_close();
-                               co_return;
-                             }
-                             assert(sent == sizeof(resp));
                            });
+
   while (!terminate)
     server->run();
   server->complete();

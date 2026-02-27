@@ -395,6 +395,8 @@ public:
     if (connection_state::ESTABLISHED != cstate)
       return 0;
     auto ret = trx.read(buf, size, remaining);
+    if(ret == -EAGAIN)
+        return ret;
     FASTT_LOG_DEBUG("recv ret=%zd\n", ret);
     return ret;
   }
