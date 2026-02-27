@@ -1,6 +1,6 @@
 #include "connection.h"
 #include "debug.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "server.h"
 
 #include <cassert>
@@ -14,7 +14,7 @@
 #include <rte_memcpy.h>
 
 void connection::process_pkt(rte_mbuf *pkt) {
-  transport_impl->process_pkt((static_cast<message *>(pkt)));
+  transport_impl->process_pkt((static_cast<msg_fragment *>(pkt)));
 }
 
 void connection::acknowledge_all(uint64_t now) {

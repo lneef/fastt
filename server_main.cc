@@ -1,7 +1,7 @@
 #include "connection.h"
 #include "iface.h"
 #include "kv_protocol.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "server.h"
 #include "task/async.h"
 #include <arpa/inet.h>
@@ -32,7 +32,7 @@ struct netconfig {
 
 struct lcore_server_adapter {
   std::unique_ptr<server_iface> iface;
-  std::shared_ptr<message_allocator> allocator;
+  std::shared_ptr<msg_fragment_allocator> allocator;
 };
 
 static std::random_device dev;
@@ -134,10 +134,10 @@ int run(netconfig &conf) {
   auto nthreads = rte_lcore_count();
   unsigned i = 0;
   uint16_t lcore_id;
-  std::vector<std::shared_ptr<message_allocator>> allocators;
+  std::vector<std::shared_ptr<msg_fragment_allocator>> allocators;
   allocators.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
-    allocators.emplace_back(std::make_shared<message_allocator>(
+    allocators.emplace_back(std::make_shared<msg_fragment_allocator>(
         ("mpool" + std::to_string(i)).c_str(), 16383));
     ++i;
   }

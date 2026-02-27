@@ -1,6 +1,6 @@
 #include "test_env.h"
 
-#include "message.h"
+#include "msg_fragment.h"
 #include "transport/protocol.h"
 #include "transport/seq.h"
 #include "transport/transport.h"
@@ -14,7 +14,7 @@
 class TransportOutputTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    allocator = new message_allocator("test_pool", 1023);
+    allocator = new msg_fragment_allocator("test_pool", 1023);
     to = new transport_output(allocator);
   }
 
@@ -23,12 +23,12 @@ protected:
     delete allocator;
   }
 
-  message *make_msg(seq_t seq) {
+  msg_fragment *make_msg(seq_t seq) {
     return make_frag(seq, true, true);
   }
 
-  message *make_frag(seq_t seq, bool start, bool end, char payload = 'A') {
-    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header) + 1);
+  msg_fragment *make_frag(seq_t seq, bool start, bool end, char payload = 'A') {
+    auto *msg = allocator->alloc_msg_fragment(sizeof(protocol::ft_header) + 1);
     EXPECT_NE(msg, nullptr);
     auto *hdr = msg->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_MSG;
@@ -40,8 +40,8 @@ protected:
     return msg;
   }
 
-  message *make_ctrl(seq_t seq) {
-    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
+  msg_fragment *make_ctrl(seq_t seq) {
+    auto *msg = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     EXPECT_NE(msg, nullptr);
     auto *hdr = msg->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_WND_RET;
@@ -50,13 +50,13 @@ protected:
     return msg;
   }
 
-  message_allocator *allocator;
+  msg_fragment_allocator *allocator;
   transport_output *to;
 };
 
 TEST_F(TransportOutputTest, Reordered) {
     std::vector<seq_t> seqs{{0}, {1}, {3}, {4}, {5}, {6}, {65}};
-    std::vector<message*> msgs;
+    std::vector<msg_fragment*> msgs;
     msgs.reserve(seqs.size());
     for(auto seq : seqs)
         if(seq == seq_t(1))
@@ -111,7 +111,7 @@ TEST_F(TransportOutputTest, ProactiveCreditReturnForBufferedMessage) {
     EXPECT_EQ(to->get_available_wnd(), 3u);
     EXPECT_EQ(to->crds_in_reassembly, 0u);
 
-    // complete the message with the final fragment
+    // complete the msg_fragment with the final fragment
     to->insert({3}, make_frag({3}, false, true, 'D'));
     EXPECT_EQ(to->out.size(), 1u);
     EXPECT_EQ(to->out.front().second, 1u);

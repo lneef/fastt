@@ -10,7 +10,7 @@
 
 #include "debug.h"
 #include "dev.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "packet_if.h"
 #include "transport/protocol.h"
 #include "transport/transport.h"
@@ -31,7 +31,7 @@ class connection {
   static constexpr uint16_t kMaxSlotsPerConnection = 128;
 
 public:
-  connection(message_allocator *allocator, packet_if *pkt_if,
+  connection(msg_fragment_allocator *allocator, packet_if *pkt_if,
              const transport_config &cfg, uint16_t sport, uint16_t dport,
              connection_manager *manager, bool is_client)
       : allocator(allocator), transport_impl(std::make_unique<transport<>>(
@@ -82,7 +82,7 @@ public:
 
 private:
   friend class connection_manager;
-  message_allocator *allocator;
+  msg_fragment_allocator *allocator;
   std::unique_ptr<transport<>> transport_impl;
   connection_manager *manager;
   bool is_client;
@@ -98,7 +98,7 @@ class connection_manager {
 public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
-                     uint32_t sip, std::shared_ptr<message_allocator> allocator,
+                     uint32_t sip, std::shared_ptr<msg_fragment_allocator> allocator,
                      P *parent, uint16_t cores)
       : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
         pkt_if(&scheduler, sip, port), active(), cores(cores), is_client(is_client) {
@@ -108,7 +108,7 @@ public:
       server_parent = parent;
   }
 
-  void handle_pkt(message *pkt, flow_tuple &ft) {
+  void handle_pkt(msg_fragment *pkt, flow_tuple &ft) {
 
     FASTT_LOG_DEBUG("Got pkt via UDP ports: %s \n", ft.print().c_str());
     auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
@@ -235,7 +235,7 @@ public:
     assert(vec.i == 0);
   }
 
-  void register_request(message *pkt, flow_tuple &ft) {
+  void register_request(msg_fragment *pkt, flow_tuple &ft) {
     FASTT_LOG_DEBUG("Registering new request");
     connection_requests.emplace_back(pkt, ft);
   }
@@ -256,7 +256,7 @@ public:
   }
 
   std::pair<connection *, bool> add_connection(flow_tuple &tuple,
-                                               message *pkt) {
+                                               msg_fragment *pkt) {
     transport_config cfg;
     cfg.ip = tuple.sip;
     cfg.transport_ports.dport = tuple.sport;
@@ -308,8 +308,8 @@ public:
   ~connection_manager() {}
 
 private:
-  std::shared_ptr<message_allocator> allocator;
-  std::deque<std::pair<message *, flow_tuple>> connection_requests;
+  std::shared_ptr<msg_fragment_allocator> allocator;
+  std::deque<std::pair<msg_fragment *, flow_tuple>> connection_requests;
   flow_table<flow_tuple, std::unique_ptr<connection>> flows;
   qpair dev;
   packet_scheduler scheduler;

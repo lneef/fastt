@@ -1,7 +1,7 @@
 #include "debug.h"
-#include "message.h"
+#include "msg_fragment.h"
 
-void dump_pkt(message *msg, uint16_t len) {
+void dump_pkt(msg_fragment *msg, uint16_t len) {
   static constexpr size_t bytes_per_line = 16;
   auto *data = static_cast<char *>(msg->data());
   for (size_t i = 0; i < len; i += bytes_per_line) {

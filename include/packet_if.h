@@ -1,7 +1,7 @@
 #pragma once
 
 #include "debug.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "packet_scheduler.h"
 #include "util.h"
 #include <chrono>
@@ -38,7 +38,7 @@ public:
     sim.set_rate(0.0);
   }
 
-  rte_udp_hdr *udp_header(message *msg, uint16_t sport, uint16_t dport) {
+  rte_udp_hdr *udp_header(msg_fragment *msg, uint16_t sport, uint16_t dport) {
     auto *udp = msg->move_headroom<rte_udp_hdr>();
     udp->src_port = sport;
     udp->dst_port = dport;
@@ -48,7 +48,7 @@ public:
     return udp;
   }
 
-  void ip_header(message *msg, rte_udp_hdr *udp_header, uint32_t source,
+  void ip_header(msg_fragment *msg, rte_udp_hdr *udp_header, uint32_t source,
                  uint32_t target) {
     auto *ipv4 = msg->move_headroom<rte_ipv4_hdr>();
     ipv4->src_addr = source;
@@ -69,7 +69,7 @@ public:
     udp_header->dgram_cksum = rte_ipv4_phdr_cksum(ipv4, msg->ol_flags);
   }
 
-  void eth_header(message *msg, const rte_ether_addr &smac,
+  void eth_header(msg_fragment *msg, const rte_ether_addr &smac,
                   const rte_ether_addr &dmac) {
     auto *eth = msg->move_headroom<rte_ether_hdr>();
     rte_ether_addr_copy(&dmac, &eth->dst_addr);
@@ -78,7 +78,7 @@ public:
     msg->l2_len = sizeof(rte_ether_hdr);
   }
 
-  void consume_pkt(message *pkt, transport_config &cfg) {
+  void consume_pkt(msg_fragment *pkt, transport_config &cfg) {
     auto *udp =
         udp_header(pkt, cfg.transport_ports.sport, cfg.transport_ports.dport);
     ip_header(pkt, udp, sip, cfg.ip);
@@ -89,7 +89,7 @@ public:
     scheduler->add_pkt(static_cast<rte_mbuf *>(pkt));
   }
 
-  void consume_for_retransmission(message *msg) { scheduler->add_pkt(msg); }
+  void consume_for_retransmission(msg_fragment *msg) { scheduler->add_pkt(msg); }
 
   void add_mapping(uint32_t ip, rte_ether_addr &addr) {
     arp_table.emplace(ip, addr);
@@ -97,7 +97,7 @@ public:
 
   void broken_packet(rte_mbuf *pkt) {
     FASTT_LOG_DEBUG("Got broken packet\n");
-    FASTT_DUMP_PKT(static_cast<message *>(pkt), pkt->data_len);
+    FASTT_DUMP_PKT(static_cast<msg_fragment *>(pkt), pkt->data_len);
     rte_pktmbuf_free(pkt);
   }
 
@@ -131,7 +131,7 @@ public:
     rte_pktmbuf_adj(mbuf, sizeof(rte_udp_hdr));
   }
 
-  message *consume_pkt(rte_mbuf *mbuf) {
+  msg_fragment *consume_pkt(rte_mbuf *mbuf) {
     if (!check_ether(mbuf)) {
       broken_packet(mbuf);
       return nullptr;
@@ -152,10 +152,10 @@ public:
       return nullptr;
     }
 
-    return static_cast<message *>(mbuf);
+    return static_cast<msg_fragment *>(mbuf);
   }
 
-  void strip_header(message *msg, flow_tuple &ft) {
+  void strip_header(msg_fragment *msg, flow_tuple &ft) {
     strip_ether_ip(msg, ft);
     strip_udp(msg, ft);
   }

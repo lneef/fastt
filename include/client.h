@@ -1,7 +1,7 @@
 #pragma once
 
 #include "connection.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "util.h"
 #include <cstdint>
 #include <memory>
@@ -13,7 +13,7 @@ class client_iface {
 
 public:
   client_iface(uint16_t port, uint16_t txq, uint16_t rxq,
-               std::shared_ptr<message_allocator> pool,
+               std::shared_ptr<msg_fragment_allocator> pool,
                const con_config &scon_config, uint16_t cores)
       : scon_config(scon_config),
         manager(true, port, txq, rxq, scon_config.ip, pool, this, cores) {}

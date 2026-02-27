@@ -3,29 +3,29 @@
 #include <cassert>
 #include <cstdint>
 #include <deque>
-#include <message.h>
+#include <msg_fragment.h>
 #include <rte_cycles.h>
 
 #include "debug.h"
 #include "filter.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "protocol.h"
 #include "transport/seq.h"
 #include "util.h"
 
 struct sender_entry {
-  message *packet; //this is bad, but ok for now
+  msg_fragment *packet; //this is bad, but ok for now
   seq_t seq;
   bool sacked : 4;
   bool retransmitted : 4;
   sender_entry() : packet(nullptr), seq(0), retransmitted(false) {}
-  sender_entry(message *packet, seq_t seq, bool retransmitted)
+  sender_entry(msg_fragment *packet, seq_t seq, bool retransmitted)
       : packet(packet), seq(seq), sacked(false), retransmitted(retransmitted) {}
 
   bool requires_retry(uint64_t now, uint64_t rto) {
     return now > *packet->get_ts() + rto;
   }
-  message *get() { return packet; }
+  msg_fragment *get() { return packet; }
 
   sender_entry(const sender_entry &) = delete;
 
@@ -75,14 +75,14 @@ public:
   }
 
   template<typename F>
-  void record_ctrl_pkt(message* msg, F &&ctor){
+  void record_ctrl_pkt(msg_fragment* msg, F &&ctor){
       ctor(msg, seq);
       msg->inc_refcnt();
       *msg->get_ts() = 0;
       unacked.emplace_back(msg, seq++, false);
   }
 
-  template <typename F> bool record_pkt(message *msg, F &&ctor) {
+  template <typename F> bool record_pkt(msg_fragment *msg, F &&ctor) {
     if (budget == 0)
       return false;
     --budget;

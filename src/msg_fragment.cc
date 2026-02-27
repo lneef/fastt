@@ -1,4 +1,4 @@
-#include "message.h"
+#include "msg_fragment.h"
 #include "debug.h"
 #include <cstdint>
 
@@ -11,9 +11,9 @@ static const struct rte_mbuf_dynfield tsc_dynfield_desc = {
 
 
 
-int message::timestamp = -1;
+int msg_fragment::timestamp = -1;
 
-int message::init(){
+int msg_fragment::init(){
     timestamp = rte_mbuf_dynfield_register(&tsc_dynfield_desc);
     if(timestamp < 0){
         FASTT_LOG_DEBUG("Registering timestamp failed\n");

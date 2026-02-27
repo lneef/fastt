@@ -1,7 +1,7 @@
 #pragma once
 
 #include "connection.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "util.h"
 
 #include <boost/unordered/unordered_flat_map.hpp>
@@ -17,7 +17,7 @@ class server_iface {
 public:
   server_iface(uint16_t port, uint16_t txq, uint16_t rxq,
                const con_config &scon_config,
-               std::shared_ptr<message_allocator> pool, uint16_t cores)
+               std::shared_ptr<msg_fragment_allocator> pool, uint16_t cores)
       : scon_config(scon_config),
         manager(false, port, txq, rxq, scon_config.ip, pool, this, cores) {}
 

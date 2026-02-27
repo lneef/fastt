@@ -1,7 +1,7 @@
 #include "task/task.h"
 #include "test_env.h"
 
-#include "message.h"
+#include "msg_fragment.h"
 #include "transport/protocol.h"
 #include "transport/seq.h"
 #include "transport/transport.h"
@@ -15,19 +15,19 @@
 #include <optional>
 
 struct mock_packet_if {
-  std::deque<message *> sent_pkts;
+  std::deque<msg_fragment *> sent_pkts;
 
-  void consume_pkt(message *pkt, transport_config &) {
+  void consume_pkt(msg_fragment *pkt, transport_config &) {
     pkt->inc_refcnt();
     sent_pkts.push_back(pkt);
   }
 
-  void consume_for_retransmission(message *msg) {
+  void consume_for_retransmission(msg_fragment *msg) {
     msg->inc_refcnt();
     sent_pkts.push_back(msg);
   }
 
-  message *pop() {
+  msg_fragment *pop() {
     if (sent_pkts.empty())
       return nullptr;
     auto *m = sent_pkts.front();
@@ -98,7 +98,7 @@ protected:
   static constexpr uint16_t kDport = 200;
 
   void SetUp() override {
-    allocator = new message_allocator("coro_test_pool", 1023);
+    allocator = new msg_fragment_allocator("coro_test_pool", 1023);
     mock = new mock_packet_if();
     cfg.ip = 0x01020304;
     cfg.transport_ports.sport = kSport;
@@ -113,7 +113,7 @@ protected:
   }
 
   void establish() {
-    auto *pkt = allocator->alloc_message(sizeof(protocol::ft_header));
+    auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_RDY_TO_RCV;
     hdr->sport = kDport;
@@ -131,10 +131,10 @@ protected:
     mock->clear();
   }
 
-  message *make_data_pkt(seq_t seq, bool start, bool end, const void *payload,
+  msg_fragment *make_data_pkt(seq_t seq, bool start, bool end, const void *payload,
                          uint16_t payload_len) {
     auto *msg =
-        allocator->alloc_message(sizeof(protocol::ft_header) + payload_len);
+        allocator->alloc_msg_fragment(sizeof(protocol::ft_header) + payload_len);
     auto *hdr = msg->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_MSG;
     hdr->sport = kDport;
@@ -153,8 +153,8 @@ protected:
     return msg;
   }
 
-  message *make_wnd_ret(seq_t seq, uint16_t wnd) {
-    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
+  msg_fragment *make_wnd_ret(seq_t seq, uint16_t wnd) {
+    auto *msg = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     auto *hdr = msg->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_WND_RET;
     hdr->sport = kDport;
@@ -171,7 +171,7 @@ protected:
     return msg;
   }
 
-  message_allocator *allocator;
+  msg_fragment_allocator *allocator;
   mock_packet_if *mock;
   transport_config cfg;
   mock_transport *tp;
@@ -248,7 +248,7 @@ TEST_F(TransportCoroTest, RecvSingleSuspendResume) {
   EXPECT_STREQ(buf, "world");
 }
 
-// Multi-segment message (3 frags): all arrive, then recv via coro
+// Multi-segment msg_fragment (3 frags): all arrive, then recv via coro
 TEST_F(TransportCoroTest, RecvMultiSegment) {
   establish();
 
@@ -317,7 +317,7 @@ TEST_F(TransportCoroTest, TwoConnectionsRecvThenSend) {
   establish(); // tp1
 
   { // establish tp2
-    auto *pkt = allocator->alloc_message(sizeof(protocol::ft_header));
+    auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_RDY_TO_RCV;
     hdr->sport = kDport2;
@@ -399,7 +399,7 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
 
   // Establish tp1 with wnd=0 — no send credits
   {
-    auto *pkt = allocator->alloc_message(sizeof(protocol::ft_header));
+    auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_RDY_TO_RCV;
     hdr->sport = kDport;
@@ -420,7 +420,7 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
 
   // Establish tp2 with wnd=64 — plenty of send credits
   {
-    auto *pkt = allocator->alloc_message(sizeof(protocol::ft_header));
+    auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_RDY_TO_RCV;
     hdr->sport = kDport2;
@@ -527,7 +527,7 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
 
 TEST_F(TransportCoroTest, SendAfterWndReturn) {
   // Establish with 0 extra credits by using wnd=1 (consumed by init ctrl pkt)
-  auto *pkt = allocator->alloc_message(sizeof(protocol::ft_header));
+  auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
   auto *h = pkt->data<protocol::ft_header>();
   h->type = protocol::pkt_type::FT_RDY_TO_RCV;
   h->sport = kDport;
