@@ -52,6 +52,7 @@ inline uint32_t toeplitz_hash(uint32_t src_ip,
 }
 
 struct ena : public nic{
+  static constexpr uint16_t kRetaSize = 128;  
   uint64_t calc_rss_hash(uint32_t sip, uint32_t dip, uint16_t sport, uint16_t dport) override{
       return toeplitz_hash(sip, dip, sport, dport);
   }
@@ -60,7 +61,7 @@ struct ena : public nic{
       for(uint16_t s = 0; s < UINT16_MAX; ++s){
           for(uint16_t d = 0; d < UINT16_MAX; ++d){
               auto hash = calc_rss_hash(sip, dip, htons(s), htons(d)); 
-              if(hash % cores == rtid){
+              if((hash % kRetaSize)  % cores == rtid){
                   sport = htons(s);
                   dport = htons(d);
                   return;
