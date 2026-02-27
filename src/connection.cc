@@ -25,7 +25,7 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
     assert(server_parent->services.find(ntohs(con->get_flow_tuple().sport)) !=
            server_parent->services.end());
     auto service_handler =
-        server_parent->services[ntohs(con->get_flow_tuple().dport)];
+        server_parent->services[ntohs(con->get_flow_tuple().sport)];
     scheduler.schedule(service_handler(scheduler, *con).handle);
   });
   flush();
