@@ -25,8 +25,8 @@ protected:
     EXPECT_NE(msg, nullptr);
     auto *hdr = msg->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_MSG;
-    hdr->start = 1;
-    hdr->end = 1;
+    hdr->som = 1;
+    hdr->eom = 1;
     *msg->get_ts() = 0;
     return msg;
   }

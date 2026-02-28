@@ -40,7 +40,7 @@ public:
   void process_pkt(rte_mbuf *pkt);
   void acknowledge_all(uint64_t now);
   void accept();
-  void open_connection();
+  void open_connection(uint16_t rx_flow_sport, uint16_t rx_flow_dport);
 
   void check_timeout(uint64_t now) { transport_impl->check_timeout(now); }
 
@@ -161,32 +161,7 @@ public:
 
   connection *open_connection(uint16_t sport, uint16_t dport,
                               const uint32_t sip, const uint32_t dip,
-                              const uint16_t target) {
-    transport_config cfg;
-    cfg.ip = dip;
-    sport = htons(sport);
-    dport = htons(dport);
-    flow_tuple ft(cfg.ip, sip, dport, sport);
-    FASTT_LOG_DEBUG("Opened new connection to %d %d\n", ft.sip,
-                    ntohs(ft.sport));
-
-    // find transport level queue pair
-    dev.nic_arch->find_port_pair(cfg.ip, sip, cfg.transport_ports.dport,
-                                 cfg.transport_ports.sport, target, cores);
-    FASTT_LOG_DEBUG("Found pair for incoming: %u -> %u\n",
-                    ntohs(cfg.transport_ports.dport),
-                    ntohs(cfg.transport_ports.sport));
-    auto [it, inserted] = flows.emplace(
-        ft, std::make_unique<connection>(allocator.get(), &pkt_if, cfg, sport,
-                                         dport, this, is_client));
-    if (!inserted)
-      return nullptr;
-    it->second->open_connection();
-    active.push_front(*it->second);
-    ++open_connections;
-    flush();
-    return it->second.get();
-  }
+                              const uint16_t target); 
 
   template <typename F> void poll(F &&handler) {
     fetch_from_qpair();

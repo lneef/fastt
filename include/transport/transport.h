@@ -113,8 +113,8 @@ public:
     uint64_t retransmissions = 0;
   } stats;
 
-  transport(msg_fragment_allocator *allocator, P *pkt_sink, transport_config cfg,
-            uint16_t sport, uint16_t dport)
+  transport(msg_fragment_allocator *allocator, P *pkt_sink,
+            transport_config cfg, uint16_t sport, uint16_t dport)
       : trx(allocator), builder(sport, dport), cfg(cfg), ttx(), scheduler(),
         allocator(allocator), pkt_if(pkt_sink) {}
 
@@ -162,7 +162,7 @@ public:
       if (!scheduler.sack_pending(total_rcvd_pkts, now, ttx.get_srtt()))
         return false;
       msg = allocator->alloc_msg_fragment(sizeof(protocol::ft_header) +
-                                     sizeof(protocol::ft_sack_payload));
+                                          sizeof(protocol::ft_sack_payload));
       auto *sack_payload = rte_pktmbuf_mtod_offset(
           msg, protocol::ft_sack_payload *, sizeof(protocol::ft_header));
       trx.copy_bitset(sack_payload);
@@ -229,6 +229,10 @@ public:
         msg->free();
         return false;
       }
+      auto *pyld =
+          msg->data<protocol::ft_init_payload>(sizeof(protocol::ft_header));
+      cfg.transport_ports.sport = pyld->sport;
+      cfg.transport_ports.dport = pyld->dport;
       ttx.update_budget(hdr->wnd);
       trx.insert(hdr->seq, msg);
       cstate = connection_state::ESTABLISHED;
@@ -292,22 +296,28 @@ public:
   void close_connection() {
     auto *msg = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     ttx.record_ctrl_pkt(msg, [&](msg_fragment *msg, seq_t seq) {
-      scheduler.ack_callback(trx.get_last_rcvd_in_seq(), rte_get_timer_cycles());
+      scheduler.ack_callback(trx.get_last_rcvd_in_seq(),
+                             rte_get_timer_cycles());
       builder.prepare_done_header(msg, seq, trx.get_last_rcvd_in_seq());
     });
     cstate = connection_state::DISCONNECTING;
     pkt_if->consume_pkt(msg, cfg);
   }
 
-  void open_connection() {
-    auto *msg = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
+  void open_connection(uint16_t rx_flow_sport, uint16_t rx_flow_dport) {
+    auto *msg = allocator->alloc_msg_fragment(
+        sizeof(protocol::ft_header) + sizeof(protocol::ft_init_payload));
     assert(msg);
-    ttx.record_ctrl_pkt(
-        msg, [&, budget = trx.prepare_wnd_return()](msg_fragment *msg, seq_t seq) {
-          FASTT_LOG_DEBUG("Sent RDY_TO_RCV seq=%u wnd=%u flow=%s\n", seq.v,
-                          budget, get_flow_tuple().print().c_str());
-          builder.prepare_init_header(msg, seq, budget);
-        });
+    auto *init_payload =
+        msg->data<protocol::ft_init_payload>(sizeof(protocol::ft_header));
+    init_payload->sport = rx_flow_sport;
+    init_payload->dport = rx_flow_dport;
+    ttx.record_ctrl_pkt(msg, [&, budget = trx.prepare_wnd_return()](
+                                 msg_fragment *msg, seq_t seq) {
+      FASTT_LOG_DEBUG("Sent RDY_TO_RCV seq=%u wnd=%u flow=%s\n", seq.v, budget,
+                      get_flow_tuple().print().c_str());
+      builder.prepare_init_header(msg, seq, budget);
+    });
     auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     assert(hdr->type == protocol::FT_RDY_TO_RCV);
     FASTT_LOG_DEBUG("Sent RDY_TO_RCV seq=%u wnd=%u flow=%s\n", hdr->seq.v,
@@ -345,47 +355,52 @@ public:
     return ttx.get_current_wnd() > 0 || cstate != connection_state::ESTABLISHED;
   }
 
-  ssize_t send_single(void *buf, size_t size, bool som, bool eom) {
-    if (size > kMaxPayload)
-      return -ENOMEM;
+  ssize_t send_single(void *buf, size_t size, size_t off) {
     if (!ttx.get_current_wnd())
       return -EAGAIN;
-    if (connection_state::ESTABLISHED != cstate)
-      return 0;
-    auto *mbuf = allocator->alloc_msg_fragment(size);
-    rte_memcpy(mbuf->data<uint8_t>(), buf, size);
+    bool som = off == 0;
+    size_t som_len = som ? sizeof(protocol::ft_msg_payload) : 0;
+    size_t send_size = std::min<size_t>(size - off, kMaxPayload - som_len);
+    auto *mbuf = allocator->alloc_msg_fragment(send_size + som_len);
+    if (som)
+      mbuf->data<protocol::ft_msg_payload>()->out = size;
+    bool eom = off + send_size >= size;
+    std::memcpy(mbuf->data<uint8_t>(som_len), buf, send_size);
     auto now = rte_get_timer_cycles();
     auto ctor = [&](msg_fragment *pkt, seq_t seq) {
-      uint16_t wnd = trx.prepare_wnd_return();
-      seq_t ack = trx.get_last_rcvd_in_seq();
-      bool is_ack_frame = true;
-      uint32_t ts = now / get_ticks_us() - trx.get_ts();
-      scheduler.ack_callback(ack, now);
-
-      builder.prepare_ft_header(pkt, seq, ack, wnd, som, eom, ts, is_ack_frame,
-                                false);
+      protocol::msg_frame_desc desc{
+          .seq = seq,
+          .ack = trx.get_last_rcvd_in_seq(),
+          .wnd = trx.prepare_wnd_return(),
+          .ts = static_cast<uint32_t>(now / get_ticks_us() - trx.get_ts()),
+          .som = som,
+          .eom = eom,
+          .ack_frame = true,
+          .sack = false,
+      };
+      scheduler.ack_callback(desc.ack, now);
+      builder.prepare_ft_header(pkt, desc);
     };
     auto inserted = ttx.record_pkt(mbuf, ctor);
-    if (inserted)
-      pkt_if->consume_pkt(mbuf, cfg);
-    return size;
+    // we check the current grant before
+    assert(inserted);
+    pkt_if->consume_pkt(mbuf, cfg);
+    return send_size;
   }
 
   ssize_t send(msg_hdr &hdr) {
-    // large msg_fragments should be split up
-    if (hdr.len > kMaxPayload * transport_output::kMaxWndSize * 0.5)
-      return -EMSGSIZE;
+    if (connection_state::ESTABLISHED != cstate)
+      return 0;
     auto &off = hdr.off;
     ssize_t sent = 0;
-    for (; off < hdr.len; off += kMaxPayload) {
-      auto retval = send_single(static_cast<uint8_t *>(hdr.buf) + off,
-                                std::min<size_t>(hdr.len - off, kMaxPayload),
-                                off == 0, off + kMaxPayload >= hdr.len);
+    for (; off < hdr.len;) {
+      auto retval = send_single(static_cast<uint8_t *>(hdr.buf) + off, hdr.len, off);
       if (retval < 0) {
         sent = sent == 0 ? retval : sent;
         break;
       }
       sent += retval;
+      off += retval;
     }
     FASTT_LOG_DEBUG("send iov_len=%lu total=%zd\n", hdr.len, sent);
     return sent;
@@ -395,8 +410,8 @@ public:
     if (connection_state::ESTABLISHED != cstate)
       return 0;
     auto ret = trx.read(buf, size, remaining);
-    if(ret == -EAGAIN)
-        return ret;
+    if (ret == -EAGAIN)
+      return ret;
     FASTT_LOG_DEBUG("recv ret=%zd\n", ret);
     return ret;
   }

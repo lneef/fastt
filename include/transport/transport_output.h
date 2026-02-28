@@ -15,6 +15,7 @@
 #include <deque>
 #include <rte_branch_prediction.h>
 #include <rte_mbuf.h>
+#include <sys/types.h>
 
 struct reorder_buffer {
   using msg_desc_t = std::pair<seq_t, msg_fragment *>;
@@ -49,6 +50,11 @@ struct reorder_buffer {
 };
 
 struct transport_output {
+  struct message {
+    msg_fragment *head;
+    uint64_t size : 48;
+    uint16_t segs : 16;
+  };
   // reserve some headroom
   static constexpr unsigned kLowThreshold = 128;
   static constexpr unsigned kMaxWndSize = 128;
@@ -97,19 +103,29 @@ struct transport_output {
       mbuf->free();
       return;
     }
-    crds_in_reassembly += mbuf->nb_segs;
-    bool end = hdr->end;
-    mbuf->shrink_headroom(sizeof(protocol::ft_header));
-    msg_fragment::merge(first, last, mbuf);
+    auto som_len = 0u;
+    if (hdr->som) {
+      auto *msg_hdr =
+          mbuf->data<protocol::ft_msg_payload>(sizeof(protocol::ft_header));
+      reassembly.size = msg_hdr->out;
+      som_len = sizeof(protocol::ft_msg_payload);
+    }
+    reassembly.segs += mbuf->nb_segs;
+    bool end = hdr->eom;
+    mbuf->shrink_headroom(sizeof(protocol::ft_header) +
+                          som_len);
+    reassembly.rcvd += mbuf->pkt_len;
+    msg_fragment::merge(reassembly.first, reassembly.last, mbuf);
     if (end) {
-      auto *msg = first;
-      first = last = nullptr;
-      out.emplace_back(msg, crds_in_reassembly);
-      crds_in_reassembly = 0;
+      auto *msg = reassembly.first;
+      out.emplace_back(msg, reassembly.size, reassembly.segs);
+      reassembly.reset();
+      assert(msg->ref_cnt() > 0);
+      reassembly.size = 0;
     }
   }
 
-  bool empty() const { return out.empty() && first == nullptr; }
+  bool empty() const { return out.empty() && reassembly.first == nullptr; }
 
   void reassemble(seq_t seq, msg_fragment *msg) {
     if (seq != next_seq) {
@@ -166,33 +182,41 @@ struct transport_output {
   }
 
   bool has_buffered_msg_fragments_frags() const {
-    return out.size() > 0 || first != nullptr;
+    return out.size() > 0 || reassembly.first != nullptr;
+  }
+
+  ssize_t read_partial(void *buf, size_t size, size_t &remaining) {
+    if (reassembly.first == nullptr)
+      return -EAGAIN;
+    if (reassembly.size > size) {
+      remaining = reassembly.size;
+      return -EMSGSIZE;
+    }
+    auto to_copy = std::min<size_t>(size, reassembly.rcvd);
+    reassembly.first->read(buf);
+    grant_to_return += reassembly.segs;
+    reassembly.size -= to_copy;
+    remaining = reassembly.size;
+    reassembly.first->free();
+    reassembly.reset();
+    return to_copy;
   }
 
   ssize_t read(void *buf, size_t size, size_t &remaining) {
-    if (out.empty()){
-      // proactively return grant  
-      grant_to_return += crds_in_reassembly;
-      crds_in_reassembly = 0;
-      return -EAGAIN;
-    }
+    if (out.empty())
+      return read_partial(buf, size, remaining);
     auto buffered = out.front();
-    auto* msg = buffered.first;
-    if (msg->pkt_len > size) {
-      remaining = msg->pkt_len;
+    if (buffered.size > size) {
+      remaining = buffered.size;
       return -EMSGSIZE;
     }
-    auto to_copy = std::min<size_t>(msg->pkt_len - off, size);
-    if (msg->nb_segs > 1)
-      rte_pktmbuf_read(msg, off, to_copy, buf);
-    else
-      std::memcpy(buf, msg->data<uint8_t>() + off, to_copy);
-    off += to_copy;
-    grant_to_return += buffered.second;
+    auto to_copy = std::min<size_t>(buffered.size, size);
+    auto *msg = buffered.head;
+    msg->read(buf);  
+    grant_to_return += buffered.segs;
     out.pop_front();
     msg->free();
     remaining = 0;
-    off = 0;
     return to_copy;
   }
 
@@ -200,7 +224,7 @@ struct transport_output {
 
   unsigned get_available_wnd() const { return grant_to_return; }
 
-  unsigned prepare_wnd_return() {
+  uint16_t prepare_wnd_return() {
     auto wnd = get_available_wnd();
     grant_to_return = 0;
     return wnd;
@@ -211,12 +235,21 @@ struct transport_output {
   uint64_t get_total_rcvd_pkts() const { return rcvd_pkts; }
 
   // pkt reassmbly and buffering
-  msg_fragment *first = nullptr, *last = nullptr;
+  struct {
+    msg_fragment *first = nullptr, *last = nullptr;
+    uint64_t size = 0;
+    uint64_t rcvd = 0;
+    uint32_t segs = 0;
+
+    void reset() {
+      first = last = nullptr;
+      segs = 0;
+      rcvd = 0;
+    }
+  } reassembly;
   msg_fragment_allocator *port_allocator;
-  unsigned crds_in_reassembly = 0;
   reorder_buffer rb;
-  std::deque<std::pair<msg_fragment *, unsigned>> out;
-  size_t off = 0;
+  std::deque<message> out;
 
   // connection state
   std::bitset<kMaxWndSize> wnd;

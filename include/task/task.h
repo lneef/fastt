@@ -68,7 +68,7 @@ template <typename C> void make_progress(C &con) {
     auto rcvd = con.recv(mwrapper.buf, mwrapper.len, *mwrapper.remaining);
     if (rcvd == -EAGAIN)
       return;
-    mwrapper.retval = rcvd;
+    mwrapper.retval += rcvd > 0 ? rcvd : 0;
     op_completed = rcvd <= 0 || *mwrapper.remaining == 0;
   } break;
   case concurrency::io_yield_type::send_yield: {

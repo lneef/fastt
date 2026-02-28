@@ -4,6 +4,7 @@
 #include <bits/types/struct_iovec.h>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <rte_ether.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
@@ -26,6 +27,17 @@ struct msg_fragment : public rte_mbuf {
   static int timestamp;
   static int init();
   uint64_t *get_ts() { return RTE_MBUF_DYNFIELD(this, timestamp, uint64_t *); }
+
+  void read(void* buf){
+      auto *mbuf = this;
+      auto off = 0u;
+      while(mbuf){
+          auto *data = mbuf->data<uint8_t>();
+          std::memcpy(static_cast<uint8_t*>(buf) + off, data, mbuf->len());
+          off += mbuf->len();
+          mbuf = static_cast<msg_fragment*>(mbuf->next);
+      }
+  }
 
   void inc_refcnt() {
     auto *buf = static_cast<rte_mbuf *>(this);
