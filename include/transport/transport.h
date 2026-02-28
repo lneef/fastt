@@ -235,7 +235,7 @@ public:
       cfg.transport_ports.dport = pyld->dport;
       ttx.update_budget(hdr->wnd);
       trx.insert(hdr->seq, msg);
-      cstate = connection_state::ESTABLISHED;
+      cstate = connection_state::ESTABLISHING;
       break;
     }
     case protocol::pkt_type::FT_CLR_TO_SD: {
@@ -338,6 +338,7 @@ public:
     // TODO: move this up
     ttx.rearm(rte_get_timer_cycles());
     pkt_if->consume_pkt(msg, cfg);
+    cstate = connection_state::ESTABLISHED;
   }
 
   bool up() { return connection_state::ESTABLISHED == cstate; }
