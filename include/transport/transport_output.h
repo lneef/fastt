@@ -163,7 +163,6 @@ struct transport_output {
     seq_t highest_seq = next_seq + protocol::ft_sack_payload::kBitMapLen * 64;
     if (likely(highest_seq > max_rx_in_window))
       highest_seq = max_rx_in_window;
-
     std::memset(
         data->bit_map, 0,
         protocol::ft_sack_payload::kBitMapLen *
@@ -238,7 +237,7 @@ struct transport_output {
   struct {
     msg_fragment *first = nullptr, *last = nullptr;
     uint64_t size = 0;
-    uint64_t rcvd = 0;
+    uint32_t rcvd = 0;
     uint32_t segs = 0;
 
     void reset() {

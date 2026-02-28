@@ -14,8 +14,8 @@ namespace protocol {
 enum pkt_type : uint8_t {
   FT_MSG = 0,
   FT_ACK = 1,
-  FT_RDY_TO_RCV = 2,
-  FT_CLR_TO_SD = 3,
+  FT_SYN = 2,
+  FT_SYN_ACK = 3,
   FT_WND_RET = 4,
   FT_DONE = 5,
 };
@@ -105,7 +105,7 @@ struct builder {
     ft->ts = 0;
     ft->sack = 0;
     ft->wnd = budget;
-    ft->type = protocol::pkt_type::FT_RDY_TO_RCV;
+    ft->type = protocol::pkt_type::FT_SYN;
   }
 
   inline void prepare_ctrl_pkt(msg_fragment *msg, seq_t seq, seq_t ack, uint16_t wnd,
@@ -132,7 +132,7 @@ struct builder {
     ft->ackframe = true;
     ft->ts = 0;
     ft->sack = 0;
-    ft->type = protocol::pkt_type::FT_CLR_TO_SD;
+    ft->type = protocol::pkt_type::FT_SYN_ACK;
   }
 
   inline void prepare_done_header(msg_fragment *msg, seq_t seq, seq_t ack) {

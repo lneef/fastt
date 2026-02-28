@@ -107,7 +107,7 @@ protected:
   void establish() {
     auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
-    hdr->type = protocol::pkt_type::FT_RDY_TO_RCV;
+    hdr->type = protocol::pkt_type::FT_SYN;
     hdr->sport = kDport;
     hdr->dport = kSport;
     hdr->seq = {0};
@@ -321,7 +321,7 @@ TEST_F(TransportCoroTest, TwoConnectionsRecvThenSend) {
   { // establish tp2
     auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
-    hdr->type = protocol::pkt_type::FT_RDY_TO_RCV;
+    hdr->type = protocol::pkt_type::FT_SYN;
     hdr->sport = kDport2;
     hdr->dport = kSport2;
     hdr->seq = {0};
@@ -405,7 +405,7 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
   {
     auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
-    hdr->type = protocol::pkt_type::FT_RDY_TO_RCV;
+    hdr->type = protocol::pkt_type::FT_SYN;
     hdr->sport = kDport;
     hdr->dport = kSport;
     hdr->seq = {0};
@@ -426,7 +426,7 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
   {
     auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
-    hdr->type = protocol::pkt_type::FT_RDY_TO_RCV;
+    hdr->type = protocol::pkt_type::FT_SYN;
     hdr->sport = kDport2;
     hdr->dport = kSport2;
     hdr->seq = {0};
@@ -539,7 +539,7 @@ TEST_F(TransportCoroTest, SendLargePayload) {
   {
     auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
-    hdr->type = protocol::pkt_type::FT_RDY_TO_RCV;
+    hdr->type = protocol::pkt_type::FT_SYN;
     hdr->sport = kDport;
     hdr->dport = kSport;
     hdr->seq = {0};
@@ -559,7 +559,6 @@ TEST_F(TransportCoroTest, SendLargePayload) {
   concurrency::scheduler sched;
   mock_connection mc(*tp);
 
-  // Build a 16 KB payload with a recognisable pattern
   std::vector<char> payload(kPayloadSize);
   for (size_t i = 0; i < kPayloadSize; ++i)
     payload[i] = static_cast<char>('A' + (i % 26));
@@ -572,12 +571,10 @@ TEST_F(TransportCoroTest, SendLargePayload) {
   sched.schedule(t.handle);
   sched.run();
 
-  // Only 2 segments sent so far; coro must be suspended waiting for credits
   EXPECT_EQ(retval, -1);
   EXPECT_TRUE(mc.coro.has_value());
   ASSERT_EQ(mock->size(), 2u);
 
-  // Drain the first batch of segments
   std::vector<char> reassembled;
   while (mock->size()) {
     auto *pkt = mock->pop();
@@ -630,10 +627,9 @@ TEST_F(TransportCoroTest, SendLargePayload) {
 }
 
 TEST_F(TransportCoroTest, SendAfterWndReturn) {
-  // Establish with 0 extra credits by using wnd=1 (consumed by init ctrl pkt)
   auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
   auto *h = pkt->data<protocol::ft_header>();
-  h->type = protocol::pkt_type::FT_RDY_TO_RCV;
+  h->type = protocol::pkt_type::FT_SYN;
   h->sport = kDport;
   h->dport = kSport;
   h->seq = {0};

@@ -221,7 +221,7 @@ public:
       msg->free();
       break;
     }
-    case protocol::pkt_type::FT_RDY_TO_RCV: {
+    case protocol::pkt_type::FT_SYN: {
       FASTT_LOG_DEBUG("Got RDY_TO_RCV seq=%u wnd=%u\n", hdr->seq.v, hdr->wnd);
       scheduler.process_seq(hdr->seq);
       if (trx.is_retransmission_or_exceeds_capacity(hdr->seq,
@@ -238,7 +238,7 @@ public:
       cstate = connection_state::ESTABLISHING;
       break;
     }
-    case protocol::pkt_type::FT_CLR_TO_SD: {
+    case protocol::pkt_type::FT_SYN_ACK: {
       FASTT_LOG_DEBUG("Got CLR_TO_SD seq=%u ack=%u wnd=%u\n", hdr->seq.v,
                       hdr->ack.v, hdr->wnd);
       scheduler.process_seq(hdr->seq);
@@ -314,13 +314,13 @@ public:
     init_payload->dport = rx_flow_dport;
     ttx.record_ctrl_pkt(msg, [&, budget = trx.prepare_wnd_return()](
                                  msg_fragment *msg, seq_t seq) {
-      FASTT_LOG_DEBUG("Sent RDY_TO_RCV seq=%u wnd=%u flow=%s\n", seq.v, budget,
+      FASTT_LOG_DEBUG("Sent SYN seq=%u wnd=%u flow=%s\n", seq.v, budget,
                       get_flow_tuple().print().c_str());
       builder.prepare_init_header(msg, seq, budget);
     });
     auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
-    assert(hdr->type == protocol::FT_RDY_TO_RCV);
-    FASTT_LOG_DEBUG("Sent RDY_TO_RCV seq=%u wnd=%u flow=%s\n", hdr->seq.v,
+    assert(hdr->type == protocol::FT_SYN);
+    FASTT_LOG_DEBUG("Sent SYN seq=%u wnd=%u flow=%s\n", hdr->seq.v,
                     hdr->wnd, get_flow_tuple().print().c_str());
     pkt_if->consume_pkt(msg, cfg);
   }
@@ -331,7 +331,7 @@ public:
     auto ack = trx.get_last_rcvd_in_seq();
     ttx.record_ctrl_pkt(msg, [&, budget = trx.prepare_wnd_return()](
                                  msg_fragment *msg, seq_t seq) {
-      FASTT_LOG_DEBUG("Sent CLR_TO_SD seq=%u ack=%u wnd=%u flow=%s\n", seq.v,
+      FASTT_LOG_DEBUG("Sent FT_SYN_ACK seq=%u ack=%u wnd=%u flow=%s\n", seq.v,
                       ack.v, budget, get_flow_tuple().print().c_str());
       builder.prepare_init_ack_header(msg, seq, ack, budget);
     });
