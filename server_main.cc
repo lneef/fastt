@@ -4,6 +4,7 @@
 #include "msg_fragment.h"
 #include "server.h"
 #include "task/async.h"
+#include "task/task.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <bits/types/struct_iovec.h>
@@ -119,6 +120,20 @@ int lcore_server_fun(void *arg) {
                                assert(sent == sizeof(resp));
                              }
                            });
+  server->register_service(
+      10, [&](concurrency::scheduler &schdlr, connection &con) -> concurrency::task{
+        const size_t buf_len = 256 * 1024;
+        std::vector<char> buf(buf_len);
+        size_t rem = 0;
+        while (true) {
+          auto sz = co_await recv(schdlr, con, buf.data(), buf_len, rem);
+          if (sz == 0) {
+            con.accept_close();
+            co_return;
+          }
+          assert(sz == buf_len);
+        }
+      });
 
   while (!terminate)
     server->run();

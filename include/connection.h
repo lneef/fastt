@@ -80,6 +80,15 @@ public:
       link.unlink();
   }
 
+  void wait_all_acked(){
+      while(true){  
+        check_timeout(rte_get_timer_cycles());
+        if(transport_impl->all_acked())
+            break;
+      }
+
+  }
+
 private:
   friend class connection_manager;
   msg_fragment_allocator *allocator;
@@ -124,7 +133,7 @@ public:
         rte_pktmbuf_free(pkt);
       }
     }
-  }
+   }
 
   void check_timeouts() {
     auto now = rte_get_timer_cycles();

@@ -52,29 +52,26 @@ template <typename D> struct seq_observer {
 };
 
 struct ack_scheduler : public seq_observer<ack_scheduler> {
-  static constexpr uint64_t kDefaultRttTimeout = 20;
+  static constexpr uint64_t kDefaultRttTimeout = 10;
   seq_t last_acked;
   uint64_t last_sack;
   uint64_t time_last_sack = 0, time_last_ack = 0;
   bool pending_from_retry;
-  void process_seq_impl(seq_t seq) { pending_from_retry = seq < last_acked; }
+  void process_seq_impl(seq_t seq) { pending_from_retry |= seq < last_acked; }
 
-  bool ack_pending(seq_t seq, uint64_t now, uint64_t rtt) {
+  bool ack_pending(seq_t seq, uint64_t now) {
     if (seq > last_acked)
       return true;
     if (pending_from_retry) {
-      rtt =
-          std::max(kDefaultRttTimeout * get_ticks_us(), rtt * get_ticks_us()) >>
-          1;
-      return (now - time_last_ack >= rtt);
+      const auto to = kDefaultRttTimeout * get_ticks_us();
+      return (now - time_last_ack >= to);
     }
     return false;
   }
 
-  bool sack_pending(uint64_t rcvd_pkts, uint64_t now, uint64_t rtt) {
-    rtt = std::max(kDefaultRttTimeout * get_ticks_us(), rtt * get_ticks_us()) >>
-          1;
-    if (now - time_last_sack >= rtt)
+  bool sack_pending(uint64_t rcvd_pkts, uint64_t now) {
+    const auto to = kDefaultRttTimeout * get_ticks_us();
+    if (now - time_last_sack >= to)
       return last_sack != rcvd_pkts || pending_from_retry;
     return false;
   }
@@ -119,7 +116,7 @@ public:
         allocator(allocator), pkt_if(pkt_sink) {}
 
   void probe_timeout() {
-    ttx.probe_retransmit(
+    ttx.start_recovery(
         [&](msg_fragment *msg) { pkt_if->consume_for_retransmission(msg); });
   }
 
@@ -159,7 +156,7 @@ public:
     seq_t ack = trx.get_last_rcvd_in_seq();
     auto total_rcvd_pkts = trx.get_total_rcvd_pkts();
     if (is_sack) {
-      if (!scheduler.sack_pending(total_rcvd_pkts, now, ttx.get_srtt()))
+      if (!scheduler.sack_pending(total_rcvd_pkts, now))
         return false;
       msg = allocator->alloc_msg_fragment(sizeof(protocol::ft_header) +
                                           sizeof(protocol::ft_sack_payload));
@@ -170,7 +167,7 @@ public:
       FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %u\n",
                       sack_payload->bit_map_len, ack.v);
     } else {
-      if (!scheduler.ack_pending(ack, now, ttx.get_srtt()))
+      if (!scheduler.ack_pending(ack, now))
         return false;
       msg = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
       scheduler.ack_callback(ack, now);
@@ -318,10 +315,11 @@ public:
                       get_flow_tuple().print().c_str());
       builder.prepare_init_header(msg, seq, budget);
     });
+    ttx.rearm(rte_get_timer_cycles());
     auto *hdr = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     assert(hdr->type == protocol::FT_SYN);
-    FASTT_LOG_DEBUG("Sent SYN seq=%u wnd=%u flow=%s\n", hdr->seq.v,
-                    hdr->wnd, get_flow_tuple().print().c_str());
+    FASTT_LOG_DEBUG("Sent SYN seq=%u wnd=%u flow=%s\n", hdr->seq.v, hdr->wnd,
+                    get_flow_tuple().print().c_str());
     pkt_if->consume_pkt(msg, cfg);
   }
 
@@ -329,17 +327,20 @@ public:
     auto *msg = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     assert(msg);
     auto ack = trx.get_last_rcvd_in_seq();
+    auto now = rte_get_timer_cycles();
     ttx.record_ctrl_pkt(msg, [&, budget = trx.prepare_wnd_return()](
                                  msg_fragment *msg, seq_t seq) {
       FASTT_LOG_DEBUG("Sent FT_SYN_ACK seq=%u ack=%u wnd=%u flow=%s\n", seq.v,
                       ack.v, budget, get_flow_tuple().print().c_str());
-      builder.prepare_init_ack_header(msg, seq, ack, budget);
+      builder.prepare_init_ack_header(msg, seq, ack, budget,
+                                      now / get_ticks_us() - trx.get_ts());
     });
-    // TODO: move this up
-    ttx.rearm(rte_get_timer_cycles());
+    ttx.rearm(now);
     pkt_if->consume_pkt(msg, cfg);
     cstate = connection_state::ESTABLISHED;
   }
+
+  bool all_acked() const { return ttx.all_acked(); }
 
   bool up() { return connection_state::ESTABLISHED == cstate; }
 
@@ -395,7 +396,8 @@ public:
     auto &off = hdr.off;
     ssize_t sent = 0;
     for (; off < hdr.len;) {
-      auto retval = send_single(static_cast<uint8_t *>(hdr.buf) + off, hdr.len, off);
+      auto retval =
+          send_single(static_cast<uint8_t *>(hdr.buf) + off, hdr.len, off);
       if (retval < 0) {
         sent = sent == 0 ? retval : sent;
         break;

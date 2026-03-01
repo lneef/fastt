@@ -102,6 +102,7 @@ struct builder {
     ft->sport = sport;
     ft->dport = dport;
     ft->seq = seq;
+    ft->ackframe = 0;
     ft->ts = 0;
     ft->sack = 0;
     ft->wnd = budget;
@@ -122,7 +123,7 @@ struct builder {
   }
 
   inline void prepare_init_ack_header(msg_fragment *msg, seq_t seq, seq_t ack,
-                                      uint16_t wnd) {
+                                      uint16_t wnd, uint64_t ts) {
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     ft->sport = sport;
     ft->dport = dport;
@@ -130,7 +131,7 @@ struct builder {
     ft->wnd = wnd;
     ft->seq = seq;
     ft->ackframe = true;
-    ft->ts = 0;
+    ft->ts = ts;
     ft->sack = 0;
     ft->type = protocol::pkt_type::FT_SYN_ACK;
   }

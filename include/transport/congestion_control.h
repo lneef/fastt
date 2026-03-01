@@ -6,7 +6,7 @@
 /*
  * Swift Congestion Control without pacing, so large scale incasts
  * should be avoided (https://dl.acm.org/doi/pdf/10.1145/3387514.3406591)
- * it is meant to emphasize "user level" networking solution in a unikernel
+ * it is meant to emphasize application level networking in a unikernel
  * additionly it is only supposed to avoid completely downing the receiver in
  * case of medium scale incasts
  */
@@ -15,9 +15,9 @@ static __inline constexpr float fast_inv_sqrt(float val) {
   int32_t i;
   float x2, y;
   x2 = val * 0.5F;
-  i = std::bit_cast<int32_t>(val);
+  i = cast::bit_cast<int32_t>(val);
   i = 0x5f3759df - (i >> 1);
-  y = std::bit_cast<float>(i);
+  y = cast::bit_cast<float>(i);
   y = y * (1.5f - (x2 * y * y));
 
   return y;
@@ -25,19 +25,20 @@ static __inline constexpr float fast_inv_sqrt(float val) {
 
 struct swift {
   static constexpr float mss = 1024;
+  static constexpr float initial_len = 64;
   static constexpr float ai = 32;
   static constexpr float beta = 0.8;
   static constexpr float max_md = 0.5;
-  static constexpr uint64_t reset_threshold = 64;
+  static constexpr uint64_t reset_threshold = 16;
   uint64_t retransmit_cnt, last_decrease;
   float base_target_delay, cwnd_size;
   float pacing = 0;
   const uint64_t min_wd_size;
 
-  swift(std::size_t initial_len, uint64_t target_delay)
+  swift(uint64_t target_delay)
       :  retransmit_cnt(0), last_decrease(0),
         base_target_delay(target_delay), cwnd_size(initial_len),
-        min_wd_size(std::max<uint64_t>(initial_len >> 8, 1)) {}
+        min_wd_size(initial_len) {}
 
   void on_ack(uint64_t acked, uint64_t now, uint64_t srtt, uint64_t delay) {
     retransmit_cnt = 0;
@@ -49,7 +50,7 @@ struct swift {
         std::max<float>(
             std::min<float>(fast_inv_sqrt(cwnd_size) * 5.4 - 0.48, 5), 0);
     if (delay < target_delay) {
-      cwnd_size += ai / cwnd_size * (acked);
+      cwnd_size += (ai) / cwnd_size * (acked);
     } else if (can_decrease) {
       cwnd_size *= std::max<float>(1 - beta * (delay - target_delay) / delay,
                                    1 - max_md);
@@ -88,9 +89,10 @@ struct swift {
     cwnd_size = std::clamp<float>(cwnd_size, 0.1 * mss, 128 * mss);
   }
 
-  unsigned space(uint64_t inflight, uint64_t next_to_send) const {
+  unsigned space(size_t inflight, size_t requested) const {
     // cwnd could have been decreased by a loss or excess rtt  
-    return std::min<unsigned>(next_to_send,
-                              std::max<unsigned>(cwnd_size - inflight, 0));
+    return std::min<unsigned>(requested, cwnd_size > inflight ? cwnd_size - inflight : 0);
   }
+
+
 };

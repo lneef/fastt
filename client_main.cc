@@ -7,8 +7,8 @@
 #include "util.h"
 #include <arpa/inet.h>
 #include <atomic>
-#include <bits/getopt_core.h>
 #include <cassert>
+#include <cerrno>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +31,7 @@
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
 #include <string_view>
+#include <sys/types.h>
 #include <vector>
 
 alignas(RTE_CACHE_LINE_MIN_SIZE) std::atomic<double> lat = 0;
@@ -39,6 +40,7 @@ struct netconfig {
   rte_ether_addr dmac;
   uint32_t sip, dip;
   uint16_t dport;
+  bool large = false;
   std::vector<uint16_t> sports;
 };
 
@@ -57,9 +59,13 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 
   netconfig conf;
   static const struct option long_options[] = {
-      {"dip", required_argument, 0, 0},   {"sip", required_argument, 0, 0},
-      {"dmac", required_argument, 0, 0},  {"sport", required_argument, 0, 0},
-      {"dport", required_argument, 0, 0}, {0, 0, 0, 0}};
+      {"dip", required_argument, 0, 0},
+      {"sip", required_argument, 0, 0},
+      {"dmac", required_argument, 0, 0},
+      {"sport", required_argument, 0, 0},
+      {"dport", required_argument, 0, 0},
+      {"large", no_argument, 0, 0},
+      {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
     switch (option_index) {
@@ -84,9 +90,48 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
     case 4:
       conf.dport = atoi(optarg);
       break;
+    case 5: {
+      conf.large = true;
+      break;
+    }
+    default:
+      break;
     }
   }
   return conf;
+}
+
+static int lcore_large(void *arg) {
+  auto *adapter = static_cast<lcore_adapter *>(arg);
+  auto me = rte_lcore_index(rte_lcore_id());
+  auto &cif = *adapter->cifs[me];
+  std::vector<char> data(256 * 1024, 'A');
+  auto do_send = [&](connection &con, msg_hdr &hdr) -> ssize_t {
+    auto sent = 0u;
+    while (sent < hdr.len) {
+      auto ret = con.send(hdr);
+      if (ret == -EAGAIN) {
+        cif.poll();
+        continue;
+      }
+      sent += ret;
+    }
+    return sent;
+  };
+  auto *con = cif.open_connection(adapter->cfg, rte_lcore_id(), adapter->dmac);
+  if (!con)
+    return -1;
+  while (!cif.probe_connection_setup_done(con))
+    ;
+  con->acknowledge_all(rte_get_timer_cycles());
+  cif.flush();
+
+  msg_hdr hdr;
+  hdr.set_data(data.data(), data.size());
+  do_send(*con, hdr);
+  con->wait_all_acked();
+  cif.close(con);
+  return 0;
 }
 
 static constexpr auto dur = 1e6;
@@ -106,37 +151,36 @@ static int lcore_fn(void *arg) {
   kv::kv_packet<kv::kv_completion> resp;
   auto now = rte_get_timer_cycles();
   ssize_t rcvd = 0;
-  while(t < dur){
-      cif.poll();
-      while((rcvd = kv.recv(&resp, sizeof(resp)) > 0)){
-          assert(resp.payload.key == kv[resp.id].key);
-          kv.complete(resp.id);
-          ++c;
-      }
-      auto *tx = kv.start();
-      if(!tx)
-          continue;
-      int64_t key = dist(rng);
-      kv::create_kv_request(reinterpret_cast<uint8_t*>(&req), tx->id, key);
-      tx->key = key;
-      kv.send(&req, sizeof(req));
-      ++t;
-  }
-  while(c < dur){
-      cif.poll();
-      rcvd = kv.recv(&resp, sizeof(resp));
-      if(rcvd <= 0)
-          continue;
+  while (t < dur) {
+    cif.poll();
+    while ((rcvd = kv.recv(&resp, sizeof(resp)) > 0)) {
       assert(resp.payload.key == kv[resp.id].key);
       kv.complete(resp.id);
       ++c;
+    }
+    auto *tx = kv.start();
+    if (!tx)
+      continue;
+    int64_t key = dist(rng);
+    kv::create_kv_request(reinterpret_cast<uint8_t *>(&req), tx->id, key);
+    tx->key = key;
+    kv.send(&req, sizeof(req));
+    ++t;
+  }
+  while (c < dur) {
+    cif.poll();
+    rcvd = kv.recv(&resp, sizeof(resp));
+    if (rcvd <= 0)
+      continue;
+    assert(resp.payload.key == kv[resp.id].key);
+    kv.complete(resp.id);
+    ++c;
   }
   kv.con->close();
   kv.acknowledge_all();
   kv.flush();
   auto stats = kv.con->get_transport_stats();
-  std::cerr << stats.rtt << ", " << stats.retransmissions
-            << std::endl;
+  std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   auto end = rte_get_timer_cycles();
   std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
   return 0;
@@ -176,8 +220,10 @@ static void run(lcore_function_t *f, void *args) {
         con_config{conf.sip, conf.sports[i]}, rte_lcore_count());
     ++i;
   }
-
-  run(lcore_fn, &adapter);
+  if (!conf.large)
+    run(lcore_fn, &adapter);
+  else
+    run(lcore_large, &adapter);
   ifc->stop();
   std::cout << "avg: " << lat.load() / rte_lcore_count() << std::endl;
   return 0;
