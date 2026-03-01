@@ -3,36 +3,36 @@
 #include <cassert>
 #include <cstdint>
 #include <deque>
-#include <message.h>
+#include <msg_fragment.h>
 #include <rte_cycles.h>
 
 #include "debug.h"
 #include "filter.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "protocol.h"
 #include "transport/seq.h"
 #include "util.h"
 
 struct sender_entry {
-  message *packet;
+  msg_fragment *packet; // this is bad, but ok for now
   seq_t seq;
   bool sacked : 4;
   bool retransmitted : 4;
   sender_entry() : packet(nullptr), seq(0), retransmitted(false) {}
-  sender_entry(message *packet, seq_t seq, bool retransmitted)
+  sender_entry(msg_fragment *packet, seq_t seq, bool retransmitted)
       : packet(packet), seq(seq), sacked(false), retransmitted(retransmitted) {}
 
   bool requires_retry(uint64_t now, uint64_t rto) {
     return now > *packet->get_ts() + rto;
   }
-  message *get() { return packet; }
+  msg_fragment *get() { return packet; }
 
   sender_entry(const sender_entry &) = delete;
 
-  ~sender_entry(){
-      assert(packet != nullptr);
-      packet->free();
-      packet = nullptr;
+  ~sender_entry() {
+    assert(packet != nullptr);
+    packet->free();
+    packet = nullptr;
   }
 };
 
@@ -43,12 +43,9 @@ public:
     uint64_t retransmitted, rtt;
     statistics() : acked(0), retransmitted(0) {}
   };
-  transport_input()
-      :  rtt() {}
+  transport_input() : rtt() {}
 
-  unsigned get_current_wnd() const {
-    return budget;
-  }
+  unsigned get_current_wnd() const { return budget; }
 
   bool check_timeout(uint64_t now) {
     if (now > timeout)
@@ -63,29 +60,32 @@ public:
     while (!unacked.empty() && unacked.front().seq < seq) {
       auto &desc = unacked.front();
       assert(desc.packet);
+      inflight -= desc.packet->pkt_len - protocol::defs::kuserDataOffset;
       unacked.pop_front();
     }
     assert(!unacked.empty());
 
     auto &srtt_desc = unacked.front();
-    update_srtt(&srtt_desc, ts);
+    assert(ts > *srtt_desc.packet->get_ts());
+    if (!srtt_desc.sacked)
+      update_srtt(&srtt_desc, ts);
     unacked.pop_front();
     return burst_rtt;
   }
 
-  template<typename F>
-  void record_ctrl_pkt(message* msg, F &&ctor){
-      ctor(msg, seq);
-      msg->inc_refcnt();
-      *msg->get_ts() = 0;
-      unacked.emplace_back(msg, seq++, false);
+  template <typename F> void record_ctrl_pkt(msg_fragment *msg, F &&ctor) {
+    ctor(msg, seq);
+    msg->inc_refcnt();
+    *msg->get_ts() = 0;
+    unacked.emplace_back(msg, seq++, false);
   }
 
-  template <typename F> bool record_pkt(message *msg, F &&ctor) {
+  template <typename F> bool record_pkt(msg_fragment *msg, F &&ctor) {
     if (budget == 0)
       return false;
     --budget;
     ctor(msg, seq);
+    inflight += msg->pkt_len;
     msg->inc_refcnt();
     *msg->get_ts() = 0;
     unacked.emplace_back(msg, seq++, false);
@@ -93,17 +93,19 @@ public:
     return true;
   }
 
-  template <typename F> void probe_retransmit(F &&cb) {
-    for (auto &entry : unacked) {
-      auto *msg = entry.packet;
-      if (*msg->get_ts() == 0)
-        continue;
-      if (entry.sacked)
-        continue;
-      FASTT_LOG_DEBUG("Retransmitting packet: %u\n", entry.seq.v);
-      prepare_retransmit(&entry);
-      cb(msg);
-    }
+  template <typename F> void start_recovery(F &&cb) {
+    if (unacked.empty())
+      return;
+    auto &candidate = unacked.front();
+    // smallest unacked cannot be sacked
+    assert(!candidate.sacked);
+    assert(candidate.seq == least_unacked_pkt);
+    if (*candidate.packet->get_ts() == 0)
+      return;
+
+    FASTT_LOG_DEBUG("Retransmitting packet: %u\n", candidate.seq.v);
+    prepare_retransmit(&candidate);
+    cb(candidate.packet);
   }
 
   void prepare_retransmit(sender_entry *entry) {
@@ -121,14 +123,14 @@ public:
       return;
     stats.acked = seq;
     cleanup_acked_pkts(seq, ts);
-    if (!is_sack) 
+    if (!is_sack)
       timeout = rte_get_timer_cycles() + rto;
     least_unacked_pkt = seq + 1;
   }
 
   template <typename F>
-  void acknowledge_sack(protocol::ft_sack_payload *payload, 
-                        uint64_t ts, F &&retransmit_cb) {
+  void acknowledge_sack(protocol::ft_sack_payload *payload, uint64_t ts,
+                        F &&retransmit_cb) {
     sender_entry *largest_acked = nullptr;
     assert(payload->bit_map_len > 0);
     assert(payload->bit_map_len <= unacked.size());
@@ -145,13 +147,14 @@ public:
       } else if (!desc.sacked) {
         /* we want the largest seq not acked yet */
         largest_acked = &(*it);
+        inflight -= desc.packet->pkt_len - protocol::defs::kuserDataOffset;
         desc.sacked = true;
       }
       ++it;
     }
     timeout = rte_get_timer_cycles() + rto;
     FASTT_LOG_DEBUG("Largest set seq num %u\n", largest_acked->seq.v);
-    if (largest_acked) 
+    if (largest_acked)
       update_srtt(largest_acked, ts);
   }
 
@@ -185,6 +188,7 @@ private:
   uint32_t budget = 0;
   seq_t seq{0};
   seq_t least_unacked_pkt{0};
+  uint64_t inflight = 0;
   uint64_t rtt = 0;
   uint64_t rto = get_ticks_ms() * 5;
   uint64_t timeout;

@@ -1,11 +1,10 @@
 #pragma once
 
 #include <cstdint>
-#include <rte_log.h>
 
 //#define DEBUG 1
-struct message;
-void dump_pkt(message *msg, uint16_t len);
+struct msg_fragment;
+void dump_pkt(msg_fragment *msg, uint16_t len);
 
 #ifdef DEBUG
 #define FASTT_LOG_DEBUG(...)                                                   \

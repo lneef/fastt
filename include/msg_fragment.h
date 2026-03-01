@@ -4,6 +4,7 @@
 #include <bits/types/struct_iovec.h>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <rte_ether.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
@@ -22,10 +23,21 @@ struct msg_hdr {
   }
 };
 
-struct message : public rte_mbuf {
+struct msg_fragment : public rte_mbuf {
   static int timestamp;
   static int init();
   uint64_t *get_ts() { return RTE_MBUF_DYNFIELD(this, timestamp, uint64_t *); }
+
+  void read(void* buf){
+      auto *mbuf = this;
+      auto off = 0u;
+      while(mbuf){
+          auto *data = mbuf->data<uint8_t>();
+          std::memcpy(static_cast<uint8_t*>(buf) + off, data, mbuf->len());
+          off += mbuf->len();
+          mbuf = static_cast<msg_fragment*>(mbuf->next);
+      }
+  }
 
   void inc_refcnt() {
     auto *buf = static_cast<rte_mbuf *>(this);
@@ -35,7 +47,7 @@ struct message : public rte_mbuf {
     }
   }
 
-  static inline void merge(message *&first, message *&last, message *seg) {
+  static inline void merge(msg_fragment *&first, msg_fragment *&last, msg_fragment *seg) {
     if (!first) {
       first = seg;
       last = seg;
@@ -43,7 +55,7 @@ struct message : public rte_mbuf {
       last->next = seg;
       first->nb_segs += seg->nb_segs;
       first->pkt_len += seg->pkt_len;
-      last = static_cast<message *>(rte_pktmbuf_lastseg(seg));
+      last = static_cast<msg_fragment *>(rte_pktmbuf_lastseg(seg));
     }
   }
 
@@ -69,16 +81,16 @@ struct message : public rte_mbuf {
   void shrink_headroom(uint16_t len) { rte_pktmbuf_adj(this, len); }
 };
 
-static_assert(sizeof(message) == sizeof(rte_mbuf), "");
+static_assert(sizeof(msg_fragment) == sizeof(rte_mbuf), "");
 
-class message_allocator {
+class msg_fragment_allocator {
   static constexpr uint16_t kRequiredHeadRoom = 128;
   static constexpr std::size_t kMempoolCacheSize = 256;
   static constexpr std::size_t kMemBufPrivSize = 0;
   static constexpr std::size_t kMemBufDataRoomSize = RTE_MBUF_DEFAULT_BUF_SIZE;
 
 public:
-  message_allocator(const char *name, std::size_t elems)
+  msg_fragment_allocator(const char *name, std::size_t elems)
       : pool(rte_pktmbuf_pool_create(name, elems, kMempoolCacheSize,
                                      kMemBufPrivSize, kMemBufDataRoomSize,
                                      SOCKET_ID_ANY)) {
@@ -88,7 +100,7 @@ public:
     FASTT_LOG_DEBUG("Payload Size: %lu\n", payload_size);
   }
 
-  message *alloc_message(uint16_t data_size) {
+  msg_fragment *alloc_msg_fragment(uint16_t data_size) {
 
     assert(data_size < payload_size);
     if (data_size >= payload_size - kRequiredHeadRoom)
@@ -101,16 +113,16 @@ public:
 
   rte_mempool *get() { return pool; }
 
-  static void deallocate(message *msg) { rte_pktmbuf_free(msg); }
+  static void deallocate(msg_fragment *msg) { rte_pktmbuf_free(msg); }
 
-  ~message_allocator() { rte_mempool_free(pool); }
+  ~msg_fragment_allocator() { rte_mempool_free(pool); }
 
 private:
-  message *prepare(rte_mbuf *mbuf, uint16_t data_size) {
+  msg_fragment *prepare(rte_mbuf *mbuf, uint16_t data_size) {
     assert(mbuf);
     if constexpr (RTE_PKTMBUF_HEADROOM < kRequiredHeadRoom)
       rte_pktmbuf_adj(mbuf, kRequiredHeadRoom - RTE_PKTMBUF_HEADROOM);
-    auto *msg = static_cast<message *>(mbuf);
+    auto *msg = static_cast<msg_fragment *>(mbuf);
     msg->data_len = data_size;
     msg->pkt_len = data_size;
     return msg;

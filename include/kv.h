@@ -2,24 +2,21 @@
 
 #include "client.h"
 #include "connection.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "util.h"
 #include <bits/types/struct_iovec.h>
 #include <cstddef>
 #include <cstdint>
 #include <generic/rte_cycles.h>
-#include <rte_ether.h>
-#include <rte_lcore.h>
-#include <rte_timer.h>
 
 #include "kv_protocol.h"
 #include <vector>
 
-inline void create_get_request(message *msg, int64_t key, uint64_t id) {
+inline void create_get_request(msg_fragment *msg, int64_t key, uint64_t id) {
   kv::create_kv_request(static_cast<uint8_t *>(msg->data()), id, key);
 }
 
-inline void create_scan_request(message *msg, int64_t low, uint64_t high,
+inline void create_scan_request(msg_fragment *msg, int64_t low, uint64_t high,
                                 int64_t id) {
   kv::create_kv_scan(msg->data<uint8_t>(), id, low, high);
 }
@@ -101,10 +98,10 @@ public:
       return con->send(m);
   }
 
-  void lookup(int64_t key, message *msg, uint64_t id) {
+  void lookup(int64_t key, msg_fragment *msg, uint64_t id) {
     create_get_request(msg, key, id);
   };
-  void scan(int64_t low, int64_t high, message *msg, uint64_t id) {
+  void scan(int64_t low, int64_t high, msg_fragment *msg, uint64_t id) {
     create_scan_request(msg, low, high, id);
   }
 

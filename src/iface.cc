@@ -1,6 +1,6 @@
 #include "debug.h"
 #include "iface.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "util.h"
 #include <cstdint>
 #include <memory>
@@ -23,13 +23,8 @@ int fastt::init() {
   FASTT_LOG_DEBUG("init fasst\n");
   rte_timer_subsystem_init();
   init_timing();
-  return message::init();
+  return msg_fragment::init();
 }
-
-static constexpr auto deleter = [](rte_mempool *pool) {
-  if (pool)
-    rte_mempool_free(pool);
-};
 
 static inline int setup_reta(uint16_t port, uint32_t nrx, uint32_t reta_size){
     auto groups = reta_size / RTE_ETH_RETA_GROUP_SIZE;
@@ -52,7 +47,7 @@ static inline int setup_reta(uint16_t port, uint32_t nrx, uint32_t reta_size){
 }
 
 std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
-                                           uint16_t nrx, std::vector<std::shared_ptr<message_allocator>>& pools) {
+                                           uint16_t nrx, std::vector<std::shared_ptr<msg_fragment_allocator>>& pools) {
   uint16_t nb_rxd, nb_txd;
   int retval;
   std::unique_ptr<iface> ifc(new iface()); /*c++11*/

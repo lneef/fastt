@@ -1,8 +1,10 @@
 #include "connection.h"
 #include "iface.h"
 #include "kv_protocol.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "server.h"
+#include "task/async.h"
+#include "task/task.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <bits/types/struct_iovec.h>
@@ -30,7 +32,7 @@ struct netconfig {
 
 struct lcore_server_adapter {
   std::unique_ptr<server_iface> iface;
-  std::shared_ptr<message_allocator> allocator;
+  std::shared_ptr<msg_fragment_allocator> allocator;
 };
 
 static std::random_device dev;
@@ -93,36 +95,50 @@ int lcore_server_fun(void *arg) {
   auto myid = rte_lcore_index(rte_lcore_id());
   auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
   auto *server = adapters[myid].iface.get();
-
-  kv::kv_packet<kv::kv_request> req;
-  kv::kv_packet<kv::kv_completion> resp;
-  while (!terminate) {
-    server->poll([&](connection &con) -> bool {
-      while (true) {
-        if (!con.can_recv() || !con.can_send())
-          return false;
+  server->register_service(2,
+                           [&](concurrency::scheduler &schdlr,
+                               connection &con) -> concurrency::task {
+                             kv::kv_packet<kv::kv_request> req;
+                             kv::kv_packet<kv::kv_completion> resp;
+                             while (true) {
+                               size_t rem = 0;
+                               auto sz = co_await recv(schdlr, con, &req,
+                                                       sizeof(req), rem);
+                               if (sz == 0) {
+                                 con.accept_close();
+                                 co_return;
+                               }
+                               assert(sz == sizeof(req));
+                               serve(&resp, &req);
+                               msg_hdr m;
+                               m.set_data(&resp, sizeof(resp));
+                               auto sent = co_await send(schdlr, con, m);
+                               if (sent == 0) {
+                                 con.accept_close();
+                                 co_return;
+                               }
+                               assert(sent == sizeof(resp));
+                             }
+                           });
+  server->register_service(
+      10, [&](concurrency::scheduler &schdlr, connection &con) -> concurrency::task{
+        const size_t buf_len = 256 * 1024;
+        std::vector<char> buf(buf_len);
         size_t rem = 0;
-        auto sz = con.recv(&req, sizeof(req), rem);
-        if(sz == 0){
-            // connection has been closed
+        while (true) {
+          auto sz = co_await recv(schdlr, con, buf.data(), buf_len, rem);
+          if (sz == 0) {
             con.accept_close();
-            return false;
-            }
-        assert(sz == sizeof(req));
-        serve(&resp, &req);
-        msg_hdr m;
-        m.set_data(&resp, sizeof(resp));
-        auto sent = con.send(m);
-        if(sent == 0)
-            // connection closed (no again)
-            return false;
-        assert(sent == sizeof(resp));
-      }
-      return true;
-    });
+            co_return;
+          }
+          assert(sz == buf_len);
+        }
+      });
 
-    server->complete();
-  }
+  while (!terminate)
+    server->run();
+  server->complete();
+
   return 0;
 }
 
@@ -134,10 +150,10 @@ int run(netconfig &conf) {
   auto nthreads = rte_lcore_count();
   unsigned i = 0;
   uint16_t lcore_id;
-  std::vector<std::shared_ptr<message_allocator>> allocators;
+  std::vector<std::shared_ptr<msg_fragment_allocator>> allocators;
   allocators.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
-    allocators.emplace_back(std::make_shared<message_allocator>(
+    allocators.emplace_back(std::make_shared<msg_fragment_allocator>(
         ("mpool" + std::to_string(i)).c_str(), 16383));
     ++i;
   }
@@ -153,7 +169,7 @@ int run(netconfig &conf) {
     adapter.allocator = std::move(allocators[i]);
     adapter.iface = std::make_unique<server_iface>(
         port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator,
-        lcore_id);
+        rte_lcore_count());
     ++i;
   }
 

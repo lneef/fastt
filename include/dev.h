@@ -1,12 +1,11 @@
 #pragma once
 
 #include "debug.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "util.h"
 #include "arch/nic.h"
 #include "arch/ena.h"
 #include <cstdint>
-#include <generic/rte_cycles.h>
 #include <memory>
 #include <rte_cycles.h>
 #include <rte_ethdev.h>
@@ -24,7 +23,7 @@ public:
     auto now = rte_get_timer_cycles() / get_ticks_us();
     auto sent = rte_eth_tx_burst(port, txq, pkts, cnt);
     for (uint16_t i = 0; i < sent; ++i)
-      *static_cast<message *>(pkts[i])->get_ts() = now;
+      *static_cast<msg_fragment *>(pkts[i])->get_ts() = now;
     return sent;
   }
 
@@ -34,8 +33,8 @@ public:
     auto rcvd =
         rte_eth_rx_burst(port, rxq, pkts.data(), kDefaultInputBurstSize);
     for (uint16_t i = 0; i < rcvd; ++i) {
-      *static_cast<message *>(pkts[i])->get_ts() = now;
-      cb(static_cast<message *>(pkts[i]));
+      *static_cast<msg_fragment *>(pkts[i])->get_ts() = now;
+      cb(static_cast<msg_fragment *>(pkts[i]));
     }
   }
 

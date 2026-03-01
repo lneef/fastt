@@ -3,24 +3,21 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <generic/rte_cycles.h>
 #include <memory>
 #include <netinet/in.h>
-#include <ranges>
 #include <type_traits>
 #include <utility>
 
 #include "debug.h"
 #include "dev.h"
-#include "message.h"
+#include "msg_fragment.h"
 #include "packet_if.h"
 #include "transport/protocol.h"
 #include "transport/transport.h"
 #include "util.h"
-#include "task.h"
+#include "task/task.h"
 
 class iface;
-class coro_handle;
 class server_iface;
 class client_iface;
 class connection_manager;
@@ -34,7 +31,7 @@ class connection {
   static constexpr uint16_t kMaxSlotsPerConnection = 128;
 
 public:
-  connection(message_allocator *allocator, packet_if *pkt_if,
+  connection(msg_fragment_allocator *allocator, packet_if *pkt_if,
              const transport_config &cfg, uint16_t sport, uint16_t dport,
              connection_manager *manager, bool is_client)
       : allocator(allocator), transport_impl(std::make_unique<transport<>>(
@@ -43,7 +40,7 @@ public:
   void process_pkt(rte_mbuf *pkt);
   void acknowledge_all(uint64_t now);
   void accept();
-  void open_connection();
+  void open_connection(uint16_t rx_flow_sport, uint16_t rx_flow_dport);
 
   void check_timeout(uint64_t now) { transport_impl->check_timeout(now); }
 
@@ -52,12 +49,6 @@ public:
   ssize_t recv(void *buf, size_t size, size_t &remaining) {
     return transport_impl->recv(buf, size, remaining);
   }
-
-  concurrency::send_awaitable<connection> send(concurrency::scheduler &schdlr,
-                                   msg_hdr &hdr);
-
-  concurrency::recv_awaitable<connection> recv(concurrency::scheduler &schdlr, void *buf,
-                                   size_t len, size_t &remaining);
 
   transport_statistics get_transport_stats() const {
     return transport_impl->get_stats();
@@ -89,9 +80,18 @@ public:
       link.unlink();
   }
 
+  void wait_all_acked(){
+      while(true){  
+        check_timeout(rte_get_timer_cycles());
+        if(transport_impl->all_acked())
+            break;
+      }
+
+  }
+
 private:
   friend class connection_manager;
-  message_allocator *allocator;
+  msg_fragment_allocator *allocator;
   std::unique_ptr<transport<>> transport_impl;
   connection_manager *manager;
   bool is_client;
@@ -103,25 +103,24 @@ public:
 
 class connection_manager {
   static constexpr uint16_t kdefaultBurstSize = 64;
-
 public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
-                     uint32_t sip, std::shared_ptr<message_allocator> allocator,
-                     P *parent)
+                     uint32_t sip, std::shared_ptr<msg_fragment_allocator> allocator,
+                     P *parent, uint16_t cores)
       : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
-        pkt_if(&scheduler, sip, port), active(), is_client(is_client) {
+        pkt_if(&scheduler, sip, port), active(), cores(cores), is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
     else
       server_parent = parent;
   }
 
-  void handle_pkt(message *pkt, flow_tuple &ft) {
+  void handle_pkt(msg_fragment *pkt, flow_tuple &ft) {
 
     FASTT_LOG_DEBUG("Got pkt via UDP ports: %s \n", ft.print().c_str());
     auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
-    if (unlikely(header->type == protocol::FT_RDY_TO_RCV))
+    if (unlikely(header->type == protocol::FT_SYN))
       register_request(pkt, ft);
     else {
       protocol::extract_ports(ft, pkt);
@@ -134,7 +133,7 @@ public:
         rte_pktmbuf_free(pkt);
       }
     }
-  }
+   }
 
   void check_timeouts() {
     auto now = rte_get_timer_cycles();
@@ -170,39 +169,17 @@ public:
 
   connection *open_connection(uint16_t sport, uint16_t dport,
                               const uint32_t sip, const uint32_t dip,
-                              const uint16_t target) {
-    transport_config cfg;
-    cfg.ip = dip;
-    sport = htons(sport);
-    dport = htons(dport);
-    flow_tuple ft(cfg.ip, sip, dport, sport);
-    FASTT_LOG_DEBUG("Opened new connection to %d %d\n", ft.sip,
-                    ntohs(ft.sport));
-
-    // find transport level queue pair
-    dev.nic_arch->find_port_pair(cfg.ip, sip, cfg.transport_ports.dport,
-                                 cfg.transport_ports.sport, target);
-    FASTT_LOG_DEBUG("Found pair for incoming: %u -> %u\n",
-                    ntohs(cfg.transport_ports.dport),
-                    ntohs(cfg.transport_ports.sport));
-    auto [it, inserted] = flows.emplace(
-        ft, std::make_unique<connection>(allocator.get(), &pkt_if, cfg, sport,
-                                         dport, this, is_client));
-    if (!inserted)
-      return nullptr;
-    it->second->open_connection();
-    active.push_front(*it->second);
-    ++open_connections;
-    flush();
-    return it->second.get();
-  }
+                              const uint16_t target); 
 
   template <typename F> void poll(F &&handler) {
     fetch_from_qpair();
     accept_connections([](connection*){});
     flush();
-    for (auto &con : active)
-      handler(con);
+    for (auto it = active.begin(), end = active.end(); it != end;){
+        auto &con = *it;
+        ++it;
+        handler(con);
+    }
     acknowledge();
     check_timeouts();
   }
@@ -231,14 +208,17 @@ public:
     assert(i == 0);
     for (auto *msg : vec)
       pkt_if.strip_header(msg, fts[i++]);
-
-    for (auto [msg, ft] : std::ranges::zip_view(vec, fts))
-      handle_pkt(msg, ft);
+    i = 0;
+    for(; i < vec.i; ++i){
+        auto *msg = vec.pkts[i];
+        auto &ft = fts[i];
+        handle_pkt(msg, ft);
+    }
     vec.clear();
     assert(vec.i == 0);
   }
 
-  void register_request(message *pkt, flow_tuple &ft) {
+  void register_request(msg_fragment *pkt, flow_tuple &ft) {
     FASTT_LOG_DEBUG("Registering new request");
     connection_requests.emplace_back(pkt, ft);
   }
@@ -259,7 +239,7 @@ public:
   }
 
   std::pair<connection *, bool> add_connection(flow_tuple &tuple,
-                                               message *pkt) {
+                                               msg_fragment *pkt) {
     transport_config cfg;
     cfg.ip = tuple.sip;
     cfg.transport_ports.dport = tuple.sport;
@@ -311,13 +291,14 @@ public:
   ~connection_manager() {}
 
 private:
-  std::shared_ptr<message_allocator> allocator;
-  std::deque<std::pair<message *, flow_tuple>> connection_requests;
+  std::shared_ptr<msg_fragment_allocator> allocator;
+  std::deque<std::pair<msg_fragment *, flow_tuple>> connection_requests;
   flow_table<flow_tuple, std::unique_ptr<connection>> flows;
   qpair dev;
   packet_scheduler scheduler;
   packet_if pkt_if;
   intrusive_list_t<connection> active;
+  uint16_t cores;
   bool is_client;
   uint32_t open_connections = 0;
   packet_vector<kdefaultBurstSize> vec;

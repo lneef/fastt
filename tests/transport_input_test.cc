@@ -1,6 +1,6 @@
 #include "test_env.h"
 
-#include "message.h"
+#include "msg_fragment.h"
 #include "transport/protocol.h"
 #include "transport/seq.h"
 #include "transport/transport.h"
@@ -10,7 +10,7 @@
 class TransportInputTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    allocator = new message_allocator("ti_pool", 1023);
+    allocator = new msg_fragment_allocator("ti_pool", 1023);
     ti = new transport_input();
     ti->update_budget(128);
   }
@@ -20,25 +20,25 @@ protected:
     delete allocator;
   }
 
-  message *make_pkt() {
-    auto *msg = allocator->alloc_message(sizeof(protocol::ft_header));
+  msg_fragment *make_pkt() {
+    auto *msg = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
     EXPECT_NE(msg, nullptr);
     auto *hdr = msg->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_MSG;
-    hdr->start = 1;
-    hdr->end = 1;
+    hdr->som = 1;
+    hdr->eom = 1;
     *msg->get_ts() = 0;
     return msg;
   }
 
-  message_allocator *allocator;
+  msg_fragment_allocator *allocator;
   transport_input *ti;
 };
 
 TEST_F(TransportInputTest, SackMarksCorrectEntries) {
     for (int i = 0; i < 5; ++i) {
         auto *msg = make_pkt();
-        bool ok = ti->record_pkt(msg, [](message *, seq_t) {});
+        bool ok = ti->record_pkt(msg, [](msg_fragment *, seq_t) {});
         ASSERT_TRUE(ok);
     }
     EXPECT_EQ(ti->size(), 5u);
@@ -51,7 +51,7 @@ TEST_F(TransportInputTest, SackMarksCorrectEntries) {
     std::vector<seq_t> retransmitted;
     ti->acknowledge(seq_t{0} - 1, 0, true);
     ti->acknowledge_sack(&sack, 0,
-        [&](message *) { retransmitted.push_back({}); });
+        [&](msg_fragment *) { retransmitted.push_back({}); });
 
     EXPECT_EQ(retransmitted.size(), 2u);
 }

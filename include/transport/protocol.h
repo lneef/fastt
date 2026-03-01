@@ -1,78 +1,91 @@
 #pragma once
 
-#include "message.h"
+#include "msg_fragment.h"
 #include "transport/seq.h"
 #include "util.h"
 #include <cstdint>
-#include <rte_common.h>
 #include <rte_ether.h>
 #include <rte_ip.h>
-#include <rte_mempool.h>
 #include <rte_udp.h>
+#include <rte_mempool.h>
 #include <utility>
 
 namespace protocol {
 enum pkt_type : uint8_t {
   FT_MSG = 0,
   FT_ACK = 1,
-  FT_RDY_TO_RCV = 2,
-  FT_CLR_TO_SD = 3,
+  FT_SYN = 2,
+  FT_SYN_ACK = 3,
   FT_WND_RET = 4,
   FT_DONE = 5,
 };
 
-struct __rte_packed_begin ft_header {
+struct [[gnu::packed]] ft_header {
   uint16_t sport;
   uint16_t dport;
-  pkt_type type : 3;
-  uint32_t ackframe : 1;
-  uint32_t start : 1;
-  uint32_t end : 1;
-  uint32_t sack : 1;
-  uint32_t ts : 25;
-  uint32_t len : 16;
-  uint32_t wnd : 16;
   seq_t seq;
   seq_t ack;
-} __rte_packed_end;
+  pkt_type type : 3;
+  uint32_t ackframe : 1;
+  uint32_t sack : 1;
+  uint32_t som : 1;
+  uint32_t eom : 1;
+  uint32_t ts : 25;
+  uint32_t wnd :16;
+  uint32_t resv : 16;
+};
 
 static_assert(sizeof(ft_header) == 20, "");
 
-struct __rte_packed_begin ft_sack_payload {
+struct [[gnu::packed]] ft_sack_payload {
   using interval = std::pair<uint64_t, uint64_t>;
   static constexpr uint16_t kBitMapLen = 4;
   static constexpr uint16_t kMaxIntervalCnt = 64;
   uint64_t bit_map[kBitMapLen];
   uint16_t bit_map_len;
-} __rte_packed_end;
+};
 
-inline void extract_ports(flow_tuple &ft, message *pkt) {
+struct [[gnu::packed]] ft_init_payload{
+    uint16_t sport, dport;
+};
+
+struct [[gnu::packed]] ft_msg_payload{
+    uint64_t out;
+};
+
+inline void extract_ports(flow_tuple &ft, msg_fragment *pkt) {
   auto *hdr = pkt->data<protocol::ft_header>();
   ft.sport = hdr->sport;
   ft.dport = hdr->dport;
 }
 
+struct msg_frame_desc {
+  seq_t seq, ack;
+  uint16_t wnd;
+  uint32_t ts;
+  bool som, eom;
+  bool ack_frame, sack;
+};
+
 struct builder {
   uint16_t sport, dport;
   builder(uint16_t sport, uint16_t dport) : sport(sport), dport(dport) {}
-  inline void prepare_ft_header(message *msg, seq_t seq, seq_t ack,
-                                uint16_t wnd, bool start, bool end, uint32_t us,
-                                bool is_ack_frame, bool is_sack) {
+  inline void prepare_ft_header(msg_fragment *msg, const msg_frame_desc &desc) {
     auto *ft = msg->move_headroom<protocol::ft_header>();
     ft->sport = sport;
     ft->dport = dport;
-    ft->ack = ack;
-    ft->seq = seq;
-    ft->wnd = wnd;
-    ft->start = start;
-    ft->end = end;
-    ft->ts = us;
-    ft->ackframe = is_ack_frame;
-    ft->sack = is_sack;
+    ft->ack = desc.ack;
+    ft->seq = desc.seq;
+    ft->wnd = desc.wnd;
+    ft->ts = desc.ts;
+    ft->ackframe = desc.ack_frame;
+    ft->sack = desc.sack;
+    ft->som = desc.som;
+    ft->eom = desc.eom;
     ft->type = protocol::pkt_type::FT_MSG;
   }
 
-  inline void prepare_ack_pkt(message *msg, seq_t ack, uint32_t us,
+  inline void prepare_ack_pkt(msg_fragment *msg, seq_t ack, uint32_t us,
                               bool is_sack) {
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     ft->sport = sport;
@@ -84,20 +97,19 @@ struct builder {
     ft->type = protocol::pkt_type::FT_ACK;
   }
 
-  inline void prepare_init_header(message *msg, seq_t seq, uint16_t budget) {
+  inline void prepare_init_header(msg_fragment *msg, seq_t seq, uint16_t budget) {
     auto *ft = static_cast<ft_header *>(msg->data());
     ft->sport = sport;
     ft->dport = dport;
     ft->seq = seq;
+    ft->ackframe = 0;
     ft->ts = 0;
     ft->sack = 0;
     ft->wnd = budget;
-    ft->start = true;
-    ft->end = true;
-    ft->type = protocol::pkt_type::FT_RDY_TO_RCV;
+    ft->type = protocol::pkt_type::FT_SYN;
   }
 
-  inline void prepare_ctrl_pkt(message *msg, seq_t seq, seq_t ack, uint16_t wnd,
+  inline void prepare_ctrl_pkt(msg_fragment *msg, seq_t seq, seq_t ack, uint16_t wnd,
                                uint32_t ts, bool is_ack_frame) {
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     ft->sport = sport;
@@ -110,8 +122,8 @@ struct builder {
     ft->type = protocol::pkt_type::FT_WND_RET;
   }
 
-  inline void prepare_init_ack_header(message *msg, seq_t seq, seq_t ack,
-                                      uint16_t wnd) {
+  inline void prepare_init_ack_header(msg_fragment *msg, seq_t seq, seq_t ack,
+                                      uint16_t wnd, uint64_t ts) {
     auto *ft = rte_pktmbuf_mtod(msg, protocol::ft_header *);
     ft->sport = sport;
     ft->dport = dport;
@@ -119,14 +131,12 @@ struct builder {
     ft->wnd = wnd;
     ft->seq = seq;
     ft->ackframe = true;
-    ft->ts = 0;
+    ft->ts = ts;
     ft->sack = 0;
-    ft->start = true;
-    ft->end = true;
-    ft->type = protocol::pkt_type::FT_CLR_TO_SD;
+    ft->type = protocol::pkt_type::FT_SYN_ACK;
   }
 
-  inline void prepare_done_header(message *msg, seq_t seq, seq_t ack) {
+  inline void prepare_done_header(msg_fragment *msg, seq_t seq, seq_t ack) {
     auto *ft = msg->data<protocol::ft_header>();
     ft->sport = sport;
     ft->dport = dport;

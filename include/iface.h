@@ -1,12 +1,10 @@
 #pragma once
 
-#include "message.h"
+#include "msg_fragment.h"
 #include <cstdint>
 #include <memory>
 #include <vector>
 #include <rte_ethdev.h>
-#include <rte_ether.h>
-#include <rte_mempool.h>
 
 namespace fastt {
 int init();
@@ -16,7 +14,7 @@ struct iface {
   using netdev_iface =
       std::tuple<uint16_t, uint16_t, uint16_t>;
   static std::unique_ptr<iface> configure_port(uint16_t port, uint16_t ntx,
-                                             uint16_t nrx, std::vector<std::shared_ptr<message_allocator>>& pools);
+                                             uint16_t nrx, std::vector<std::shared_ptr<msg_fragment_allocator>>& pools);
   void stop(){
       rte_eth_dev_stop(port);
   }

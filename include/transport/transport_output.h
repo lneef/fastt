@@ -1,6 +1,6 @@
 #pragma once
 
-#include "message.h"
+#include "msg_fragment.h"
 #include "protocol.h"
 #include "transport/seq.h"
 #include "util.h"
@@ -15,12 +15,13 @@
 #include <deque>
 #include <rte_branch_prediction.h>
 #include <rte_mbuf.h>
+#include <sys/types.h>
 
 struct reorder_buffer {
-  using msg_desc_t = std::pair<seq_t, message *>;
+  using msg_desc_t = std::pair<seq_t, msg_fragment *>;
   std::deque<msg_desc_t> msg_desc;
 
-  void insert(seq_t seq, message *msg) {
+  void insert(seq_t seq, msg_fragment *msg) {
     if (msg_desc.empty()) {
       msg_desc.emplace_back(seq, msg);
       return;
@@ -43,17 +44,22 @@ struct reorder_buffer {
 
   bool has_elements() const { return msg_desc.size() > 0; }
 
-  message *front() { return msg_desc.front().second; }
+  msg_fragment *front() { return msg_desc.front().second; }
 
   void pop_front() { msg_desc.pop_front(); }
 };
 
 struct transport_output {
+  struct message {
+    msg_fragment *head;
+    uint64_t size : 48;
+    uint16_t segs : 16;
+  };
   // reserve some headroom
   static constexpr unsigned kLowThreshold = 128;
   static constexpr unsigned kMaxWndSize = 128;
-  transport_output(message_allocator *port_allocator)
-      : port_allocator(port_allocator), max_rx_in_window(), next_seq() {}
+  transport_output(msg_fragment_allocator *port_allocator)
+      : port_allocator(port_allocator), max_rx_in_window(~0), next_seq() {}
 
   seq_t get_last_rcvd_in_seq() const { return seq_t{next_seq - 1}; }
 
@@ -77,7 +83,7 @@ struct transport_output {
            port_allocator->get_remaining_space() < kLowThreshold;
   }
 
-  void insert(seq_t seq, message *msg) {
+  void insert(seq_t seq, msg_fragment *msg) {
     assert(inside(seq));
     assert(!wnd.test(index(seq)));
     assert(msg->ref_cnt() > 0);
@@ -90,36 +96,38 @@ struct transport_output {
     reassemble(seq, msg);
   }
 
-  template <typename F> bool advance(F &&f) {
-    if (out.empty())
-      return false;
-    auto *msg = out.front();
-    out.pop_front();
-    grant_to_return += msg->nb_segs;
-    f(msg);
-    return true;
-  }
-
-  void reassemble_single_msg(message *mbuf) {
+  void reassemble_single_msg(msg_fragment *mbuf) {
     auto *hdr = mbuf->data<protocol::ft_header>();
     // control frames are freed
     if (hdr->type != protocol::pkt_type::FT_MSG) {
       mbuf->free();
       return;
     }
-    bool end = hdr->end;
-    mbuf->shrink_headroom(sizeof(protocol::ft_header));
-    message::merge(first, last, mbuf);
+    auto som_len = 0u;
+    if (hdr->som) {
+      auto *msg_hdr =
+          mbuf->data<protocol::ft_msg_payload>(sizeof(protocol::ft_header));
+      reassembly.size = msg_hdr->out;
+      som_len = sizeof(protocol::ft_msg_payload);
+    }
+    reassembly.segs += mbuf->nb_segs;
+    bool end = hdr->eom;
+    mbuf->shrink_headroom(sizeof(protocol::ft_header) +
+                          som_len);
+    reassembly.rcvd += mbuf->pkt_len;
+    msg_fragment::merge(reassembly.first, reassembly.last, mbuf);
     if (end) {
-      auto *msg = first;
-      first = last = nullptr;
-      out.push_back(msg);
+      auto *msg = reassembly.first;
+      out.emplace_back(msg, reassembly.size, reassembly.segs);
+      reassembly.reset();
+      assert(msg->ref_cnt() > 0);
+      reassembly.size = 0;
     }
   }
 
-  bool empty() const { return out.empty() && first == nullptr; }
+  bool empty() const { return out.empty() && reassembly.first == nullptr; }
 
-  void reassemble(seq_t seq, message *msg) {
+  void reassemble(seq_t seq, msg_fragment *msg) {
     if (seq != next_seq) {
       rb.insert(seq, msg);
     } else {
@@ -155,7 +163,6 @@ struct transport_output {
     seq_t highest_seq = next_seq + protocol::ft_sack_payload::kBitMapLen * 64;
     if (likely(highest_seq > max_rx_in_window))
       highest_seq = max_rx_in_window;
-
     std::memset(
         data->bit_map, 0,
         protocol::ft_sack_payload::kBitMapLen *
@@ -173,29 +180,42 @@ struct transport_output {
     return id;
   }
 
-  bool has_buffered_messages_frags() const {
-    return out.size() > 0 || first != nullptr;
+  bool has_buffered_msg_fragments_frags() const {
+    return out.size() > 0 || reassembly.first != nullptr;
+  }
+
+  ssize_t read_partial(void *buf, size_t size, size_t &remaining) {
+    if (reassembly.first == nullptr)
+      return -EAGAIN;
+    if (reassembly.size > size) {
+      remaining = reassembly.size;
+      return -EMSGSIZE;
+    }
+    auto to_copy = std::min<size_t>(size, reassembly.rcvd);
+    reassembly.first->read(buf);
+    grant_to_return += reassembly.segs;
+    reassembly.size -= to_copy;
+    remaining = reassembly.size;
+    reassembly.first->free();
+    reassembly.reset();
+    return to_copy;
   }
 
   ssize_t read(void *buf, size_t size, size_t &remaining) {
     if (out.empty())
-      return -EAGAIN;
-    auto *msg = out.front();
-    if (msg->pkt_len > size) {
-      remaining = msg->pkt_len;
+      return read_partial(buf, size, remaining);
+    auto buffered = out.front();
+    if (buffered.size > size) {
+      remaining = buffered.size;
       return -EMSGSIZE;
     }
-    auto to_copy = std::min<size_t>(msg->pkt_len - off, size);
-    if (msg->nb_segs > 1)
-      rte_pktmbuf_read(msg, off, to_copy, buf);
-    else
-      std::memcpy(buf, msg->data<uint8_t>() + off, to_copy);
-    off += to_copy;
-    grant_to_return += msg->nb_segs;
+    auto to_copy = std::min<size_t>(buffered.size, size);
+    auto *msg = buffered.head;
+    msg->read(buf);  
+    grant_to_return += buffered.segs;
     out.pop_front();
     msg->free();
     remaining = 0;
-    off = 0;
     return to_copy;
   }
 
@@ -203,7 +223,7 @@ struct transport_output {
 
   unsigned get_available_wnd() const { return grant_to_return; }
 
-  unsigned prepare_wnd_return() {
+  uint16_t prepare_wnd_return() {
     auto wnd = get_available_wnd();
     grant_to_return = 0;
     return wnd;
@@ -214,11 +234,21 @@ struct transport_output {
   uint64_t get_total_rcvd_pkts() const { return rcvd_pkts; }
 
   // pkt reassmbly and buffering
-  message *first = nullptr, *last = nullptr;
-  message_allocator *port_allocator;
+  struct {
+    msg_fragment *first = nullptr, *last = nullptr;
+    uint64_t size = 0;
+    uint32_t rcvd = 0;
+    uint32_t segs = 0;
+
+    void reset() {
+      first = last = nullptr;
+      segs = 0;
+      rcvd = 0;
+    }
+  } reassembly;
+  msg_fragment_allocator *port_allocator;
   reorder_buffer rb;
-  std::deque<message *> out;
-  size_t off = 0;
+  std::deque<message> out;
 
   // connection state
   std::bitset<kMaxWndSize> wnd;
