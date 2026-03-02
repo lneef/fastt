@@ -56,6 +56,8 @@ struct mock_connection {
 
   mock_connection(mock_transport &tp) : tp(tp) {}
 
+  void perform_recovery(){}
+
   // mirrors connection::make_progress
   void make_progress() { concurrency::make_progress(*this); }
 
@@ -116,9 +118,9 @@ protected:
     hdr->eom = true;
     hdr->ackframe = 0;
     hdr->sack = 0;
-    hdr->ts = 0;
     *pkt->get_ts() = 0;
     tp->process_pkt(pkt);
+    tp->accept_connection();
     ASSERT_TRUE(tp->up());
     mock->clear();
   }
@@ -147,7 +149,6 @@ protected:
     hdr->ackframe = 0;
     hdr->sack = 0;
     hdr->wnd = 0;
-    hdr->ts = 0;
     std::memcpy(msg->data<uint8_t>(off + sizeof(protocol::ft_header)), payload,
                 payload_len);
     *msg->get_ts() = 0;
@@ -165,7 +166,6 @@ protected:
     hdr->ackframe = 0;
     hdr->sack = 0;
     hdr->wnd = wnd;
-    hdr->ts = 0;
     *msg->get_ts() = 0;
     return msg;
   }
@@ -330,9 +330,9 @@ TEST_F(TransportCoroTest, TwoConnectionsRecvThenSend) {
     hdr->eom = true;
     hdr->ackframe = 0;
     hdr->sack = 0;
-    hdr->ts = 0;
     *pkt->get_ts() = 0;
     tp2.process_pkt(pkt);
+    tp2.accept_connection();
     ASSERT_TRUE(tp2.up());
     mock2.clear();
   }
@@ -414,9 +414,9 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
     hdr->eom = true;
     hdr->ackframe = 0;
     hdr->sack = 0;
-    hdr->ts = 0;
     *pkt->get_ts() = 0;
     tp->process_pkt(pkt);
+    tp->accept_connection();
     ASSERT_TRUE(tp->up());
     ASSERT_FALSE(tp->can_send());
     mock->clear();
@@ -435,9 +435,9 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
     hdr->eom = true;
     hdr->ackframe = 0;
     hdr->sack = 0;
-    hdr->ts = 0;
     *pkt->get_ts() = 0;
     tp2.process_pkt(pkt);
+    tp2.accept_connection();
     ASSERT_TRUE(tp2.up());
     mock2.clear();
   }
@@ -548,9 +548,9 @@ TEST_F(TransportCoroTest, SendLargePayload) {
     hdr->eom = true;
     hdr->ackframe = 0;
     hdr->sack = 0;
-    hdr->ts = 0;
     *pkt->get_ts() = 0;
     tp->process_pkt(pkt);
+    tp->accept_connection();
     ASSERT_TRUE(tp->up());
     mock->clear();
   }
@@ -638,9 +638,9 @@ TEST_F(TransportCoroTest, SendAfterWndReturn) {
   h->eom = true;
   h->ackframe = 0;
   h->sack = 0;
-  h->ts = 0;
   *pkt->get_ts() = 0;
   tp->process_pkt(pkt);
+  tp->accept_connection();
   ASSERT_TRUE(tp->up());
   mock->clear();
 

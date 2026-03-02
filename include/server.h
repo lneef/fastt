@@ -21,17 +21,12 @@ public:
       : scon_config(scon_config),
         manager(false, port, txq, rxq, scon_config.ip, pool, this, cores) {}
 
-  void complete() { manager.flush(); };
-
-  template<typename F>
-   void poll(F&& f){
-       manager.poll(f);
-   }   
+  void complete() { manager.flush(); };   
 
   template<typename F>
       bool register_service(uint16_t port, F&& service_handler){
-          auto [_, inserted] = services.emplace(port, std::forward<F>(service_handler));
-          return inserted;
+          auto res = services.emplace(port, std::forward<F>(service_handler));
+          return res.second;
       }
 
       void run(){

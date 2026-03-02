@@ -24,8 +24,8 @@ static __inline constexpr float fast_inv_sqrt(float val) {
 }
 
 struct swift {
-  static constexpr float mss = 1024;
-  static constexpr float initial_len = 64;
+  static constexpr float mss = 9001;
+  static constexpr float initial_len = 9001;
   static constexpr float ai = 32;
   static constexpr float beta = 0.8;
   static constexpr float max_md = 0.5;
@@ -38,7 +38,7 @@ struct swift {
   swift(uint64_t target_delay)
       :  retransmit_cnt(0), last_decrease(0),
         base_target_delay(target_delay), cwnd_size(initial_len),
-        min_wd_size(initial_len) {}
+        min_wd_size(initial_len / 16) {}
 
   void on_ack(uint64_t acked, uint64_t now, uint64_t srtt, uint64_t delay) {
     retransmit_cnt = 0;

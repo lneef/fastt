@@ -76,7 +76,6 @@ TEST_F(TransportOutputTest, Reordered) {
     to->copy_bitset(&py);
     ack_scheduler schdlr;
     EXPECT_TRUE(to->has_holes());
-    EXPECT_TRUE(schdlr.sack_pending(7, rte_get_timer_cycles(), 1e9));
     EXPECT_EQ(std::popcount(py.bit_map[0]), 5);
     EXPECT_EQ(std::popcount(py.bit_map[1]), 0);
     EXPECT_EQ(to->get_last_rcvd_in_seq(), seq_t(1));

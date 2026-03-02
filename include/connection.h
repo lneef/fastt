@@ -12,10 +12,10 @@
 #include "dev.h"
 #include "msg_fragment.h"
 #include "packet_if.h"
+#include "task/task.h"
 #include "transport/protocol.h"
 #include "transport/transport.h"
 #include "util.h"
-#include "task/task.h"
 
 class iface;
 class server_iface;
@@ -38,7 +38,7 @@ public:
                                   allocator, pkt_if, cfg, sport, dport)),
         manager(manager), is_client(is_client) {}
   void process_pkt(rte_mbuf *pkt);
-  void acknowledge_all(uint64_t now);
+  void acknowledge_all();
   void accept();
   void open_connection(uint16_t rx_flow_sport, uint16_t rx_flow_dport);
 
@@ -70,23 +70,24 @@ public:
 
   connection_manager *get_manager() { return manager; }
 
+  void perform_recovery() { transport_impl->perform_recovery(); }
+
   flow_tuple get_flow_tuple() const { return transport_impl->get_flow_tuple(); }
 
   void close() { transport_impl->close_connection(); }
 
-  void accept_close() { 
-      assert(link.is_linked());
-      transport_impl->acknowledge(); 
-      link.unlink();
+  void accept_close() {
+    assert(link.is_linked());
+    transport_impl->acknowledge();
+    link.unlink();
   }
 
-  void wait_all_acked(){
-      while(true){  
-        check_timeout(rte_get_timer_cycles());
-        if(transport_impl->all_acked())
-            break;
-      }
-
+  void wait_all_acked() {
+    while (true) {
+      check_timeout(rte_get_timer_cycles());
+      if (transport_impl->all_acked())
+        break;
+    }
   }
 
 private:
@@ -103,13 +104,16 @@ public:
 
 class connection_manager {
   static constexpr uint16_t kdefaultBurstSize = 64;
+
 public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
-                     uint32_t sip, std::shared_ptr<msg_fragment_allocator> allocator,
+                     uint32_t sip,
+                     std::shared_ptr<msg_fragment_allocator> allocator,
                      P *parent, uint16_t cores)
       : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
-        pkt_if(&scheduler, sip, port), active(), cores(cores), is_client(is_client) {
+        pkt_if(&scheduler, sip, port), active(), cores(cores),
+        is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
     else
@@ -133,33 +137,42 @@ public:
         rte_pktmbuf_free(pkt);
       }
     }
-   }
+  }
 
   void check_timeouts() {
-    auto now = rte_get_timer_cycles();
     for (auto &con : active) {
+        auto now = rte_get_timer_cycles();
       con.transport_ctrl();
       con.check_timeout(now);
     }
   }
 
   void acknowledge_all_and_reap() {
-    auto now = rte_get_timer_cycles();
     for (auto it = active.begin(), end = active.end(); it != end;) {
       auto &con = *it;
       ++it;
-      con.acknowledge_all(now);
+      con.acknowledge_all();
+      if (con.down())
+        con.link.unlink();
+    }
+  }
+
+  void make_progess_all() {
+    for (auto it = active.begin(), end = active.end(); it != end;) {
+      auto &con = *it;
+      ++it;
+      con.perform_recovery();
+      con.acknowledge_all();
       if (con.down())
         con.link.unlink();
     }
   }
 
   void acknowledge() {
-    auto now = rte_get_timer_cycles();
     for (auto &con : active) {
       if (con.disconnecting())
         continue;
-      con.acknowledge_all(now);
+      con.acknowledge_all();
     }
   }
 
@@ -169,29 +182,16 @@ public:
 
   connection *open_connection(uint16_t sport, uint16_t dport,
                               const uint32_t sip, const uint32_t dip,
-                              const uint16_t target); 
-
-  template <typename F> void poll(F &&handler) {
-    fetch_from_qpair();
-    accept_connections([](connection*){});
-    flush();
-    for (auto it = active.begin(), end = active.end(); it != end;){
-        auto &con = *it;
-        ++it;
-        handler(con);
-    }
-    acknowledge();
-    check_timeouts();
-  }
+                              const uint16_t target);
 
   void poll_client() {
     fetch_from_qpair();
-    acknowledge_all_and_reap();
+    make_progess_all();
     check_timeouts();
     flush();
   }
 
-  void run(concurrency::scheduler &scheduler); 
+  void run(concurrency::scheduler &scheduler);
 
   void fetch_from_qpair() {
     std::array<flow_tuple, kdefaultBurstSize> fts;
@@ -209,10 +209,10 @@ public:
     for (auto *msg : vec)
       pkt_if.strip_header(msg, fts[i++]);
     i = 0;
-    for(; i < vec.i; ++i){
-        auto *msg = vec.pkts[i];
-        auto &ft = fts[i];
-        handle_pkt(msg, ft);
+    for (; i < vec.i; ++i) {
+      auto *msg = vec.pkts[i];
+      auto &ft = fts[i];
+      handle_pkt(msg, ft);
     }
     vec.clear();
     assert(vec.i == 0);
@@ -223,8 +223,7 @@ public:
     connection_requests.emplace_back(pkt, ft);
   }
 
-  template<typename F>
-  void accept_connections(F&& cb) {
+  template <typename F> void accept_connections(F &&cb) {
     while (!connection_requests.empty()) {
       auto [pkt, ft] = connection_requests.front();
       connection_requests.pop_front();

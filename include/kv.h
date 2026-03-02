@@ -64,7 +64,7 @@ public:
         return -1;
       while (!ifc->probe_connection_setup_done(con))
         ;
-      con->acknowledge_all(rte_get_timer_cycles());
+      con->acknowledge_all();
       ifc->flush();
     }
     return 0;
@@ -106,10 +106,8 @@ public:
   }
 
   void acknowledge_all() {
-    con->acknowledge_all(rte_get_timer_cycles());  
+    con->acknowledge_all();  
   }
-
-  template <typename F> void handle_active(F &&fun) { ifc->manager.poll(fun); }
 
   void flush() { ifc->flush(); }
 

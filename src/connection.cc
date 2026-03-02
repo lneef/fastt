@@ -47,8 +47,8 @@ void connection::process_pkt(rte_mbuf *pkt) {
   transport_impl->process_pkt((static_cast<msg_fragment *>(pkt)));
 }
 
-void connection::acknowledge_all(uint64_t now) {
-  transport_impl->acknowledge(now);
+void connection::acknowledge_all() {
+  transport_impl->acknowledge();
 }
 
 void connection::accept() { transport_impl->accept_connection(); }

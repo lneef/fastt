@@ -20,7 +20,7 @@ public:
       : port(port), txq(txq), rxq(rxq), nic_arch(std::make_unique<ena::ena>()) {};
 
   uint16_t tx_burst(rte_mbuf **pkts, uint16_t cnt) {
-    auto now = rte_get_timer_cycles() / get_ticks_us();
+    auto now = rte_get_timer_cycles();
     auto sent = rte_eth_tx_burst(port, txq, pkts, cnt);
     for (uint16_t i = 0; i < sent; ++i)
       *static_cast<msg_fragment *>(pkts[i])->get_ts() = now;
@@ -29,7 +29,7 @@ public:
 
   template <typename F> void rx_burst(F &&cb) {
     std::array<rte_mbuf *, kDefaultInputBurstSize> pkts;
-    auto now = rte_get_timer_cycles() / get_ticks_us();
+    auto now = rte_get_timer_cycles();
     auto rcvd =
         rte_eth_rx_burst(port, rxq, pkts.data(), kDefaultInputBurstSize);
     for (uint16_t i = 0; i < rcvd; ++i) {
@@ -39,7 +39,7 @@ public:
   }
 
   template <unsigned N> void rx_burst(packet_vector<N> &vec) {
-    auto now = rte_get_timer_cycles() / get_ticks_us();
+    auto now = rte_get_timer_cycles();
     auto rcvd = rte_eth_rx_burst(port, rxq,
                                  reinterpret_cast<rte_mbuf **>(vec.pkts.data()),
                                  vec.pkts.size());

@@ -123,7 +123,7 @@ static int lcore_large(void *arg) {
     return -1;
   while (!cif.probe_connection_setup_done(con))
     ;
-  con->acknowledge_all(rte_get_timer_cycles());
+  con->acknowledge_all();
   cif.flush();
 
   msg_hdr hdr;
