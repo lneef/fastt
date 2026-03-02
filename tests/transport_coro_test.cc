@@ -34,6 +34,10 @@ struct mock_packet_if {
     return m;
   }
 
+  uint32_t get_sip() const{
+      return 0;
+  }
+
   size_t size() const { return sent_pkts.size(); }
 
   void clear() {

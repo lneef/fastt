@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-//#define DEBUG 1
+#define DEBUG 1
 struct msg_fragment;
 void dump_pkt(msg_fragment *msg, uint16_t len);
 

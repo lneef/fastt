@@ -99,7 +99,8 @@ public:
       ++it;
       if (!rack::send_after(rck.xmit_ts, rck.end_seq, entry.xmit_ts, entry.seq))
         break;
-      if (now >= entry.xmit_ts + rck.rtt) {
+      if (now >= entry.xmit_ts + rck.rtt) {  
+        FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);  
         assert(entry.link.is_linked());  
         entry.link.unlink();
         retransmission_queue.push_back(entry);
@@ -228,7 +229,6 @@ public:
       }
     }
     timeout = rte_get_timer_cycles() + rto;
-    FASTT_LOG_DEBUG("Largest set seq num %u\n", largest_acked->seq.v);
 
     if (sack_rtt != ~0ull){
       update_srtt(sack_rtt);
