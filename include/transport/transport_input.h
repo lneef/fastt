@@ -40,6 +40,7 @@ struct rack {
   uint64_t min_rtt{kMinRTT * get_ticks_us()}, rtt;
   uint64_t xmit_ts = 0, ack_ts;
   seq_t end_seq{~0u};
+  uint64_t dup_ack_cnt = 0;
 };
 
 struct sender_entry {
@@ -135,6 +136,8 @@ public:
       update_srtt(cumulative_rtt);
       rck.rtt = cumulative_rtt;
     }
+
+    rck.dup_ack_cnt = 0;
   }
 
   template <typename F>
@@ -191,6 +194,8 @@ public:
   }
 
   void acknowledge(seq_t seq, uint64_t ts, bool is_sack) {
+    if(seq == least_unacked_pkt - 1)
+        ++rck.dup_ack_cnt;
     if (seq < least_unacked_pkt)
       return;
     stats.acked = seq;
