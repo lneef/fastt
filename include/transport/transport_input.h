@@ -255,8 +255,10 @@ public:
     FASTT_LOG_DEBUG("Got new capacity %u\n", budget);
   }
 
-  const statistics &get_stats() {
-    return stats;
+  statistics get_stats() {
+    statistics out = stats;
+    out.rtt /= get_ticks_us();
+    return out;
   }
 
 private:

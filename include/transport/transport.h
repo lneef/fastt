@@ -413,7 +413,7 @@ public:
   }
 
   transport_statistics get_stats() {
-    auto &rt_stats = ttx.get_stats();
+    auto rt_stats = ttx.get_stats();
     return {rt_stats.retransmitted, rt_stats.acked, stats.sent,
             stats.retransmissions, rt_stats.rtt};
   }
