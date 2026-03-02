@@ -85,19 +85,14 @@ TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
     while(rte_get_timer_cycles() < now + 10 * get_ticks_us())
         ;
     ti->detect_loss(rte_get_timer_cycles());
-    // advance_recovery should retransmit the 4 unsacked packets
     std::vector<msg_fragment*> retransmitted;
     ti->advance_recovery([&](msg_fragment *m) { retransmitted.push_back(m); });
     EXPECT_EQ(retransmitted.size(), 3u);
 
-    // A second advance_recovery should have nothing to retransmit
     std::vector<msg_fragment*> second_round;
     ti->advance_recovery([&](msg_fragment *m) { second_round.push_back(m); });
     EXPECT_EQ(second_round.size(), 0u);
 
-    // Now send another SACK where previously unsacked seq 1 is now sacked
-    // Remaining unacked after cumulative ack at 0: still 1..7
-    // Sacked: 1, 2, 4, 6 (bits 0, 1, 3, 5); unsacked: 3, 5, 7 (bits 2, 4, 6)
     protocol::ft_sack_payload sack2{};
     sack2.bit_map[0] = (1ull << 1) | (1ull << 3) | (1ull << 6);
     sack2.bit_map_len = 7;
@@ -112,6 +107,6 @@ TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
     // seq 3, 5, 7 were already retransmitted, so they should not be re-queued
     std::vector<msg_fragment*> third_round;
     ti->advance_recovery([&](msg_fragment *m) { third_round.push_back(m); });
-    EXPECT_EQ(third_round.size(), 3u);
+    EXPECT_EQ(third_round.size(), 0u);
 }
 

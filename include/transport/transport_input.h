@@ -31,14 +31,13 @@ struct rack {
       return false;
     if (send_after(seg_xmit_ts, seq, xmit_ts, end_seq)) {
       xmit_ts = seg_xmit_ts;
-      ack_ts = now;
       end_seq = seq;
     }
     return true;
   }
 
-  uint64_t min_rtt{kMinRTT * get_ticks_us()}, rtt;
-  uint64_t xmit_ts = 0, ack_ts;
+  uint64_t min_rtt{kMinRTT * get_ticks_us()}, rtt = 0;
+  uint64_t xmit_ts = 0;
   seq_t end_seq{~0u};
   uint64_t dup_ack_cnt = 0;
 };
@@ -164,7 +163,6 @@ public:
     *msg->get_ts() = 0;
     unacked.emplace_back(msg, now, seq++, false);
     xmit_list.push_back(unacked.back());
-    FASTT_LOG_DEBUG("Enqueue pkt with %u new budget %u\n", (seq - 1).v, budget);
     return true;
   }
 
@@ -258,7 +256,6 @@ public:
   }
 
   const statistics &get_stats() {
-    stats.rtt /= get_ticks_us();
     return stats;
   }
 
