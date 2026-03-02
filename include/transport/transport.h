@@ -374,6 +374,7 @@ public:
       };
       if(desc.ack_frame)
         scheduler.ack_callback(desc.ack);
+      FASTT_LOG_DEBUG("Piggbacked: %c %u\n", desc.ack_frame, desc.ack.v);
       builder.prepare_ft_header(pkt, desc);
     };
     auto inserted = ttx.record_pkt(mbuf, ctor, now);
