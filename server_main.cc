@@ -5,10 +5,12 @@
 #include "server.h"
 #include "task/async.h"
 #include "task/task.h"
+#include <algorithm>
 #include <arpa/inet.h>
 #include <atomic>
 #include <bits/types/struct_iovec.h>
 #include <cstdint>
+#include <cstring>
 #include <getopt.h>
 #include <memory>
 #include <random>
@@ -125,10 +127,16 @@ int lcore_server_fun(void *arg) {
         size_t rem = 0;
         while (true) {
           auto sz = co_await recv(schdlr, con, buf.data(), buf_len, rem);
+          assert(sz == buf_len);
+          assert(std::all_of(buf.begin(), buf.end(), [](const auto c) { return 'A' == c; }));
           if (sz == 0) {
             co_return;
           }
-          assert(sz == buf_len);
+          int ret = 0;
+          msg_hdr hdr;
+          hdr.set_data(&ret, sizeof(ret));
+          auto st = co_await send(schdlr, con, hdr);
+          assert(st == sizeof(ret));
         }
       });
 

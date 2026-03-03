@@ -129,7 +129,6 @@ static int lcore_large(void *arg) {
   do_send(*con, hdr);
   do_recv(*con, &retval);
   assert(retval == 0);
-  ;
   cif.close(*con);
   return 0;
 }
