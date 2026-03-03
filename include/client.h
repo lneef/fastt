@@ -18,27 +18,32 @@ public:
       : scon_config(scon_config),
         manager(true, port, txq, rxq, scon_config.ip, pool, this, cores) {}
 
-  template <bool flush = true> bool probe_connection_setup_done(connection *con) {
-    manager.fetch_from_qpair();  
-    if constexpr (flush)
-      manager.flush();
-    return con->up();
+  connection *open(const con_config &target, uint16_t rtid,
+                   rte_ether_addr &dmac) {
+    auto *con = open_connection(target, rtid, dmac);
+    if (!con)
+      return nullptr;
+    while (!con->up())
+      poll();
+    return con;
   }
 
-  void poll(){
-      manager.poll_client();
+  void close(connection &con) {
+    con.close();
+    while (!con.done())
+      poll();
+    manager.close(&con);
   }
 
-  connection *open_connection(const con_config &target, uint16_t rtid, rte_ether_addr &dmac);
-
-  void close(connection* con){
-      manager.close(con);
-  }
+  void poll() { manager.poll_client(); }
 
   void flush() { manager.flush(); }
 
 private:
+  connection *open_connection(const con_config &target, uint16_t rtid,
+                              rte_ether_addr &dmac);
   con_config scon_config;
+
 public:
   connection_manager manager;
 };

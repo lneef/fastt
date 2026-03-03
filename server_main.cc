@@ -105,7 +105,6 @@ int lcore_server_fun(void *arg) {
                                auto sz = co_await recv(schdlr, con, &req,
                                                        sizeof(req), rem);
                                if (sz == 0) {
-                                 con.accept_close();
                                  co_return;
                                }
                                assert(sz == sizeof(req));
@@ -114,7 +113,6 @@ int lcore_server_fun(void *arg) {
                                m.set_data(&resp, sizeof(resp));
                                auto sent = co_await send(schdlr, con, m);
                                if (sent == 0) {
-                                 con.accept_close();
                                  co_return;
                                }
                                assert(sent == sizeof(resp));
@@ -128,7 +126,6 @@ int lcore_server_fun(void *arg) {
         while (true) {
           auto sz = co_await recv(schdlr, con, buf.data(), buf_len, rem);
           if (sz == 0) {
-            con.accept_close();
             co_return;
           }
           assert(sz == buf_len);

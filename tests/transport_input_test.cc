@@ -48,7 +48,7 @@ TEST_F(TransportInputTest, SackMarksCorrectEntries) {
     protocol::ft_sack_payload sack{};
     sack.bit_map[0] = (1ull << 1) | (1ull << 3) | (1ull << 4);
     sack.bit_map_len = 5;
-    ti->acknowledge(seq_t{0} - 1, rte_get_timer_cycles(), true);
+    ti->acknowledge(seq_t{0} - 1, rte_get_timer_cycles());
     ti->acknowledge_sack(&sack, rte_get_timer_cycles());
 
     auto now = rte_get_timer_cycles();
@@ -73,7 +73,7 @@ TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
     EXPECT_EQ(ti->get_seq(), seq_t{8});
 
     // ACK seq 0 (cumulative), remaining unacked: 1..7
-    ti->acknowledge(seq_t{0}, 1, true);
+    ti->acknowledge(seq_t{0}, rte_get_timer_cycles());
 
     // SACK: bitmap covers entries 1..7 (7 entries after cumulative ack)
     // Mark 2, 4, 6 as sacked (bits 1, 3, 5 set); 1, 3, 5, 7 are not sacked (bits 0, 2, 4, 6 unset)

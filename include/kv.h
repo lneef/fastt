@@ -21,81 +21,67 @@ inline void create_scan_request(msg_fragment *msg, int64_t low, uint64_t high,
   kv::create_kv_scan(msg->data<uint8_t>(), id, low, high);
 }
 
-
-struct kv_slot{
-    uint16_t id;
-    int64_t key;
+struct kv_slot {
+  uint16_t id;
+  int64_t key;
 };
 
-struct kv_slot_store{
-    std::vector<kv_slot> slots;
-    std::deque<uint16_t> free_slots;
-    kv_slot_store(uint16_t sz): slots(sz){
-        for(auto i = 0u; i< sz; ++i){
-            free_slots.push_back(i);
-            slots[i].id = i;
-        }
+struct kv_slot_store {
+  std::vector<kv_slot> slots;
+  std::deque<uint16_t> free_slots;
+  kv_slot_store(uint16_t sz) : slots(sz) {
+    for (auto i = 0u; i < sz; ++i) {
+      free_slots.push_back(i);
+      slots[i].id = i;
     }
+  }
 
-    bool empty() const{
-        return free_slots.empty();
-    }
+  bool empty() const { return free_slots.empty(); }
 
-    uint16_t get(){
-        auto id = free_slots.front();
-        free_slots.pop_front();
-        return id;
-    }
+  uint16_t get() {
+    auto id = free_slots.front();
+    free_slots.pop_front();
+    return id;
+  }
 
-    void put(uint16_t id){
-        free_slots.push_back(id);
-    }
+  void put(uint16_t id) { free_slots.push_back(id); }
 };
 
 class kv_proxy {
 public:
   kv_proxy(client_iface *ifc) : ifc(ifc), slots(128) {}
 
-  int connect(const con_config &con_cfg, uint16_t n, uint16_t rtid, rte_ether_addr &dmac) {
-    con_config cfg = con_cfg;
-    for (uint16_t i = 0; i < n; ++i) {
-      con = ifc->open_connection(cfg, rtid, dmac);
-      if (!con)
+  int connect(const con_config &target, uint16_t rtid,
+              rte_ether_addr &dmac) {
+    con = ifc->open(target, rtid, dmac);
+    if(!con)
         return -1;
-      while (!ifc->probe_connection_setup_done(con))
-        ;
-      con->acknowledge_all();
-      ifc->flush();
-    }
     return 0;
   }
 
-  kv_slot& operator[](size_t i){
-      return slots.slots[i];
-  }
+  kv_slot &operator[](size_t i) { return slots.slots[i]; }
 
   kv_slot *start() {
-    if(!con->can_send())
-        return nullptr;
-    if(slots.empty())
-        return nullptr;
+    if (!con->can_send())
+      return nullptr;
+    if (slots.empty())
+      return nullptr;
     auto id = slots.get();
     return &slots.slots[id];
   }
 
-  void complete(uint16_t id){
-      slots.put(id);
+  void complete(uint16_t id) { slots.put(id); }
+
+  ssize_t recv(void *buf, size_t sz) {
+    ;
+    size_t remaining = 0;
+    return con->recv(buf, sz, remaining);
   }
 
-  ssize_t recv(void* buf, size_t sz){;
-      size_t remaining = 0;
-      return con->recv(buf, sz, remaining);
-  }
-
-  ssize_t send(void* buf, size_t sz){
-      msg_hdr m;
-      m.set_data(buf, sz);
-      return con->send(m);
+  ssize_t send(void *buf, size_t sz) {
+    msg_hdr m;
+    m.set_data(buf, sz);
+    return con->send(m);
   }
 
   void lookup(int64_t key, msg_fragment *msg, uint64_t id) {
@@ -105,8 +91,10 @@ public:
     create_scan_request(msg, low, high, id);
   }
 
-  void acknowledge_all() {
-    con->acknowledge_all();  
+  void acknowledge_all() { con->acknowledge_all(); }
+
+  void close() {
+      ifc->close(*con);
   }
 
   void flush() { ifc->flush(); }
@@ -114,6 +102,7 @@ public:
 private:
   client_iface *ifc;
   kv_slot_store slots;
+
 public:
   connection *con;
 };

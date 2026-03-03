@@ -14,23 +14,11 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <generic/rte_cycles.h>
 #include <getopt.h>
 #include <iostream>
 #include <memory>
 #include <random>
 #include <ranges>
-#include <rte_common.h>
-#include <rte_cycles.h>
-#include <rte_eal.h>
-#include <rte_ethdev.h>
-#include <rte_ether.h>
-#include <rte_launch.h>
-#include <rte_lcore.h>
-#include <rte_mbuf.h>
-#include <rte_mbuf_core.h>
-#include <rte_mempool.h>
-#include <string_view>
 #include <sys/types.h>
 #include <vector>
 
@@ -105,6 +93,7 @@ static int lcore_large(void *arg) {
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
+  int retval = 0;
   std::vector<char> data(256 * 1024, 'A');
   auto do_send = [&](connection &con, msg_hdr &hdr) -> ssize_t {
     auto sent = 0u;
@@ -118,21 +107,30 @@ static int lcore_large(void *arg) {
     }
     return sent;
   };
-  auto *con = cif.open_connection(adapter->cfg, rte_lcore_id(), adapter->dmac);
+  auto do_recv = [&](connection &con, void *buf) -> ssize_t {
+    auto rcvd = 0u;
+    size_t remaining = 0;
+    while (rcvd < sizeof(retval)) {
+      auto ret = con.recv(static_cast<uint8_t *>(buf) + rcvd,
+                          sizeof(retval) - rcvd, remaining);
+      if (ret == -EAGAIN) {
+        cif.poll();
+        continue;
+      }
+      rcvd += ret;
+    }
+    return rcvd;
+  };
+  auto *con = cif.open(adapter->cfg, me, adapter->dmac);
   if (!con)
     return -1;
-  while (!cif.probe_connection_setup_done(con))
-    ;
-  con->acknowledge_all();
-  cif.flush();
-
   msg_hdr hdr;
   hdr.set_data(data.data(), data.size());
   do_send(*con, hdr);
-  con->close();
-  while(!con->done())
-      cif.poll();
-  cif.close(con);
+  do_recv(*con, &retval);
+  assert(retval == 0);
+  ;
+  cif.close(*con);
   return 0;
 }
 
@@ -145,7 +143,7 @@ static int lcore_fn(void *arg) {
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
   kv_proxy kv(&cif);
-  kv.connect(adapter->cfg, 1, rte_lcore_id(), adapter->dmac);
+  kv.connect(adapter->cfg, rte_lcore_id(), adapter->dmac);
   uint64_t t = 0;
   uint64_t c = 0;
 
@@ -166,7 +164,8 @@ static int lcore_fn(void *arg) {
     int64_t key = dist(rng);
     kv::create_kv_request(reinterpret_cast<uint8_t *>(&req), tx->id, key);
     tx->key = key;
-    kv.send(&req, sizeof(req));
+    auto sent = kv.send(&req, sizeof(req));
+    assert(sent == sizeof(req));
     ++t;
   }
   while (c < dur) {
@@ -178,10 +177,7 @@ static int lcore_fn(void *arg) {
     kv.complete(resp.id);
     ++c;
   }
-  kv.con->close();
-  while(!kv.con->done())
-      cif.poll();
-  cif.close(kv.con);
+  kv.close();
   auto stats = kv.con->get_transport_stats();
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   auto end = rte_get_timer_cycles();

@@ -55,7 +55,9 @@ struct ack_scheduler : public seq_observer<ack_scheduler> {
   bool pending_from_retry;
   void process_seq_impl(seq_t seq) { pending_from_retry |= seq < last_acked; }
 
-  bool ack_pending(seq_t seq) { return (seq > last_acked || pending_from_retry); }
+  bool ack_pending(seq_t seq) {
+    return (seq > last_acked || pending_from_retry);
+  }
 
   void ack_callback(seq_t seq) {
     last_acked = seq;
@@ -110,6 +112,8 @@ public:
   }
 
   void check_ctrl() {
+    if (cstate != connection_state::ESTABLISHED)
+      return;
     if (trx.check_wnd_return())
       send_ctrl(trx.prepare_wnd_return());
   }
@@ -156,8 +160,10 @@ public:
       scheduler.ack_callback(ack);
       FASTT_LOG_DEBUG("Sending ACK ack=%u\n", ack.v);
     }
-    if (cstate == connection_state::DISCONNECTING)
+    if (trx.seen_done){
+      assert(cstate == connection_state::DISCONNECTING);  
       cstate = connection_state::DISCONNECTED;
+    }
 
     builder.prepare_ack_pkt(msg, ack, is_sack);
     pkt_if->consume_pkt(msg, cfg);
@@ -178,7 +184,7 @@ public:
         return false;
       }
       if (hdr->ackframe) {
-        ttx.acknowledge(hdr->ack, ts, hdr->sack);
+        ttx.acknowledge(hdr->ack, ts);
         ttx.detect_loss(ts);
       }
       if (hdr->wnd)
@@ -188,7 +194,7 @@ public:
     }
     case protocol::pkt_type::FT_ACK: {
       FASTT_LOG_DEBUG("Got ACK ack=%u sack=%u\n", hdr->ack.v, hdr->sack);
-      ttx.acknowledge(hdr->ack, ts, hdr->sack);
+      ttx.acknowledge(hdr->ack, ts);
       if (hdr->sack) {
         auto *sack_payload =
             msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));
@@ -227,7 +233,7 @@ public:
         msg->free();
         return false;
       }
-      ttx.acknowledge(hdr->ack, ts, hdr->sack);
+      ttx.acknowledge(hdr->ack, ts);
       assert(hdr->wnd > 0);
       ttx.update_budget(hdr->wnd);
       trx.insert(hdr->seq, msg);
@@ -243,7 +249,7 @@ public:
         return false;
       }
       if (hdr->ackframe) {
-        ttx.acknowledge(hdr->ack, ts, false);
+        ttx.acknowledge(hdr->ack, ts);
         ttx.detect_loss(ts);
       }
       ttx.update_budget(hdr->wnd);
@@ -260,17 +266,13 @@ public:
         return false;
       }
 
-      ttx.acknowledge(hdr->ack, ts, hdr->sack);
+      ttx.acknowledge(hdr->ack, ts);
       // if the connection is done and only the last packet if missing proceed
       // otherwise drop
-      if (ttx.all_acked() && trx.get_last_rcvd_in_seq() + 1 == hdr->seq) {
-        cstate = connection_state::DISCONNECTING;
-        trx.insert(hdr->seq, msg);
-        scheduler.process_seq(hdr->seq);
-      } else {
-        msg->free();
-        return false;
-      }
+      assert(ttx.all_acked());
+      cstate = connection_state::DISCONNECTING;
+      trx.insert(hdr->seq, msg);
+      scheduler.process_seq(hdr->seq);
       break;
     }
     default:

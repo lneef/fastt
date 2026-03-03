@@ -76,15 +76,7 @@ public:
 
   void close() { transport_impl->close_connection(); }
 
-  void accept_close() {
-    assert(link.is_linked());
-    transport_impl->acknowledge();
-    link.unlink();
-  }
-
-  bool done() const{
-      return transport_impl->all_acked();
-  }
+  bool done() const { return transport_impl->all_acked(); }
 
 private:
   friend class connection_manager;
@@ -120,42 +112,27 @@ public:
 
     FASTT_LOG_DEBUG("Got pkt via UDP ports: %s \n", ft.print().c_str());
     auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
-    if (unlikely(header->type == protocol::FT_SYN))
-      register_request(pkt, ft);
-    else {
+    if (unlikely(header->type == protocol::FT_SYN)) {
+      FASTT_LOG_DEBUG("Registering new request");
+      connection_requests.emplace_back(pkt, ft);
+    } else {
       protocol::extract_ports(ft, pkt);
       FASTT_LOG_DEBUG("Got packet via %s\n", ft.print().c_str());
       auto it = flows.find(ft);
       if (likely(it != flows.end()))
         it->second->process_pkt(pkt);
       else {
-        dump_pkt(pkt, pkt->len());
-        rte_pktmbuf_free(pkt);
+        FASTT_DUMP_PKT(pkt, pkt->len());
+        pkt->free();
       }
     }
   }
 
   void check_timeouts() {
     for (auto &con : active) {
-        auto now = rte_get_timer_cycles();
+      auto now = rte_get_timer_cycles();
       con.transport_ctrl();
       con.check_timeout(now);
-    }
-  }
-
-  void acknowledge_all_and_reap() {
-    for(auto& con : active)
-        con.acknowledge_all();
-  }
-
-  void make_progess_all() {
-    for (auto it = active.begin(), end = active.end(); it != end;) {
-      auto &con = *it;
-      ++it;
-      con.perform_recovery();
-      con.acknowledge_all();
-      if (con.down())
-        con.link.unlink();
     }
   }
 
@@ -177,7 +154,14 @@ public:
 
   void poll_client() {
     fetch_from_qpair();
-    make_progess_all();
+    for (auto it = active.begin(), end = active.end(); it != end;) {
+      auto &con = *it;
+      ++it;
+      con.perform_recovery();
+      con.acknowledge_all();
+      if (con.down())
+        con.link.unlink();
+    }
     check_timeouts();
     flush();
   }
@@ -207,11 +191,6 @@ public:
     }
     vec.clear();
     assert(vec.i == 0);
-  }
-
-  void register_request(msg_fragment *pkt, flow_tuple &ft) {
-    FASTT_LOG_DEBUG("Registering new request");
-    connection_requests.emplace_back(pkt, ft);
   }
 
   template <typename F> void accept_connections(F &&cb) {

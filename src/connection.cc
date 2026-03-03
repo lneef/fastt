@@ -24,7 +24,6 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
   FASTT_LOG_DEBUG("Opened new connection to %d %d\n", ft.sip, ntohs(ft.sport));
   cfg.transport_ports.sport = dist(rng);
   cfg.transport_ports.dport = dist(rng);
-
   // find transport level queue pair
   dev.nic_arch->find_port_pair(cfg.ip, sip, rx_flow_sport, rx_flow_dport,
                                target, cores);
@@ -47,9 +46,7 @@ void connection::process_pkt(rte_mbuf *pkt) {
   transport_impl->process_pkt((static_cast<msg_fragment *>(pkt)));
 }
 
-void connection::acknowledge_all() {
-  transport_impl->acknowledge();
-}
+void connection::acknowledge_all() { transport_impl->acknowledge(); }
 
 void connection::accept() { transport_impl->accept_connection(); }
 
@@ -71,5 +68,7 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
   for (auto &con : active)
     concurrency::make_progress(con);
   scheduler.run();
-  acknowledge_all_and_reap();
+  for (auto &con : active)
+    con.acknowledge_all();
+  check_timeouts();
 }

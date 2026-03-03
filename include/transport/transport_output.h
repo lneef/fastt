@@ -18,7 +18,7 @@
 #include <sys/types.h>
 
 struct reorder_buffer {
-  using msg_desc_t = std::pair<seq_t, msg_fragment *>;
+  using msg_desc_t = std::pair<seq_t, fragment_ptr>;
   std::deque<msg_desc_t> msg_desc;
 
   void insert(seq_t seq, msg_fragment *msg) {
@@ -36,7 +36,7 @@ struct reorder_buffer {
                                  [](const auto &elem, const auto &val) {
                                    return elem.first < val.first;
                                  });
-      msg_desc.insert(it, {seq, msg});
+      msg_desc.insert(it, {seq, fragment_ptr(msg)});
     }
   }
 
@@ -44,14 +44,14 @@ struct reorder_buffer {
 
   bool has_elements() const { return msg_desc.size() > 0; }
 
-  msg_fragment *front() { return msg_desc.front().second; }
+  fragment_ptr& front() { return msg_desc.front().second; }
 
   void pop_front() { msg_desc.pop_front(); }
 };
 
 struct transport_output {
   struct message {
-    msg_fragment *head;
+    fragment_ptr head;
     uint64_t size : 48;
     uint16_t segs : 16;
   };
@@ -97,11 +97,11 @@ struct transport_output {
     reassemble(seq, msg);
   }
 
-  void reassemble_single_msg(msg_fragment *mbuf) {
+  void reassemble_single_msg(fragment_ptr&& mbuf) {
     auto *hdr = mbuf->data<protocol::ft_header>();
     // control frames are freed
     if (hdr->type != protocol::pkt_type::FT_MSG) {
-      mbuf->free();
+      seen_done = hdr->type == protocol::pkt_type::FT_DONE;  
       return;
     }
     auto som_len = 0u;
@@ -116,10 +116,10 @@ struct transport_output {
     mbuf->shrink_headroom(sizeof(protocol::ft_header) +
                           som_len);
     reassembly.rcvd += mbuf->pkt_len;
-    msg_fragment::merge(reassembly.first, reassembly.last, mbuf);
+    msg_fragment::merge(reassembly.first, reassembly.last, std::move(mbuf).release());
     if (end) {
       auto *msg = reassembly.first;
-      out.emplace_back(msg, reassembly.size, reassembly.segs);
+      out.emplace_back(fragment_ptr(msg), reassembly.size, reassembly.segs);
       reassembly.reset();
       assert(msg->ref_cnt() > 0);
       reassembly.size = 0;
@@ -133,7 +133,7 @@ struct transport_output {
       rb.insert(seq, msg);
     } else {
       assert(wnd.test(index(seq)));
-      reassemble_single_msg(msg);
+      reassemble_single_msg(fragment_ptr(msg));
       wnd.reset(index(next_seq));
       ++next_seq;
       while (wnd.test(index(next_seq))) {
@@ -141,8 +141,8 @@ struct transport_output {
         assert(rb.next_buffered_seq() == next_seq);
         wnd.reset(index(next_seq));
         ++next_seq;
-        auto *mbuf = rb.front();
-        reassemble_single_msg(mbuf);
+        auto mbuf = std::move(rb.front());
+        reassemble_single_msg(std::move(mbuf));
         rb.pop_front();
       }
     }
@@ -203,17 +203,16 @@ struct transport_output {
   ssize_t read(void *buf, size_t size, size_t &remaining) {
     if (out.empty())
       return read_partial(buf, size, remaining);
-    auto buffered = out.front();
+    auto& buffered = out.front();
     if (buffered.size > size) {
       remaining = buffered.size;
       return -EMSGSIZE;
     }
     auto to_copy = std::min<size_t>(buffered.size, size);
-    auto *msg = buffered.head;
+    auto msg = *buffered.head;
     msg->read(buf);  
     grant_to_return += buffered.segs;
     out.pop_front();
-    msg->free();
     remaining = 0;
     return to_copy;
   }
@@ -232,6 +231,11 @@ struct transport_output {
 
   uint64_t get_total_rcvd_pkts() const { return rcvd_pkts; }
 
+  ~transport_output(){
+      if(reassembly.first)
+          reassembly.first->free();
+  }
+
   // pkt reassmbly and buffering
   struct {
     msg_fragment *first = nullptr, *last = nullptr;
@@ -245,6 +249,7 @@ struct transport_output {
       rcvd = 0;
     }
   } reassembly;
+
   msg_fragment_allocator *port_allocator;
   reorder_buffer rb;
   std::deque<message> out;
@@ -256,4 +261,5 @@ struct transport_output {
   uint64_t grant_to_return = kMaxGrantSize;
   uint64_t rcvd_pkts = 0;
   uint64_t ts = 0;
+  bool seen_done = false;
 };

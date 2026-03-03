@@ -46,7 +46,7 @@ struct rack {
 
 struct sender_entry {
   list_hook link;
-  msg_fragment *packet; // this is bad, but ok for now
+  fragment_ptr packet; // this is bad, but ok for now
   uint64_t xmit_ts = 0;
   seq_t seq;
   bool sacked : 4;
@@ -54,22 +54,18 @@ struct sender_entry {
   sender_entry() : packet(nullptr), seq(0), retransmitted(false) {}
   sender_entry(msg_fragment *packet, uint64_t now, seq_t seq,
                bool retransmitted)
-      : packet(packet), xmit_ts(now), seq(seq), sacked(false),
+      : packet(fragment_ptr(packet)), xmit_ts(now), seq(seq), sacked(false),
         retransmitted(retransmitted) {}
 
   bool requires_retry(uint64_t now, uint64_t rto) {
     return now > *packet->get_ts() + rto;
   }
-  msg_fragment *get() { return packet; }
 
   sender_entry(const sender_entry &) = delete;
 
   ~sender_entry() {
     if (link.is_linked())
       link.unlink();
-    assert(packet != nullptr);
-    packet->free();
-    packet = nullptr;
   }
 };
 
@@ -180,7 +176,7 @@ public:
     while (sz-- > 0) {
       auto &desc = retransmission_queue.front();
       prepare_retransmit(&desc, now);
-      f(desc.packet);
+      f(*desc.packet);
     }
   }
 
@@ -197,13 +193,12 @@ public:
     xmit_list.push_back(*entry);
   }
 
-  void acknowledge(seq_t seq, uint64_t ts, bool is_sack) {
+  void acknowledge(seq_t seq, uint64_t ts) {
     if (seq < least_unacked_pkt)
       return;
     stats.acked = seq;
     cleanup_acked_pkts(seq, ts);
-    if (!is_sack)
-      timeout = ts + rto;
+    timeout = ts + rto;
     least_unacked_pkt = seq + 1;
   }
 
@@ -234,7 +229,6 @@ public:
         desc.link.unlink();
       }
     }
-    timeout = rte_get_timer_cycles() + rto;
 
     if (sack_rtt != ~0ull) {
       update_srtt(sack_rtt);

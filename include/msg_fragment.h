@@ -81,6 +81,50 @@ struct msg_fragment : public rte_mbuf {
   void shrink_headroom(uint16_t len) { rte_pktmbuf_adj(this, len); }
 };
 
+struct fragment_ptr {
+    msg_fragment* frg;
+
+    fragment_ptr() : frg(nullptr) {}
+
+    explicit fragment_ptr(msg_fragment* f) : frg(f) {}
+
+    fragment_ptr(fragment_ptr&& other) noexcept : frg(other.frg) {
+        other.frg = nullptr;
+    }
+
+    fragment_ptr& operator=(fragment_ptr&& other) noexcept {
+        if (this != &other) {
+            if (frg)
+                frg->free();
+            frg = other.frg;
+            other.frg = nullptr;
+        }
+        return *this;
+    }
+
+    fragment_ptr(const fragment_ptr&) = delete;
+    fragment_ptr& operator=(const fragment_ptr&) = delete;
+
+    msg_fragment* operator->() {
+        return frg;
+    }
+
+    msg_fragment* operator*() {
+        return frg;
+    }
+
+    msg_fragment* release() && {
+        auto released = frg;
+        frg = nullptr;
+        return released;
+    }
+
+    ~fragment_ptr() {
+        if (frg)
+            frg->free();
+    }
+};
+
 static_assert(sizeof(msg_fragment) == sizeof(rte_mbuf), "");
 
 class msg_fragment_allocator {

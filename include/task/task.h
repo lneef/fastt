@@ -66,17 +66,17 @@ template <typename C> void make_progress(C &con) {
   auto &mwrapper = *prms.hdr;
   switch (prms.yt) {
   case concurrency::io_yield_type::recv_yield: {
-    auto rcvd = con.recv(mwrapper.buf, mwrapper.len, *mwrapper.remaining);
-    if (rcvd == -EAGAIN)
+    auto retval = con.recv(mwrapper.buf, mwrapper.len, *mwrapper.remaining);
+    if (retval == -EAGAIN)
       return;
-    mwrapper.retval += rcvd > 0 ? rcvd : 0;
-    op_completed = rcvd <= 0 || *mwrapper.remaining == 0;
+    mwrapper.retval = retval <= 0 ? retval : retval + mwrapper.retval ;
+    op_completed = retval <= 0 || *mwrapper.remaining == 0;
   } break;
   case concurrency::io_yield_type::send_yield: {
     auto retval = con.send(*prms.hdr->hdr);
     if (retval == -EAGAIN)
       return;
-    mwrapper.retval = retval > 0 ? retval + mwrapper.retval : retval;
+    mwrapper.retval = retval <= 0 ? retval : retval + mwrapper.retval;
     op_completed = retval <= 0 ||
                    mwrapper.retval == static_cast<ssize_t>(mwrapper.hdr->len);
   } break;
