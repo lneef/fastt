@@ -128,7 +128,7 @@ int lcore_server_fun(void *arg) {
         std::vector<int> buf(buf_len);
         size_t rem = 0;
         while (true) {
-          auto sz = co_await recv(schdlr, con, buf.data(), buf_len, rem);
+          auto sz = co_await recv(schdlr, con, buf.data(), buf_len * sizeof(int), rem);
           if (sz == 0) {
             co_return;
           }

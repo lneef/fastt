@@ -128,7 +128,7 @@ static int lcore_large(void *arg) {
   msg_hdr hdr;
   std::iota(data.begin(),  data.end(), 0);
 
-  hdr.set_data(data.data(), data.size());
+  hdr.set_data(data.data(), data.size() * sizeof(int));
   do_send(*con, hdr);
   do_recv(*con, &retval);
   assert(retval == 0);
