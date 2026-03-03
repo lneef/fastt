@@ -25,15 +25,17 @@ struct rack {
       return false;
   }
 
-  bool update(uint64_t seg_xmit_ts, seq_t seq, uint64_t now,
-              bool retransmitted) {
-    if (retransmitted && now - xmit_ts < min_rtt)
-      return false;
+  bool valid_rtt(uint64_t now, uint64_t seg_xmit_ts, bool retransmitted) {
+    if (retransmitted)
+      return now - seg_xmit_ts >= min_rtt;
+    return true;
+  }
+
+  void update(uint64_t seg_xmit_ts, seq_t seq) {
     if (send_after(seg_xmit_ts, seq, xmit_ts, end_seq)) {
       xmit_ts = seg_xmit_ts;
       end_seq = seq;
     }
-    return true;
   }
 
   uint64_t min_rtt{kMinRTT * get_ticks_us()}, rtt = 0;
@@ -80,17 +82,19 @@ public:
   };
   transport_input() : rtt(), timeout() {}
 
-  void rto_retransmit(uint64_t ts){
-      for(auto it = xmit_list.begin(), end = xmit_list.end(); it != end;){
-          auto &entry = *it;
-          ++it;
-          if(*entry.packet->get_ts() == 0)
-              break;
-          if(entry.seq == least_unacked_pkt || ts - entry.xmit_ts >= rck.rtt){
-              entry.link.unlink();
-              retransmission_queue.push_back(entry);
-          }
+  void rto_retransmit(uint64_t ts) {
+    for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
+      auto &entry = *it;
+      ++it;
+      if (*entry.packet->get_ts() == 0)
+        break;
+      if (entry.seq == least_unacked_pkt || ts - entry.xmit_ts >= rck.rtt) {
+        FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
+        assert(entry.link.is_linked());  
+        entry.link.unlink();
+        retransmission_queue.push_back(entry);
       }
+    }
   }
 
   void detect_loss(uint64_t now) {
@@ -99,9 +103,9 @@ public:
       ++it;
       if (!rack::send_after(rck.xmit_ts, rck.end_seq, entry.xmit_ts, entry.seq))
         break;
-      if (now >= entry.xmit_ts + rck.rtt) {  
-        FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);  
-        assert(entry.link.is_linked());  
+      if (now >= entry.xmit_ts + rck.rtt) {
+        FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
+        assert(entry.link.is_linked());
         entry.link.unlink();
         retransmission_queue.push_back(entry);
       }
@@ -122,10 +126,13 @@ public:
     uint64_t cumulative_rtt = ~0ull;
     while (!unacked.empty() && unacked.front().seq <= seq) {
       auto &desc = unacked.front();
+      assert(ts >= desc.xmit_ts);
       auto ack_rtt = ts - desc.xmit_ts;
       if (!desc.sacked) {
-        if (rck.update(desc.xmit_ts, desc.seq, ts, desc.retransmitted))
+        if (rck.valid_rtt(ts, desc.xmit_ts, desc.retransmitted)) {
+          rck.update(desc.xmit_ts, desc.seq);
           cumulative_rtt = std::min<uint64_t>(ack_rtt, cumulative_rtt);
+        }
         assert(desc.link.is_linked());
         inflight -= desc.packet->pkt_len - protocol::defs::kuserDataOffset;
       }
@@ -136,8 +143,6 @@ public:
       update_srtt(cumulative_rtt);
       rck.rtt = cumulative_rtt;
     }
-
-    rck.dup_ack_cnt = 0;
   }
 
   template <typename F>
@@ -193,8 +198,6 @@ public:
   }
 
   void acknowledge(seq_t seq, uint64_t ts, bool is_sack) {
-    if(seq == least_unacked_pkt - 1)
-        ++rck.dup_ack_cnt;
     if (seq < least_unacked_pkt)
       return;
     stats.acked = seq;
@@ -218,9 +221,12 @@ public:
       if (!val)
         continue;
       if (!desc.sacked) {
+        assert(ts >= desc.xmit_ts);  
         auto ack_rtt = ts - desc.xmit_ts;
-        if (rck.update(desc.xmit_ts, desc.seq, ts, desc.retransmitted))
-          sack_rtt = std::min<uint64_t>(sack_rtt, ack_rtt);
+        if (rck.valid_rtt(ts, desc.xmit_ts, desc.retransmitted)) {
+          rck.update(desc.xmit_ts, desc.seq);
+          sack_rtt = std::min<uint64_t>(ack_rtt, sack_rtt);
+        }
 
         inflight -= desc.packet->pkt_len - protocol::defs::kuserDataOffset;
         desc.sacked = true;
@@ -230,7 +236,7 @@ public:
     }
     timeout = rte_get_timer_cycles() + rto;
 
-    if (sack_rtt != ~0ull){
+    if (sack_rtt != ~0ull) {
       update_srtt(sack_rtt);
       rck.rtt = sack_rtt;
     }
@@ -242,6 +248,7 @@ public:
       rtt = est;
     else
       rtt = filter::exp_filter(rtt, est);
+    rto = std::max(rtt, default_rto);
     stats.rtt = rtt;
   }
 
@@ -264,15 +271,19 @@ public:
 private:
   static constexpr uint64_t kMinRTT = 10;
   statistics stats;
+
+  std::deque<sender_entry> unacked;
   intrusive_list_t<sender_entry> retransmission_queue;
   intrusive_list_t<sender_entry> xmit_list;
-  std::deque<sender_entry> unacked;
+
   uint32_t budget = 0;
   seq_t seq{0};
   seq_t least_unacked_pkt{0};
   uint64_t inflight = 0;
+
   uint64_t rtt = 0;
-  uint64_t rto = get_ticks_ms() * 10;
+  const uint64_t default_rto = get_ticks_ms() * 10;
+  uint64_t rto = default_rto;
   uint64_t timeout;
   rack rck;
 };

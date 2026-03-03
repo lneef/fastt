@@ -82,12 +82,8 @@ public:
     link.unlink();
   }
 
-  void wait_all_acked() {
-    while (true) {
-      check_timeout(rte_get_timer_cycles());
-      if (transport_impl->all_acked())
-        break;
-    }
+  bool done() const{
+      return transport_impl->all_acked();
   }
 
 private:
@@ -148,13 +144,8 @@ public:
   }
 
   void acknowledge_all_and_reap() {
-    for (auto it = active.begin(), end = active.end(); it != end;) {
-      auto &con = *it;
-      ++it;
-      con.acknowledge_all();
-      if (con.down())
-        con.link.unlink();
-    }
+    for(auto& con : active)
+        con.acknowledge_all();
   }
 
   void make_progess_all() {

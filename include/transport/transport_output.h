@@ -57,7 +57,8 @@ struct transport_output {
   };
   // reserve some headroom
   static constexpr unsigned kLowThreshold = 128;
-  static constexpr unsigned kMaxWndSize = 128;
+  static constexpr unsigned kMaxGrantSize = 128;
+  static constexpr unsigned kMaxBitMapSize = 2 * kMaxGrantSize;
   transport_output(msg_fragment_allocator *port_allocator)
       : port_allocator(port_allocator), max_rx_in_window(~0), next_seq() {}
 
@@ -73,10 +74,10 @@ struct transport_output {
   }
 
   bool is_retransmission(seq_t seq) {
-    return seq < next_seq || (seq < next_seq + kMaxWndSize && wnd[index(seq)]);
+    return seq < next_seq || (seq < next_seq + kMaxBitMapSize && wnd[index(seq)]);
   }
 
-  bool exceeds_capacity(seq_t seq) { return seq >= next_seq + kMaxWndSize; }
+  bool exceeds_capacity(seq_t seq) { return seq >= next_seq + kMaxBitMapSize; }
 
   bool may_cause_buffer_exhaustion(seq_t seq) const {
     return seq != next_seq &&
@@ -148,12 +149,12 @@ struct transport_output {
   }
 
   bool inside(seq_t seq) {
-    return seq >= next_seq && seq < next_seq + kMaxWndSize;
+    return seq >= next_seq && seq < next_seq + kMaxBitMapSize;
   }
 
   std::size_t __inline index(seq_t i) {
     assert(i >= next_seq);
-    return (i.v) & (kMaxWndSize - 1);
+    return (i.v) & (kMaxBitMapSize - 1);
   }
 
   bool has_holes() { return max_rx_in_window != next_seq - 1; }
@@ -168,8 +169,6 @@ struct transport_output {
         protocol::ft_sack_payload::kBitMapLen *
             sizeof(
                 uint64_t)); /* 64 since least_in_window is part of the window */
-    assert(protocol::ft_sack_payload::kBitMapLen * 64 >=
-           (highest_seq - next_seq));
 
     for (auto i = next_seq; i <= max_rx_in_window; ++i, ++id) {
       auto ind = get_bit_indices_64(id);
@@ -229,7 +228,7 @@ struct transport_output {
     return wnd;
   }
 
-  bool check_wnd_return() const { return grant_to_return >= kMaxWndSize >> 1; }
+  bool check_wnd_return() const { return grant_to_return >= kMaxGrantSize >> 1; }
 
   uint64_t get_total_rcvd_pkts() const { return rcvd_pkts; }
 
@@ -251,10 +250,10 @@ struct transport_output {
   std::deque<message> out;
 
   // connection state
-  std::bitset<kMaxWndSize> wnd;
+  std::bitset<kMaxBitMapSize> wnd;
   seq_t max_rx_in_window;
   seq_t next_seq;
-  uint64_t grant_to_return = kMaxWndSize;
+  uint64_t grant_to_return = kMaxGrantSize;
   uint64_t rcvd_pkts = 0;
   uint64_t ts = 0;
 };

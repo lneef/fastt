@@ -129,7 +129,9 @@ static int lcore_large(void *arg) {
   msg_hdr hdr;
   hdr.set_data(data.data(), data.size());
   do_send(*con, hdr);
-  con->wait_all_acked();
+  con->close();
+  while(!con->done())
+      cif.poll();
   cif.close(con);
   return 0;
 }
@@ -170,15 +172,16 @@ static int lcore_fn(void *arg) {
   while (c < dur) {
     cif.poll();
     rcvd = kv.recv(&resp, sizeof(resp));
-    if (rcvd <= 0)
+    if (rcvd < 0)
       continue;
     assert(resp.payload.key == kv[resp.id].key);
     kv.complete(resp.id);
     ++c;
   }
   kv.con->close();
-  kv.acknowledge_all();
-  kv.flush();
+  while(!kv.con->done())
+      cif.poll();
+  cif.close(kv.con);
   auto stats = kv.con->get_transport_stats();
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   auto end = rte_get_timer_cycles();
