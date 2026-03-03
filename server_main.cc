@@ -121,14 +121,25 @@ int lcore_server_fun(void *arg) {
                              }
                            });
   server->register_service(
-      10, [&](concurrency::scheduler &schdlr, connection &con) -> concurrency::task{
+      10,
+      [&](concurrency::scheduler &schdlr,
+          connection &con) -> concurrency::task {
         const size_t buf_len = 256 * 1024;
         std::vector<char> buf(buf_len);
         size_t rem = 0;
         while (true) {
           auto sz = co_await recv(schdlr, con, buf.data(), buf_len, rem);
           assert(sz == buf_len);
-          assert(std::all_of(buf.begin(), buf.end(), [](const auto c) { return 'A' == c; }));
+          int i = 0;
+          for (auto c : buf) {
+            if (c != 'A') {
+              printf("%d\n", i);
+              assert(0);
+            }
+            ++i;
+          }
+          assert(std::all_of(buf.begin(), buf.end(),
+                             [](const auto c) { return 'A' == c; }));
           if (sz == 0) {
             co_return;
           }
