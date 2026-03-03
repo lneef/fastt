@@ -21,22 +21,21 @@ struct reorder_buffer {
   using msg_desc_t = std::pair<seq_t, fragment_ptr>;
   std::deque<msg_desc_t> msg_desc;
 
-  void insert(seq_t seq, msg_fragment *msg) {
+  void insert(seq_t seq, fragment_ptr&& frag) {
     if (msg_desc.empty()) {
-      msg_desc.emplace_back(seq, msg);
+      msg_desc.emplace_back(seq, std::move(frag));
       return;
     }
     if (seq < msg_desc.front().first) {
-      msg_desc.emplace_front(seq, msg);
+      msg_desc.emplace_front(seq, std::move(frag));
     } else if (seq > msg_desc.back().first) {
-      msg_desc.emplace_back(seq, msg);
+      msg_desc.emplace_back(seq, std::move(frag));
     } else {
-      msg_desc_t md(seq, msg);
-      auto it = std::lower_bound(msg_desc.begin(), msg_desc.end(), md,
+      auto it = std::lower_bound(msg_desc.begin(), msg_desc.end(), seq,
                                  [](const auto &elem, const auto &val) {
-                                   return elem.first < val.first;
+                                   return elem.first < val;
                                  });
-      msg_desc.insert(it, {seq, fragment_ptr(msg)});
+      msg_desc.insert(it, {seq, std::move(frag)});
     }
   }
 
@@ -84,7 +83,7 @@ struct transport_output {
            port_allocator->get_remaining_space() < kLowThreshold;
   }
 
-  void insert(seq_t seq, msg_fragment *msg) {
+  void insert(seq_t seq, msg_fragment* msg) {
     assert(inside(seq));
     assert(!wnd.test(index(seq)));
     assert(msg->ref_cnt() > 0);
@@ -94,7 +93,7 @@ struct transport_output {
     }
     ++rcvd_pkts;
     wnd.set(index(seq));
-    reassemble(seq, msg);
+    reassemble(seq, fragment_ptr(msg));
   }
 
   void reassemble_single_msg(fragment_ptr&& mbuf) {
@@ -128,12 +127,12 @@ struct transport_output {
 
   bool empty() const { return out.empty() && reassembly.first == nullptr; }
 
-  void reassemble(seq_t seq, msg_fragment *msg) {
+  void reassemble(seq_t seq, fragment_ptr&& msg) {
     if (seq != next_seq) {
-      rb.insert(seq, msg);
+      rb.insert(seq, std::move(msg));
     } else {
       assert(wnd.test(index(seq)));
-      reassemble_single_msg(fragment_ptr(msg));
+      reassemble_single_msg(std::move(msg));
       wnd.reset(index(next_seq));
       ++next_seq;
       while (wnd.test(index(next_seq))) {

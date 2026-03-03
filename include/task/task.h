@@ -112,9 +112,9 @@ template <typename C> struct send_awaitable : public io_awaitable<C> {
     auto sent = con.send(*mhdr.hdr);
     if (sent == -EAGAIN)
       return false;
+    mhdr.retval = sent;
     if (sent <= 0)
       return true;
-    mhdr.retval = sent;
     return mhdr.retval == static_cast<ssize_t>(mhdr.hdr->len);
   }
 
@@ -145,9 +145,9 @@ template <typename C> struct recv_awaitable : io_awaitable<C> {
     auto rcvd = con.recv(mhdr.buf, mhdr.len, *mhdr.remaining);
     if (rcvd == -EAGAIN)
       return false;
+    mhdr.retval = rcvd;
     if (rcvd <= 0)
       return true;
-    mhdr.retval = rcvd;
     return *mhdr.remaining == 0;
   }
 

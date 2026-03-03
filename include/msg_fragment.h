@@ -16,10 +16,10 @@ struct msg_hdr {
   size_t len;
   size_t off = 0;
 
-  void set_data(void *mbuf, size_t mlen){
-      buf = mbuf;
-      len = mlen;
-      off = 0;
+  void set_data(void *mbuf, size_t mlen) {
+    buf = mbuf;
+    len = mlen;
+    off = 0;
   }
 };
 
@@ -28,15 +28,15 @@ struct msg_fragment : public rte_mbuf {
   static int init();
   uint64_t *get_ts() { return RTE_MBUF_DYNFIELD(this, timestamp, uint64_t *); }
 
-  void read(void* buf){
-      auto *mbuf = this;
-      auto off = 0u;
-      while(mbuf){
-          auto *data = mbuf->data<uint8_t>();
-          std::memcpy(static_cast<uint8_t*>(buf) + off, data, mbuf->len());
-          off += mbuf->len();
-          mbuf = static_cast<msg_fragment*>(mbuf->next);
-      }
+  void read(void *buf) {
+    auto *mbuf = this;
+    auto off = 0u;
+    while (mbuf) {
+      auto *data = mbuf->data<uint8_t>();
+      std::memcpy(static_cast<uint8_t *>(buf) + off, data, mbuf->len());
+      off += mbuf->len();
+      mbuf = static_cast<msg_fragment *>(mbuf->next);
+    }
   }
 
   void inc_refcnt() {
@@ -47,7 +47,8 @@ struct msg_fragment : public rte_mbuf {
     }
   }
 
-  static inline void merge(msg_fragment *&first, msg_fragment *&last, msg_fragment *seg) {
+  static inline void merge(msg_fragment *&first, msg_fragment *&last,
+                           msg_fragment *seg) {
     if (!first) {
       first = seg;
       last = seg;
@@ -69,7 +70,7 @@ struct msg_fragment : public rte_mbuf {
 
   void set_size(uint16_t len) { pkt_len = len; }
 
-  uint16_t ref_cnt() const{ return this->refcnt; }
+  uint16_t ref_cnt() const { return this->refcnt; }
 
   template <typename T> T *move_headroom() {
     rte_pktmbuf_prepend(this, sizeof(T));
@@ -82,47 +83,41 @@ struct msg_fragment : public rte_mbuf {
 };
 
 struct fragment_ptr {
-    msg_fragment* frg;
+  msg_fragment *frg;
 
-    fragment_ptr() : frg(nullptr) {}
+  fragment_ptr() : frg(nullptr) {}
+  explicit fragment_ptr(msg_fragment *f) : frg(f) {}
+  fragment_ptr(fragment_ptr &&other) noexcept : frg(other.frg) {
+    other.frg = nullptr;
+  }
 
-    explicit fragment_ptr(msg_fragment* f) : frg(f) {}
-
-    fragment_ptr(fragment_ptr&& other) noexcept : frg(other.frg) {
-        other.frg = nullptr;
+  fragment_ptr &operator=(fragment_ptr &&other) noexcept {
+    if (this != &other) {
+      if (frg)
+        frg->free();
+      frg = other.frg;
+      other.frg = nullptr;
     }
+    return *this;
+  }
 
-    fragment_ptr& operator=(fragment_ptr&& other) noexcept {
-        if (this != &other) {
-            if (frg)
-                frg->free();
-            frg = other.frg;
-            other.frg = nullptr;
-        }
-        return *this;
-    }
+  fragment_ptr(const fragment_ptr &) = delete;
+  fragment_ptr &operator=(const fragment_ptr &) = delete;
 
-    fragment_ptr(const fragment_ptr&) = delete;
-    fragment_ptr& operator=(const fragment_ptr&) = delete;
+  msg_fragment *operator->() { return frg; }
 
-    msg_fragment* operator->() {
-        return frg;
-    }
+  msg_fragment *operator*() { return frg; }
 
-    msg_fragment* operator*() {
-        return frg;
-    }
+  msg_fragment *release() && {
+    auto released = frg;
+    frg = nullptr;
+    return released;
+  }
 
-    msg_fragment* release() && {
-        auto released = frg;
-        frg = nullptr;
-        return released;
-    }
-
-    ~fragment_ptr() {
-        if (frg)
-            frg->free();
-    }
+  ~fragment_ptr() {
+    if (frg)
+      frg->free();
+  }
 };
 
 static_assert(sizeof(msg_fragment) == sizeof(rte_mbuf), "");

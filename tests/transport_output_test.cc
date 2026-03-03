@@ -229,11 +229,11 @@ TEST_F(TransportOutputTest, ReorderBuffer_InsertOrdering) {
     auto *m4 = make_msg({4}, 'D', 1);
 
     // Insert in non-sorted order
-    rb.insert({5}, m5);
-    rb.insert({3}, m3);  // before front
-    rb.insert({7}, m7);  // after back
-    rb.insert({1}, m1);  // new front
-    rb.insert({4}, m4);  // middle, between 3 and 5
+    rb.insert({5}, fragment_ptr(m5));
+    rb.insert({3}, fragment_ptr(m3));  // before front
+    rb.insert({7}, fragment_ptr(m7));  // after back
+    rb.insert({1}, fragment_ptr(m1));  // new front
+    rb.insert({4}, fragment_ptr(m4));  // middle, between 3 and 5
 
     // Drain and verify sorted order
     std::vector<uint32_t> order;
@@ -251,12 +251,12 @@ TEST_F(TransportOutputTest, ReorderBuffer_InsertAtExactFrontAndBack) {
     auto *m3 = make_msg({3}, 'C', 1);
     auto *m10 = make_msg({10}, 'J', 1);
 
-    rb.insert({5}, m5);
+    rb.insert({5}, fragment_ptr(m5));
     // Insert exactly at < front boundary
-    rb.insert({3}, m3);
+    rb.insert({3}, fragment_ptr(m3));
     EXPECT_EQ(rb.next_buffered_seq(), seq_t(3));
     // Insert exactly at > back boundary
-    rb.insert({10}, m10);
+    rb.insert({10}, fragment_ptr(m10));
 
     std::vector<uint32_t> order;
     while (rb.has_elements()) {
@@ -359,7 +359,7 @@ TEST_F(TransportOutputTest, InsertBoundary_WindowSlideAfterFullDrain) {
 }
 
 TEST_F(TransportOutputTest, MultiSegmentReassemblyReordered) {
-    to->insert({0}, make_frag({0}, true, false, 3, 'A'));
+    to->insert({0}, make_frag({0}, true, false, 'A', 3));
     to->insert({2}, make_frag({2}, false, true, 'C'));
 
     EXPECT_EQ(to->out.size(), 0u);
