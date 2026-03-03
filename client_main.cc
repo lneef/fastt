@@ -17,6 +17,7 @@
 #include <getopt.h>
 #include <iostream>
 #include <memory>
+#include <numeric>
 #include <random>
 #include <ranges>
 #include <sys/types.h>
@@ -94,7 +95,7 @@ static int lcore_large(void *arg) {
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
   int retval = 0;
-  std::vector<char> data(256 * 1024, 'A');
+  std::vector<int> data(256 * 1024, 'A');
   auto do_send = [&](connection &con, msg_hdr &hdr) -> ssize_t {
     auto sent = 0u;
     while (sent < hdr.len) {
@@ -125,6 +126,8 @@ static int lcore_large(void *arg) {
   if (!con)
     return -1;
   msg_hdr hdr;
+  std::iota(data.begin(),  data.end(), 0);
+
   hdr.set_data(data.data(), data.size());
   do_send(*con, hdr);
   do_recv(*con, &retval);
