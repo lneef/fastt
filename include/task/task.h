@@ -3,6 +3,7 @@
 #include "msg_fragment.h"
 #include <bits/types/struct_iovec.h>
 #include <coroutine>
+#include <cstdint>
 #include <deque>
 #include <optional>
 #include <sys/types.h>
@@ -58,7 +59,7 @@ struct task {
 };
 
 template <typename C> void make_progress(C &con) {
-  con.perform_recovery();  
+  con.perform_recovery();
   if (con.coro == std::nullopt)
     return;
   auto &prms = con.coro->promise();
@@ -66,10 +67,12 @@ template <typename C> void make_progress(C &con) {
   auto &mwrapper = *prms.hdr;
   switch (prms.yt) {
   case concurrency::io_yield_type::recv_yield: {
-    auto retval = con.recv(mwrapper.buf, mwrapper.len, *mwrapper.remaining);
+    auto retval =
+        con.recv(static_cast<uint8_t *>(mwrapper.buf) + mwrapper.retval,
+                 mwrapper.len - mwrapper.retval, *mwrapper.remaining);
     if (retval == -EAGAIN)
       return;
-    mwrapper.retval = retval <= 0 ? retval : retval + mwrapper.retval ;
+    mwrapper.retval = retval <= 0 ? retval : retval + mwrapper.retval;
     op_completed = retval <= 0 || *mwrapper.remaining == 0;
   } break;
   case concurrency::io_yield_type::send_yield: {

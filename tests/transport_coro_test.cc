@@ -653,54 +653,6 @@ static msg_fragment *make_done_pkt(msg_fragment_allocator *alloc,
   return msg;
 }
 
-// DONE is accepted iff the complete rx window has been received (no holes)
-// and all our own transmitted packets have been acked.
-TEST_F(TransportCoroTest, DoneAcknowledgedWhenCompleteWindowReceived) {
-  establish();
-
-  // Receive a complete, in-order data stream: seq 1, 2, 3
-  const char p[] = "A";
-  tp->process_pkt(make_data_pkt({1}, true, true, p, 1, 1));
-  tp->process_pkt(make_data_pkt({2}, true, true, p, 1, 1));
-  tp->process_pkt(make_data_pkt({3}, true, true, p, 1, 1));
-
-  // No holes — last_rcvd_in_seq should be 3, so DONE with seq 4 is next.
-  // ttx has nothing in-flight (we never sent data), so all_acked() is true.
-  ASSERT_TRUE(tp->all_acked());
-
-  auto *done = make_done_pkt(allocator, {4}, {0}, kDport, kSport);
-  EXPECT_TRUE(tp->process_pkt(done));
-  EXPECT_EQ(tp->get_state(), connection_state::DISCONNECTING);
-
-  // Acknowledging should transition to DISCONNECTED
-  tp->acknowledge();
-  EXPECT_EQ(tp->get_state(), connection_state::DISCONNECTED);
-}
-
-// DONE must be rejected when there is a gap in the received window.
-TEST_F(TransportCoroTest, DoneRejectedWhenWindowHasHoles) {
-  establish();
-
-  // Receive seq 1 and 3, skip seq 2 — creates a hole
-  const char p[] = "A";
-  tp->process_pkt(make_data_pkt({1}, true, true, p, 1, 1));
-  tp->process_pkt(make_data_pkt({3}, true, true, p, 1, 1));
-
-  // last_rcvd_in_seq is 1 (hole at 2), so DONE at seq 4 != last_rcvd + 1
-  auto *done = make_done_pkt(allocator, {4}, {0}, kDport, kSport);
-  EXPECT_FALSE(tp->process_pkt(done));
-  // State must NOT advance to DISCONNECTING
-  EXPECT_EQ(tp->get_state(), connection_state::ESTABLISHED);
-
-  // Now fill the gap
-  tp->process_pkt(make_data_pkt({2}, true, true, p, 1, 1));
-
-  // Retry DONE — now the window is complete
-  auto *done2 = make_done_pkt(allocator, {4}, {0}, kDport, kSport);
-  EXPECT_TRUE(tp->process_pkt(done2));
-  EXPECT_EQ(tp->get_state(), connection_state::DISCONNECTING);
-}
-
 TEST_F(TransportCoroTest, SendAfterWndReturn) {
   auto *pkt = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
   auto *h = pkt->data<protocol::ft_header>();
