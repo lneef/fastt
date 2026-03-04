@@ -100,6 +100,7 @@ TEST_F(PacketIfCopyTest, CopiesPayloadCorrectly) {
 
   flow_tuple ft{};
   auto *m = strip_header_and_copy(wire, ft);
+  printf("%u\n", m->data_len);
 
   ASSERT_NE(m, nullptr);
   EXPECT_EQ(m->data_len, sizeof(payload));

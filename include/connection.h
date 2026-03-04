@@ -98,7 +98,7 @@ public:
                      std::shared_ptr<msg_fragment_allocator> allocator,
                      P *parent, uint16_t cores)
       : dev(port, txq, rxq), scheduler(&dev),
-        pkt_if(&scheduler, &*allocator, &sb, sip, port), active(), cores(cores),
+        pkt_if(&scheduler, allocator, &sb, sip, port), active(), cores(cores),
         is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
@@ -120,7 +120,6 @@ public:
       if (likely(it != flows.end()))
         it->second->process_pkt(pkt);
       else {
-        FASTT_DUMP_PKT(pkt, pkt->len());
         mbuf_free(pkt);
       }
     }

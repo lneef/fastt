@@ -136,11 +136,11 @@ public:
   }
 
   bool acknowledge() {
-    mbuf *msg;
+    mbuf_ptr msg = mbuf_take_owner_ship(nullptr);
     bool is_sack = trx.has_holes();
     seq_t ack = trx.get_last_rcvd_in_seq();
     if (is_sack) {
-      msg = sb->alloc_default(sizeof(protocol::ft_header) +
+      msg = sb->alloc_default_safe(sizeof(protocol::ft_header) +
                              sizeof(protocol::ft_sack_payload));
       if (!msg)
         return false;
@@ -153,7 +153,7 @@ public:
     } else {
       if (!scheduler.ack_pending(ack))
         return false;
-      msg = sb->alloc_default(sizeof(protocol::ft_header));
+      msg = sb->alloc_default_safe(sizeof(protocol::ft_header));
       if (!msg)
         return false;
       scheduler.ack_callback(ack);
@@ -164,9 +164,8 @@ public:
       cstate = connection_state::DISCONNECTED;
     }
 
-    builder.prepare_ack_pkt(msg, ack, is_sack);
-    pkt_if->consume_pkt_mbuf(msg, cfg);
-    mbuf_free(msg);
+    builder.prepare_ack_pkt(msg.get(), ack, is_sack);
+    pkt_if->consume_pkt_mbuf(msg.get(), cfg);
     return true;
   }
 

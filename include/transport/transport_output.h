@@ -90,7 +90,7 @@ struct transport_output {
            (seq < next_seq + kMaxBitMapSize && wnd[index(seq)]);
   }
 
-  bool exceeds_capacity(seq_t seq) { return seq >= next_seq + kMaxBitMapSize; }
+  bool exceeds_capacity(seq_t seq) const { return seq >= next_seq + kMaxBitMapSize; }
 
   void insert(seq_t seq, mbuf *pkt) {
     assert(inside(seq));
@@ -219,8 +219,6 @@ struct transport_output {
     return to_copy;
   }
 
-  uint64_t get_ts() const { return ts; }
-
   unsigned get_available_wnd() const { return grant_to_return; }
 
   uint16_t prepare_wnd_return() {
@@ -263,6 +261,5 @@ struct transport_output {
   seq_t next_seq;
   uint64_t grant_to_return = kMaxGrantSize;
   uint64_t rcvd_pkts = 0;
-  uint64_t ts = 0;
   bool seen_done = false;
 };

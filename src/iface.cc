@@ -61,8 +61,8 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
   retval = rte_eth_dev_info_get(ifc->port, &dev_info);
   if (retval != 0)
     return nullptr;
-  nb_rxd = dev_info.rx_desc_lim.nb_max;
-  nb_txd = dev_info.tx_desc_lim.nb_max;
+  nb_rxd = 1024;
+  nb_txd = 1024;
 
   if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
     port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;

@@ -14,6 +14,7 @@
 #include <rte_ether.h>
 #include <rte_gro.h>
 #include <rte_ip.h>
+#include <rte_ip4.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_core.h>
 #include <rte_memcpy.h>
@@ -36,7 +37,7 @@ class packet_if {
   static constexpr uint16_t kdefaultTTL = 64;
 
 public:
-  packet_if(packet_scheduler *scheduler, msg_fragment_allocator *msg_allocator, slab_allocator *sb,
+  packet_if(packet_scheduler *scheduler, std::shared_ptr<msg_fragment_allocator> msg_allocator, slab_allocator *sb,
             uint32_t sip, uint16_t port)
       : arp_table(), msg_allocator(msg_allocator), sb(sb), scheduler(scheduler),
         sip(sip) {
@@ -44,25 +45,25 @@ public:
     sim.set_rate(0.0);
   }
 
-  rte_udp_hdr *udp_header(msg_fragment *msg, uint16_t sport, uint16_t dport) {
+  rte_udp_hdr *udp_header(msg_fragment *msg, uint16_t sport, uint16_t dport, uint16_t data_len) {
     auto *udp = msg->data<rte_udp_hdr>(protocol::defs::kudpOffset);
     udp->src_port = sport;
     udp->dst_port = dport;
     udp->dgram_cksum = 0;
-    udp->dgram_len = rte_cpu_to_be_16(msg->pkt_len);
+    udp->dgram_len = rte_cpu_to_be_16(data_len + sizeof(rte_udp_hdr));
     msg->l4_len = sizeof(rte_udp_hdr);
     return udp;
   }
 
   void ip_header(msg_fragment *msg, rte_udp_hdr *udp_header, uint32_t source,
-                 uint32_t target) {
+                 uint32_t target, uint16_t data_len) {
     auto *ipv4 = msg->data<rte_ipv4_hdr>(protocol::defs::kipOffset);
     ipv4->src_addr = source;
     ipv4->dst_addr = target;
     ipv4->fragment_offset = htons(RTE_IPV4_HDR_DF_FLAG);
     ipv4->next_proto_id = IPPROTO_UDP;
     ipv4->time_to_live = kdefaultTTL;
-    ipv4->total_length = htons(msg->pkt_len);
+    ipv4->total_length = htons(data_len + sizeof(rte_udp_hdr) + sizeof(rte_ipv4_hdr));
     ipv4->hdr_checksum = 0;
     ipv4->version_ihl = RTE_IPV4_VHL_DEF;
     ipv4->type_of_service = 0;
@@ -90,8 +91,8 @@ public:
     rte_memcpy(dpdk_mbuf->data<uint8_t>(protocol::defs::kftOffset),
                pkt->data<uint8_t>(), pkt->data_len);
     auto *udp = udp_header(dpdk_mbuf, cfg.transport_ports.sport,
-                           cfg.transport_ports.dport);
-    ip_header(dpdk_mbuf, udp, sip, cfg.ip);
+                           cfg.transport_ports.dport, pkt->data_len);
+    ip_header(dpdk_mbuf, udp, sip, cfg.ip, pkt->data_len);
     auto it = arp_table.find(cfg.ip);
     assert(it != arp_table.end());
     eth_header(dpdk_mbuf, smac, it->second);
@@ -175,7 +176,7 @@ private:
   packet_drop_sim sim;
   flow_table<uint32_t, rte_ether_addr> arp_table;
   rte_ether_addr smac;
-  msg_fragment_allocator *msg_allocator;
+  std::shared_ptr<msg_fragment_allocator> msg_allocator;
   slab_allocator *sb;
   packet_scheduler *scheduler;
   uint32_t sip;
