@@ -3,6 +3,8 @@
 #include "debug.h"
 #include "msg_fragment.h"
 #include "packet_scheduler.h"
+#include "slab_allocator.h"
+#include "transport/protocol.h"
 #include "util.h"
 #include <chrono>
 #include <cstdint>
@@ -13,6 +15,8 @@
 #include <rte_gro.h>
 #include <rte_ip.h>
 #include <rte_mbuf.h>
+#include <rte_mbuf_core.h>
+#include <rte_memcpy.h>
 #include <rte_udp.h>
 
 struct packet_drop_sim {
@@ -32,14 +36,16 @@ class packet_if {
   static constexpr uint16_t kdefaultTTL = 64;
 
 public:
-  packet_if(packet_scheduler *scheduler, uint32_t sip, uint16_t port)
-      : arp_table(), scheduler(scheduler), sip(sip) {
+  packet_if(packet_scheduler *scheduler, msg_fragment_allocator *msg_allocator, slab_allocator *sb,
+            uint32_t sip, uint16_t port)
+      : arp_table(), msg_allocator(msg_allocator), sb(sb), scheduler(scheduler),
+        sip(sip) {
     rte_eth_macaddr_get(port, &smac);
     sim.set_rate(0.0);
   }
 
   rte_udp_hdr *udp_header(msg_fragment *msg, uint16_t sport, uint16_t dport) {
-    auto *udp = msg->move_headroom<rte_udp_hdr>();
+    auto *udp = msg->data<rte_udp_hdr>(protocol::defs::kudpOffset);
     udp->src_port = sport;
     udp->dst_port = dport;
     udp->dgram_cksum = 0;
@@ -50,7 +56,7 @@ public:
 
   void ip_header(msg_fragment *msg, rte_udp_hdr *udp_header, uint32_t source,
                  uint32_t target) {
-    auto *ipv4 = msg->move_headroom<rte_ipv4_hdr>();
+    auto *ipv4 = msg->data<rte_ipv4_hdr>(protocol::defs::kipOffset);
     ipv4->src_addr = source;
     ipv4->dst_addr = target;
     ipv4->fragment_offset = htons(RTE_IPV4_HDR_DF_FLAG);
@@ -71,25 +77,27 @@ public:
 
   void eth_header(msg_fragment *msg, const rte_ether_addr &smac,
                   const rte_ether_addr &dmac) {
-    auto *eth = msg->move_headroom<rte_ether_hdr>();
+    auto *eth = msg->data<rte_ether_hdr>();
     rte_ether_addr_copy(&dmac, &eth->dst_addr);
     rte_ether_addr_copy(&smac, &eth->src_addr);
     eth->ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
     msg->l2_len = sizeof(rte_ether_hdr);
   }
 
-  void consume_pkt(msg_fragment *pkt, transport_config &cfg) {
-    auto *udp =
-        udp_header(pkt, cfg.transport_ports.sport, cfg.transport_ports.dport);
-    ip_header(pkt, udp, sip, cfg.ip);
+  void consume_pkt_mbuf(mbuf *pkt, transport_config &cfg) {
+    auto *dpdk_mbuf = msg_allocator->alloc_msg_fragment(
+        pkt->data_len + protocol::defs::kftOffset);
+    rte_memcpy(dpdk_mbuf->data<uint8_t>(protocol::defs::kftOffset),
+               pkt->data<uint8_t>(), pkt->data_len);
+    auto *udp = udp_header(dpdk_mbuf, cfg.transport_ports.sport,
+                           cfg.transport_ports.dport);
+    ip_header(dpdk_mbuf, udp, sip, cfg.ip);
     auto it = arp_table.find(cfg.ip);
     assert(it != arp_table.end());
-    eth_header(pkt, smac, it->second);
-    FASTT_DUMP_PKT(msg, msg->len());
-    scheduler->add_pkt(static_cast<rte_mbuf *>(pkt));
+    eth_header(dpdk_mbuf, smac, it->second);
+    FASTT_DUMP_PKT(dpdk_mbuf, dpdk_mbuf->len());
+    scheduler->add_pkt(static_cast<rte_mbuf *>(dpdk_mbuf));
   }
-
-  void consume_for_retransmission(msg_fragment *msg) { scheduler->add_pkt(msg); }
 
   void add_mapping(uint32_t ip, rte_ether_addr &addr) {
     arp_table.emplace(ip, addr);
@@ -121,14 +129,12 @@ public:
     add_mapping(ip->src_addr, eth->src_addr);
     ft.sip = ip->src_addr;
     ft.dip = ip->dst_addr;
-    rte_pktmbuf_adj(mbuf, sizeof(rte_ether_hdr) + sizeof(rte_ipv4_hdr));
   }
 
   void strip_udp(rte_mbuf *mbuf, flow_tuple &ft) {
     auto *udp = rte_pktmbuf_mtod(mbuf, rte_udp_hdr *);
     ft.sport = udp->src_port;
     ft.dport = udp->dst_port;
-    rte_pktmbuf_adj(mbuf, sizeof(rte_udp_hdr));
   }
 
   msg_fragment *consume_pkt(rte_mbuf *mbuf) {
@@ -151,13 +157,16 @@ public:
       rte_pktmbuf_free(mbuf);
       return nullptr;
     }
-
-    return static_cast<msg_fragment *>(mbuf);
+    return static_cast<msg_fragment*>(mbuf);
   }
 
-  void strip_header(msg_fragment *msg, flow_tuple &ft) {
+  mbuf* strip_header_and_copy(msg_fragment *msg, flow_tuple &ft) {
     strip_ether_ip(msg, ft);
     strip_udp(msg, ft);
+    auto *mbuf_pkt = sb->alloc_default(msg->pkt_len - protocol::defs::kftOffset); 
+    rte_memcpy(mbuf_pkt->data<uint8_t>(), msg->data<uint8_t>(protocol::defs::kftOffset), mbuf_pkt->data_len);
+    rte_pktmbuf_free(msg);
+    return mbuf_pkt;
   }
 
   uint32_t get_sip() const { return sip; }
@@ -166,6 +175,8 @@ private:
   packet_drop_sim sim;
   flow_table<uint32_t, rte_ether_addr> arp_table;
   rte_ether_addr smac;
+  msg_fragment_allocator *msg_allocator;
+  slab_allocator *sb;
   packet_scheduler *scheduler;
   uint32_t sip;
 };

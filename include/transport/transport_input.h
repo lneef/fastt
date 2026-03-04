@@ -9,8 +9,8 @@
 
 #include "debug.h"
 #include "filter.h"
-#include "msg_fragment.h"
 #include "protocol.h"
+#include "slab_allocator.h"
 #include "transport/seq.h"
 #include "util.h"
 
@@ -46,26 +46,24 @@ struct rack {
 
 struct sender_entry {
   list_hook link;
-  fragment_ptr packet; // this is bad, but ok for now
+  mbuf *packet;
   uint64_t xmit_ts = 0;
   seq_t seq;
   bool sacked : 4;
   bool retransmitted : 4;
   sender_entry() : packet(nullptr), seq(0), retransmitted(false) {}
-  sender_entry(msg_fragment *packet, uint64_t now, seq_t seq,
+  sender_entry(mbuf *packet, uint64_t now, seq_t seq,
                bool retransmitted)
-      : packet(fragment_ptr(packet)), xmit_ts(now), seq(seq), sacked(false),
-        retransmitted(retransmitted) {}
-
-  bool requires_retry(uint64_t now, uint64_t rto) {
-    return now > *packet->get_ts() + rto;
-  }
+      : packet(packet), xmit_ts(now), seq(seq), sacked(false),
+        retransmitted(retransmitted) {} 
 
   sender_entry(const sender_entry &) = delete;
 
   ~sender_entry() {
     if (link.is_linked())
       link.unlink();
+    if(packet)
+        mbuf_free(packet);
   }
 };
 
@@ -82,7 +80,7 @@ public:
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
-      if (*entry.packet->get_ts() == 0)
+      if (!entry.packet->xmit)
         break;
       if (entry.seq == least_unacked_pkt || ts - entry.xmit_ts >= rck.rtt) {
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
@@ -130,7 +128,7 @@ public:
           cumulative_rtt = std::min<uint64_t>(ack_rtt, cumulative_rtt);
         }
         assert(desc.link.is_linked());
-        inflight -= desc.packet->pkt_len - protocol::defs::kuserDataOffset;
+        inflight -= desc.packet->data_len - protocol::defs::kuserDataOffset;
       }
       unacked.pop_front();
     }
@@ -142,28 +140,26 @@ public:
   }
 
   template <typename F>
-  void record_ctrl_pkt(msg_fragment *msg, F &&ctor, uint64_t now) {
+  void record_ctrl_pkt(mbuf* pkt, F &&ctor, uint64_t now) {
     if (all_acked())
       rearm(now);
-    ctor(msg, seq);
-    msg->inc_refcnt();
-    *msg->get_ts() = 0;
-    unacked.emplace_back(msg, now, seq++, false);
+    ctor(pkt, seq);
+    pkt->xmit = false;
+    unacked.emplace_back(pkt, now, seq++, false);
     xmit_list.push_back(unacked.back());
   }
 
   template <typename F>
-  bool record_pkt(msg_fragment *msg, F &&ctor, uint64_t now) {
+  bool record_pkt(mbuf *pkt, F &&ctor, uint64_t now) {
     if (budget == 0)
       return false;
     if (all_acked())
       rearm(now);
     --budget;
-    ctor(msg, seq);
-    inflight += msg->pkt_len;
-    msg->inc_refcnt();
-    *msg->get_ts() = 0;
-    unacked.emplace_back(msg, now, seq++, false);
+    ctor(pkt, seq);
+    pkt->xmit = false;
+    inflight += pkt->data_len;
+    unacked.emplace_back(pkt, now, seq++, false);
     xmit_list.push_back(unacked.back());
     return true;
   }
@@ -176,7 +172,7 @@ public:
     while (sz-- > 0) {
       auto &desc = retransmission_queue.front();
       prepare_retransmit(&desc, now);
-      f(*desc.packet);
+      f(desc.packet);
     }
   }
 
@@ -186,9 +182,8 @@ public:
     // in total we have n + 1 where n is the number of transmissions
     // entry->msg n reduction because of cleanup
     entry->xmit_ts = ts;
-    entry->packet->inc_refcnt();
-    *entry->packet->get_ts() = 0;
     entry->retransmitted = true;
+    entry->packet->xmit = false;
     entry->link.unlink();
     xmit_list.push_back(*entry);
   }
@@ -223,7 +218,7 @@ public:
           sack_rtt = std::min<uint64_t>(ack_rtt, sack_rtt);
         }
 
-        inflight -= desc.packet->pkt_len - protocol::defs::kuserDataOffset;
+        inflight -= desc.packet->data_len - protocol::defs::kuserDataOffset;
         desc.sacked = true;
         assert(desc.link.is_linked());
         desc.link.unlink();

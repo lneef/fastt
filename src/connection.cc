@@ -31,7 +31,7 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
                   ntohs(cfg.transport_ports.dport),
                   ntohs(cfg.transport_ports.sport));
   auto [it, inserted] = flows.emplace(
-      ft, std::make_unique<connection>(allocator.get(), &pkt_if, cfg, sport,
+      ft, std::make_unique<connection>(&pkt_if, &sb, cfg, sport,
                                        dport, this, is_client));
   if (!inserted)
     return nullptr;
@@ -42,8 +42,8 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
   return it->second.get();
 }
 
-void connection::process_pkt(rte_mbuf *pkt) {
-  transport_impl->process_pkt((static_cast<msg_fragment *>(pkt)));
+void connection::process_pkt(mbuf *pkt) {
+  transport_impl->process_pkt(pkt);
 }
 
 void connection::acknowledge_all() { transport_impl->acknowledge(); }

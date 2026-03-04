@@ -1,34 +1,32 @@
-#include "test_env.h"
+#include "slab_allocator.h"
 
-#include "msg_fragment.h"
 #include "transport/protocol.h"
 #include "transport/seq.h"
 #include "transport/transport.h"
 #include "transport/transport_output.h"
 
 #include <bit>
-#include <generic/rte_cycles.h>
 #include <gtest/gtest.h>
 #include <ranges>
 
 class TransportOutputTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    allocator = new msg_fragment_allocator("test_pool", 1023);
-    to = new transport_output(allocator);
+    slab = new slab_allocator{};
+    to = new transport_output();
   }
 
   void TearDown() override {
     delete to;
-    delete allocator;
+    delete slab;
   }
 
-  msg_fragment *make_msg(seq_t seq, char payload, size_t size) {
+  mbuf *make_msg(seq_t seq, char payload, size_t size) {
     return make_frag(seq, true, true, payload, size);
   }
 
-  msg_fragment *make_frag(seq_t seq, bool start, bool end, char payload = 'A', size_t size = 0) {
-    auto *msg = allocator->alloc_msg_fragment(start * sizeof(protocol::ft_msg_payload) + sizeof(protocol::ft_header) + 1);
+  mbuf *make_frag(seq_t seq, bool start, bool end, char payload = 'A', size_t size = 0) {
+    auto *msg = slab->alloc_default(start * sizeof(protocol::ft_msg_payload) + sizeof(protocol::ft_header) + 1);
     EXPECT_NE(msg, nullptr);
     auto *hdr = msg->data<protocol::ft_header>();
     auto off = 0u;
@@ -41,28 +39,26 @@ protected:
     hdr->som = start;
     hdr->eom = end;
     hdr->seq = seq;
-    *msg->get_ts() = 0;
     *msg->data<char>(sizeof(protocol::ft_header) + off) = payload;
     return msg;
   }
 
-  msg_fragment *make_ctrl(seq_t seq) {
-    auto *msg = allocator->alloc_msg_fragment(sizeof(protocol::ft_header));
+  mbuf *make_ctrl(seq_t seq) {
+    auto *msg = slab->alloc_default(sizeof(protocol::ft_header));
     EXPECT_NE(msg, nullptr);
     auto *hdr = msg->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_WND_RET;
     hdr->seq = seq;
-    *msg->get_ts() = 0;
     return msg;
   }
 
-  msg_fragment_allocator *allocator;
+  slab_allocator *slab;
   transport_output *to;
 };
 
 TEST_F(TransportOutputTest, Reordered) {
     std::vector<seq_t> seqs{{0}, {1}, {3}, {4}, {5}, {6}, {65}};
-    std::vector<msg_fragment*> msgs;
+    std::vector<mbuf*> msgs;
     msgs.reserve(seqs.size());
     for(auto seq : seqs)
         if(seq == seq_t(1))
@@ -116,7 +112,7 @@ TEST_F(TransportOutputTest, ProactiveCreditReturnForBufferedMessage) {
     EXPECT_EQ(to->get_available_wnd(), 3u);
     EXPECT_EQ(to->reassembly.size, 1);
 
-    // complete the msg_fragment with the final fragment
+    // complete the message with the final fragment
     to->insert({3}, make_frag({3}, false, true, 'D'));
     EXPECT_EQ(to->out.size(), 1u);
     EXPECT_EQ(to->out.front().segs, 1u);
@@ -217,54 +213,6 @@ TEST_F(TransportOutputTest, InsertBoundary_BitsetRetransmissionInWindow) {
     EXPECT_FALSE(to->is_retransmission(seq_t{1}));
     // seq 3 is in window, bit not set => not retransmission
     EXPECT_FALSE(to->is_retransmission(seq_t{3}));
-}
-
-TEST_F(TransportOutputTest, ReorderBuffer_InsertOrdering) {
-    // Verify reorder buffer maintains sorted order with various insert patterns
-    reorder_buffer rb;
-    auto *m5 = make_msg({5}, 'E', 1);
-    auto *m3 = make_msg({3}, 'C', 1);
-    auto *m7 = make_msg({7}, 'G', 1);
-    auto *m1 = make_msg({1}, 'A', 1);
-    auto *m4 = make_msg({4}, 'D', 1);
-
-    // Insert in non-sorted order
-    rb.insert({5}, fragment_ptr(m5));
-    rb.insert({3}, fragment_ptr(m3));  // before front
-    rb.insert({7}, fragment_ptr(m7));  // after back
-    rb.insert({1}, fragment_ptr(m1));  // new front
-    rb.insert({4}, fragment_ptr(m4));  // middle, between 3 and 5
-
-    // Drain and verify sorted order
-    std::vector<uint32_t> order;
-    while (rb.has_elements()) {
-        order.push_back(rb.next_buffered_seq().v);
-        rb.front()->free();
-        rb.pop_front();
-    }
-    EXPECT_EQ(order, (std::vector<uint32_t>{1, 3, 4, 5, 7}));
-}
-
-TEST_F(TransportOutputTest, ReorderBuffer_InsertAtExactFrontAndBack) {
-    reorder_buffer rb;
-    auto *m5 = make_msg({5}, 'E', 1);
-    auto *m3 = make_msg({3}, 'C', 1);
-    auto *m10 = make_msg({10}, 'J', 1);
-
-    rb.insert({5}, fragment_ptr(m5));
-    // Insert exactly at < front boundary
-    rb.insert({3}, fragment_ptr(m3));
-    EXPECT_EQ(rb.next_buffered_seq(), seq_t(3));
-    // Insert exactly at > back boundary
-    rb.insert({10}, fragment_ptr(m10));
-
-    std::vector<uint32_t> order;
-    while (rb.has_elements()) {
-        order.push_back(rb.next_buffered_seq().v);
-        rb.front()->free();
-        rb.pop_front();
-    }
-    EXPECT_EQ(order, (std::vector<uint32_t>{3, 5, 10}));
 }
 
 TEST_F(TransportOutputTest, InsertBoundary_FullWindow) {

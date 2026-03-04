@@ -1,23 +1,25 @@
 #pragma once
 
+#include "arch/ena.h"
+#include "arch/nic.h"
 #include "debug.h"
 #include "msg_fragment.h"
 #include "util.h"
-#include "arch/nic.h"
-#include "arch/ena.h"
 #include <cstdint>
 #include <memory>
 #include <rte_cycles.h>
 #include <rte_ethdev.h>
 
 #include <array>
+#include <rte_mbuf.h>
 
 class qpair {
   static constexpr uint16_t kDefaultInputBurstSize = 32;
 
 public:
   qpair(uint16_t port, uint16_t txq, uint16_t rxq)
-      : port(port), txq(txq), rxq(rxq), nic_arch(std::make_unique<ena::ena>()) {};
+      : port(port), txq(txq), rxq(rxq), 
+        nic_arch(std::make_unique<ena::ena>()) {};
 
   uint16_t tx_burst(rte_mbuf **pkts, uint16_t cnt) {
     auto now = rte_get_timer_cycles();
@@ -26,7 +28,7 @@ public:
       *static_cast<msg_fragment *>(pkts[i])->get_ts() = now;
     return sent;
   }
-
+ 
   template <typename F> void rx_burst(F &&cb) {
     std::array<rte_mbuf *, kDefaultInputBurstSize> pkts;
     auto now = rte_get_timer_cycles();
@@ -56,7 +58,6 @@ private:
   uint16_t rxq;
 
 public:
-
   std::unique_ptr<nic> nic_arch;
   uint64_t no_rx = 0;
   uint64_t total_rx = 0;

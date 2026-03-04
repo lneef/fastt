@@ -12,6 +12,7 @@
 #include "dev.h"
 #include "msg_fragment.h"
 #include "packet_if.h"
+#include "slab_allocator.h"
 #include "task/task.h"
 #include "transport/protocol.h"
 #include "transport/transport.h"
@@ -31,13 +32,13 @@ class connection {
   static constexpr uint16_t kMaxSlotsPerConnection = 128;
 
 public:
-  connection(msg_fragment_allocator *allocator, packet_if *pkt_if,
+  connection(packet_if *pkt_if, slab_allocator* sb, 
              const transport_config &cfg, uint16_t sport, uint16_t dport,
              connection_manager *manager, bool is_client)
-      : allocator(allocator), transport_impl(std::make_unique<transport<>>(
-                                  allocator, pkt_if, cfg, sport, dport)),
+      : transport_impl(std::make_unique<transport<>>(
+                                  pkt_if, sb, cfg, sport, dport)),
         manager(manager), is_client(is_client) {}
-  void process_pkt(rte_mbuf *pkt);
+  void process_pkt(mbuf *pkt);
   void acknowledge_all();
   void accept();
   void open_connection(uint16_t rx_flow_sport, uint16_t rx_flow_dport);
@@ -80,7 +81,6 @@ public:
 
 private:
   friend class connection_manager;
-  msg_fragment_allocator *allocator;
   std::unique_ptr<transport<>> transport_impl;
   connection_manager *manager;
   bool is_client;
@@ -99,8 +99,8 @@ public:
                      uint32_t sip,
                      std::shared_ptr<msg_fragment_allocator> allocator,
                      P *parent, uint16_t cores)
-      : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
-        pkt_if(&scheduler, sip, port), active(), cores(cores),
+      : dev(port, txq, rxq), scheduler(&dev),
+        pkt_if(&scheduler, &*allocator, &sb, sip, port), active(), cores(cores),
         is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
@@ -108,10 +108,10 @@ public:
       server_parent = parent;
   }
 
-  void handle_pkt(msg_fragment *pkt, flow_tuple &ft) {
+  void handle_pkt(mbuf *pkt, flow_tuple &ft) {
 
     FASTT_LOG_DEBUG("Got pkt via UDP ports: %s \n", ft.print().c_str());
-    auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
+    auto *header = pkt->data<protocol::ft_header>();
     if (unlikely(header->type == protocol::FT_SYN)) {
       FASTT_LOG_DEBUG("Registering new request");
       connection_requests.emplace_back(pkt, ft);
@@ -123,7 +123,7 @@ public:
         it->second->process_pkt(pkt);
       else {
         FASTT_DUMP_PKT(pkt, pkt->len());
-        pkt->free();
+        mbuf_free(pkt);
       }
     }
   }
@@ -170,6 +170,7 @@ public:
 
   void fetch_from_qpair() {
     std::array<flow_tuple, kdefaultBurstSize> fts;
+    std::array<mbuf*, kdefaultBurstSize> mbufs;
     uint16_t valid = 0, i = 0;
     assert(vec.i == 0);
     dev.rx_burst(vec);
@@ -181,13 +182,14 @@ public:
     }
     vec.i = valid;
     assert(i == 0);
-    for (auto *msg : vec)
-      pkt_if.strip_header(msg, fts[i++]);
+    for (auto *msg : vec){
+      mbufs[i] = pkt_if.strip_header_and_copy(msg, fts[i]);
+      ++i;
+    }
     i = 0;
     for (; i < vec.i; ++i) {
-      auto *msg = vec.pkts[i];
       auto &ft = fts[i];
-      handle_pkt(msg, ft);
+      handle_pkt(mbufs[i], ft);
     }
     vec.clear();
     assert(vec.i == 0);
@@ -208,7 +210,7 @@ public:
   }
 
   std::pair<connection *, bool> add_connection(flow_tuple &tuple,
-                                               msg_fragment *pkt) {
+                                               mbuf *pkt) {
     transport_config cfg;
     cfg.ip = tuple.sip;
     cfg.transport_ports.dport = tuple.sport;
@@ -220,7 +222,7 @@ public:
     // swap ports since we need the rx port as src
     auto [it, inserted] = flows.emplace(
         tuple,
-        std::make_unique<connection>(allocator.get(), &pkt_if, cfg, tuple.dport,
+        std::make_unique<connection>(&pkt_if, &sb, cfg, tuple.dport,
                                      tuple.sport, this, is_client));
     if (inserted) {
       active.push_front(*it->second);
@@ -228,7 +230,7 @@ public:
     } else if (it->second->down()) {
       // if the connection has been closed, replace it
       it->second.reset();
-      it->second = std::make_unique<connection>(allocator.get(), &pkt_if, cfg,
+      it->second = std::make_unique<connection>(&pkt_if,&sb, cfg,
                                                 tuple.dport, tuple.sport, this,
                                                 is_client);
       active.push_front(*it->second);
@@ -260,16 +262,17 @@ public:
   ~connection_manager() {}
 
 private:
-  std::shared_ptr<msg_fragment_allocator> allocator;
-  std::deque<std::pair<msg_fragment *, flow_tuple>> connection_requests;
-  flow_table<flow_tuple, std::unique_ptr<connection>> flows;
+  std::deque<std::pair<mbuf *, flow_tuple>> connection_requests;
   qpair dev;
   packet_scheduler scheduler;
+  slab_allocator sb;
   packet_if pkt_if;
   intrusive_list_t<connection> active;
   uint16_t cores;
   bool is_client;
   uint32_t open_connections = 0;
+
+  flow_table<flow_tuple, std::unique_ptr<connection>> flows;
   packet_vector<kdefaultBurstSize> vec;
   union {
     client_iface *client_parent;

@@ -163,7 +163,7 @@ int run(netconfig &conf) {
   allocators.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
     allocators.emplace_back(std::make_shared<msg_fragment_allocator>(
-        ("mpool" + std::to_string(i)).c_str(), 16383));
+        ("mpool" + std::to_string(i)).c_str(), 4095));
     ++i;
   }
   auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);
