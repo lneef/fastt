@@ -29,14 +29,12 @@ struct statistics {
 };
 
 class connection {
-  static constexpr uint16_t kMaxSlotsPerConnection = 128;
-
 public:
-  connection(packet_if *pkt_if, slab_allocator* sb, 
-             const transport_config &cfg, uint16_t sport, uint16_t dport,
-             connection_manager *manager, bool is_client)
-      : transport_impl(std::make_unique<transport<>>(
-                                  pkt_if, sb, cfg, sport, dport)),
+  connection(packet_if *pkt_if, slab_allocator *sb, const transport_config &cfg,
+             uint16_t sport, uint16_t dport, connection_manager *manager,
+             bool is_client)
+      : transport_impl(
+            std::make_unique<transport<>>(pkt_if, sb, cfg, sport, dport)),
         manager(manager), is_client(is_client) {}
   void process_pkt(mbuf *pkt);
   void acknowledge_all();
@@ -170,7 +168,7 @@ public:
 
   void fetch_from_qpair() {
     std::array<flow_tuple, kdefaultBurstSize> fts;
-    std::array<mbuf*, kdefaultBurstSize> mbufs;
+    std::array<mbuf *, kdefaultBurstSize> mbufs;
     uint16_t valid = 0, i = 0;
     assert(vec.i == 0);
     dev.rx_burst(vec);
@@ -182,7 +180,7 @@ public:
     }
     vec.i = valid;
     assert(i == 0);
-    for (auto *msg : vec){
+    for (auto *msg : vec) {
       mbufs[i] = pkt_if.strip_header_and_copy(msg, fts[i]);
       ++i;
     }
@@ -209,8 +207,7 @@ public:
     }
   }
 
-  std::pair<connection *, bool> add_connection(flow_tuple &tuple,
-                                               mbuf *pkt) {
+  std::pair<connection *, bool> add_connection(flow_tuple &tuple, mbuf *pkt) {
     transport_config cfg;
     cfg.ip = tuple.sip;
     cfg.transport_ports.dport = tuple.sport;
@@ -221,18 +218,16 @@ public:
     FASTT_LOG_DEBUG("New Connection %s \n", tuple.print().c_str());
     // swap ports since we need the rx port as src
     auto [it, inserted] = flows.emplace(
-        tuple,
-        std::make_unique<connection>(&pkt_if, &sb, cfg, tuple.dport,
-                                     tuple.sport, this, is_client));
+        tuple, std::make_unique<connection>(&pkt_if, &sb, cfg, tuple.dport,
+                                            tuple.sport, this, is_client));
     if (inserted) {
       active.push_front(*it->second);
       ++open_connections;
     } else if (it->second->down()) {
       // if the connection has been closed, replace it
       it->second.reset();
-      it->second = std::make_unique<connection>(&pkt_if,&sb, cfg,
-                                                tuple.dport, tuple.sport, this,
-                                                is_client);
+      it->second = std::make_unique<connection>(&pkt_if, &sb, cfg, tuple.dport,
+                                                tuple.sport, this, is_client);
       active.push_front(*it->second);
       inserted = true;
     }

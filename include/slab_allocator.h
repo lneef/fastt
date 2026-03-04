@@ -128,7 +128,10 @@ class slab_allocator {
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
 
 public:
-  slab_allocator() : cache(kDefaultSize) {}
+  slab_allocator() : cache(kDefaultSize) {
+      alloc_new_slab(cache);
+  }
+
   mbuf *alloc_default(uint16_t data_len) {
     if (cache.partial.empty())
       alloc_new_slab(cache);
