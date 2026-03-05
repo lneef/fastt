@@ -60,6 +60,53 @@ TEST_F(TransportInputTest, SackMarksCorrectEntries) {
     EXPECT_EQ(retransmitted.size(), 2u);
 }
 
+TEST_F(TransportInputTest, RetransmissionTransmitsCorrectPacket) {
+    // Record 4 packets, each with a distinct payload byte
+    std::vector<mbuf*> originals;
+    for (int i = 0; i < 4; ++i) {
+        auto *msg = allocator->alloc_default(sizeof(protocol::ft_header) + 1);
+        ASSERT_NE(msg, nullptr);
+        auto *hdr = msg->data<protocol::ft_header>();
+        hdr->type = protocol::pkt_type::FT_MSG;
+        hdr->som = 1;
+        hdr->eom = 1;
+        // Write a unique tag after the header
+        *msg->data<uint8_t>(sizeof(protocol::ft_header)) = static_cast<uint8_t>(0xA0 + i);
+        originals.push_back(msg);
+        bool ok = ti->record_pkt(msg, [](mbuf *, seq_t) {}, rte_get_timer_cycles());
+        ASSERT_TRUE(ok);
+    }
+
+    // ACK seq 0 (cumulative), leaving seq 1..3 unacked
+    ti->acknowledge(seq_t{0}, rte_get_timer_cycles());
+
+    // SACK seq 2 (bit 1 in bitmap starting after cumulative ack)
+    // Unacked: 1, 2, 3 → bitmap bit 1 = seq 2
+    protocol::ft_sack_payload sack{};
+    sack.bit_map[0] = (1ull << 1);
+    sack.bit_map_len = 3;
+    ti->acknowledge_sack(&sack, rte_get_timer_cycles());
+
+    // Wait past RTT so detect_loss triggers
+    auto now = rte_get_timer_cycles();
+    while (rte_get_timer_cycles() < now + 10 * get_ticks_us())
+        ;
+    ti->detect_loss(rte_get_timer_cycles());
+
+    // Collect retransmitted packets
+    std::vector<mbuf*> retransmitted;
+    ti->advance_recovery([&](mbuf *m) { retransmitted.push_back(m); });
+
+    // Expect seq 1 and seq 3 to be retransmitted (seq 2 was SACKed)
+    ASSERT_EQ(retransmitted.size(), 1u);
+
+    // Verify the retransmitted packets are the exact original mbufs
+    EXPECT_EQ(retransmitted[0], originals[1]);
+
+    // Verify payload is intact
+    EXPECT_EQ(*retransmitted[0]->data<uint8_t>(sizeof(protocol::ft_header)), 0xA1);
+}
+
 TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
     // Record 8 packets (seq 0..7)
     for (int i = 0; i < 8; ++i) {

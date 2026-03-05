@@ -97,8 +97,8 @@ public:
                      uint32_t sip,
                      std::shared_ptr<msg_fragment_allocator> allocator,
                      P *parent, uint16_t cores)
-      : dev(port, txq, rxq), scheduler(&dev),
-        pkt_if(&scheduler, allocator, &sb, sip, port), active(), cores(cores),
+      : dev(port, txq, rxq), 
+        pkt_if(&dev, allocator, &sb, sip, port), active(), cores(cores),
         is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
@@ -251,14 +251,13 @@ public:
     flows.erase(ft);
   }
 
-  void flush() { scheduler.flush(); }
+  void flush() { pkt_if.flush_out_buffer(); }
 
   ~connection_manager() {}
 
 private:
   std::deque<std::pair<mbuf *, flow_tuple>> connection_requests;
   qpair dev;
-  packet_scheduler scheduler;
   slab_allocator sb;
   packet_if pkt_if;
   intrusive_list_t<connection> active;

@@ -3,7 +3,6 @@
 #include <cassert>
 #include <cstdint>
 #include <deque>
-#include <generic/rte_cycles.h>
 #include <msg_fragment.h>
 #include <rte_cycles.h>
 
@@ -80,8 +79,6 @@ public:
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
-      if (!entry.packet->xmit)
-        break;
       if (entry.seq == least_unacked_pkt || ts - entry.xmit_ts >= rck.rtt) {
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
         assert(entry.link.is_linked());  

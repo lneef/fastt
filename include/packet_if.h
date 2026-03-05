@@ -1,8 +1,8 @@
 #pragma once
 
 #include "debug.h"
+#include "dev.h"
 #include "msg_fragment.h"
-#include "packet_scheduler.h"
 #include "slab_allocator.h"
 #include "transport/protocol.h"
 #include "util.h"
@@ -35,11 +35,11 @@ struct packet_drop_sim {
 
 class packet_if {
   static constexpr uint16_t kdefaultTTL = 64;
-
+  static constexpr uint16_t kDefaultOutBurstSize = 32;  
 public:
-  packet_if(packet_scheduler *scheduler, std::shared_ptr<msg_fragment_allocator> msg_allocator, slab_allocator *sb,
+  packet_if(qpair *qp, std::shared_ptr<msg_fragment_allocator> msg_allocator, slab_allocator *sb,
             uint32_t sip, uint16_t port)
-      : arp_table(), msg_allocator(msg_allocator), sb(sb), scheduler(scheduler),
+      : arp_table(), msg_allocator(msg_allocator), sb(sb), qp(qp),
         sip(sip) {
     rte_eth_macaddr_get(port, &smac);
     sim.set_rate(0.0);
@@ -97,7 +97,7 @@ public:
     assert(it != arp_table.end());
     eth_header(dpdk_mbuf, smac, it->second);
     FASTT_DUMP_PKT(dpdk_mbuf, dpdk_mbuf->len());
-    scheduler->add_pkt(static_cast<rte_mbuf *>(dpdk_mbuf));
+    add_to_out_buffer(static_cast<rte_mbuf *>(dpdk_mbuf));
   }
 
   void add_mapping(uint32_t ip, rte_ether_addr &addr) {
@@ -161,6 +161,12 @@ public:
     return static_cast<msg_fragment*>(mbuf);
   }
 
+  void flush_out_buffer(){
+      if(out_buffer.i == 0)
+          return;
+      do_send();
+  }
+
   mbuf* strip_header_and_copy(msg_fragment *msg, flow_tuple &ft) {
     strip_ether_ip(msg, ft);
     strip_udp(msg, ft);
@@ -173,11 +179,29 @@ public:
   uint32_t get_sip() const { return sip; }
 
 private:
+  void do_send(){
+    uint16_t sent = 0;
+    do{
+        sent += qp->tx_burst(out_buffer.buf.data() + sent, out_buffer.i - sent);
+    }while(sent < out_buffer.i);
+    out_buffer.i = 0;
+  }
+
+  void add_to_out_buffer(rte_mbuf* pkt){
+      if(out_buffer.i == kDefaultOutBurstSize)
+          do_send();
+      out_buffer.buf[out_buffer.i++] = pkt;
+  }
+
   packet_drop_sim sim;
   flow_table<uint32_t, rte_ether_addr> arp_table;
   rte_ether_addr smac;
   std::shared_ptr<msg_fragment_allocator> msg_allocator;
   slab_allocator *sb;
-  packet_scheduler *scheduler;
+  qpair *qp;
+  struct{
+      std::array<rte_mbuf*, kDefaultOutBurstSize> buf;
+      size_t i = 0;
+  }out_buffer;
   uint32_t sip;
 };
