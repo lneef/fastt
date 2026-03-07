@@ -1,10 +1,12 @@
-#include "task/task.h"
+#include "sgl.h"
 #include "slab_allocator.h"
+#include "task/task.h"
 
 #include "transport/protocol.h"
 #include "transport/seq.h"
 #include "transport/transport.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -19,9 +21,7 @@ struct mock_packet_if {
     sent_pkts.push_back(pkt);
   }
 
-  void consume_for_retransmission(mbuf *msg) {
-    sent_pkts.push_back(msg);
-  }
+  void consume_for_retransmission(mbuf *msg) { sent_pkts.push_back(msg); }
 
   mbuf *pop() {
     if (sent_pkts.empty())
@@ -31,15 +31,11 @@ struct mock_packet_if {
     return m;
   }
 
-  uint32_t get_sip() const{
-      return 0;
-  }
+  uint32_t get_sip() const { return 0; }
 
   size_t size() const { return sent_pkts.size(); }
 
-  void clear() {
-    sent_pkts.clear();
-  }
+  void clear() { sent_pkts.clear(); }
 
   ~mock_packet_if() { clear(); }
 };
@@ -55,32 +51,30 @@ struct mock_connection {
 
   mock_connection(mock_transport &tp) : tp(tp) {}
 
-  void perform_recovery(){}
+  void perform_recovery() {}
 
   // mirrors connection::make_progress
   void make_progress() { concurrency::make_progress(*this); }
 
   // --- awaitables that talk to mock_connection instead of connection ---
 
-  concurrency::send_awaitable<mock_connection> send(concurrency::scheduler &s,
-                                                    msg_hdr &hdr) {
-    return {s, *this, hdr};
+  concurrency::send_awaitable_sgl<mock_connection>
+  send(concurrency::scheduler &s, sgl &&msgl) {
+    return {s, *this, std::move(msgl)};
   }
 
-  concurrency::recv_awaitable<mock_connection>
-  recv(concurrency::scheduler &s, void *buf, size_t len, size_t &remaining) {
-    return {s, *this, buf, len, remaining};
+  concurrency::recv_awaitable_sgl<mock_connection>
+  recv(concurrency::scheduler &s, sgl *msgl) {
+    return {s, *this, msgl};
   }
 
   bool can_send() const { return tp.can_send(); }
 
   bool can_recv() const { return tp.can_recv(); }
 
-  ssize_t send(msg_hdr &hdr) { return tp.send(hdr); }
+  ssize_t send(sgl &msgl) { return tp.send_sgl(msgl); }
 
-  ssize_t recv(void *buf, size_t len, size_t &rem) {
-    return tp.recv(buf, len, rem);
-  }
+  ssize_t recv(sgl &msgl) { return tp.recv(msgl); }
 };
 
 // --- test fixture ---
@@ -96,7 +90,7 @@ protected:
     cfg.ip = 0x01020304;
     cfg.transport_ports.sport = kSport;
     cfg.transport_ports.dport = kDport;
-    tp = new mock_transport(mock,slab, cfg, kSport, kDport);
+    tp = new mock_transport(mock, slab, cfg, kSport, kDport);
   }
 
   void TearDown() override {
@@ -112,8 +106,7 @@ protected:
     hdr->sport = kDport;
     hdr->dport = kSport;
     hdr->seq = {0};
-    hdr->wnd = 64;
-    hdr->som = true;
+    hdr->crd = 64;
     hdr->eom = true;
     hdr->ackframe = 0;
     hdr->sack = 0;
@@ -123,46 +116,36 @@ protected:
     mock->clear();
   }
 
-  mbuf *make_data_pkt(seq_t seq, bool start, bool end,
-                              const void *payload, uint16_t payload_len,
-                              size_t size) {
-    auto *msg = slab->alloc_default(
-        start * sizeof(protocol::ft_msg_payload) + sizeof(protocol::ft_header) +
-        payload_len);
+  mbuf *make_data_pkt(seq_t seq, bool end, const void *payload,
+                      uint16_t payload_len) {
+    auto *msg = slab->alloc_default(payload_len);
     auto off = 0u;
-    if (start) {
-      auto *mhdr =
-          msg->data<protocol::ft_msg_payload>(sizeof(protocol::ft_header));
-      mhdr->out = size;
-      off += sizeof(protocol::ft_msg_payload);
-    }
-    auto *hdr = msg->data<protocol::ft_header>();
+    auto *hdr = msg->prepend<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_MSG;
     hdr->sport = kDport;
     hdr->dport = kSport;
     hdr->seq = seq;
     hdr->ack = {0};
-    hdr->som = start;
     hdr->eom = end;
     hdr->ackframe = 1;
     hdr->sack = 0;
-    hdr->wnd = 0;
+    hdr->crd = 0;
     std::memcpy(msg->data<uint8_t>(off + sizeof(protocol::ft_header)), payload,
                 payload_len);
     return msg;
   }
 
-  mbuf *make_wnd_ret(seq_t seq, uint16_t wnd) {
+  mbuf *make_crd_ret(seq_t seq, uint16_t crd) {
     auto *msg = slab->alloc_default(sizeof(protocol::ft_header));
     auto *hdr = msg->data<protocol::ft_header>();
-    hdr->type = protocol::pkt_type::FT_WND_RET;
+    hdr->type = protocol::pkt_type::FT_CRD_UPDATE;
     hdr->sport = kDport;
     hdr->dport = kSport;
     hdr->seq = seq;
     hdr->ack = {0};
     hdr->ackframe = 0;
     hdr->sack = 0;
-    hdr->wnd = wnd;
+    hdr->crd = crd;
     return msg;
   }
 
@@ -173,24 +156,31 @@ protected:
 };
 
 static concurrency::task recv_coro(concurrency::scheduler &sched,
-                                   mock_connection &mc, void *buf, size_t len,
-                                   size_t &remaining, ssize_t &out_retval) {
-  out_retval = co_await mc.recv(sched, buf, len, remaining);
+                                   mock_connection &mc, sgl &msgl,
+                                   ssize_t &out_retval) {
+  out_retval = co_await mc.recv(sched, &msgl);
 }
 
 static concurrency::task send_coro(concurrency::scheduler &sched,
-                                   mock_connection &mc, msg_hdr &hdr,
+                                   mock_connection &mc, sgl &&msgl,
                                    ssize_t &out_retval) {
-  out_retval = co_await mc.send(sched, hdr);
+  out_retval = co_await mc.send(sched, std::move(msgl));
 }
 
 static concurrency::task recv_send_coro(concurrency::scheduler &sched,
-                                        mock_connection &mc, msg_hdr &hdr,
-                                        std::vector<char> &data, size_t rx, size_t rem) {
-  auto rcvd = co_await mc.recv(sched, data.data(), data.size(), rem);
-  EXPECT_EQ(rx, rcvd);
-  hdr.set_data(data.data(), rcvd);
-  auto sent = co_await mc.send(sched, hdr);
+                                        mock_connection &mc, slab_allocator *sb,
+                                        sgl &recv_sgl, size_t rx) {
+  auto rcvd = co_await mc.recv(sched, &recv_sgl);
+  EXPECT_EQ(static_cast<ssize_t>(rx), rcvd);
+  // Build an sgl from the received data to send back
+  sgl send_sgl;
+  for (auto &mb : recv_sgl) {
+    printf("%u\n", mb.data_len);
+    auto *m = sb->alloc_default(mb.data_len);
+    std::memcpy(m->data<uint8_t>(), mb.data<void>(), mb.data_len);
+    send_sgl.add_segment_safe(mbuf_take_owner_ship(m));
+  }
+  auto sent = co_await mc.send(sched, std::move(send_sgl));
   EXPECT_EQ(sent, rcvd);
 }
 
@@ -198,22 +188,21 @@ TEST_F(TransportCoroTest, RecvSingleReady) {
   establish();
 
   const char payload[] = "hello";
-  tp->process_pkt(make_data_pkt({1}, true, true, payload, sizeof(payload),
-                                sizeof(payload)));
+  tp->process_pkt(make_data_pkt({1}, true, payload, sizeof(payload)));
   ASSERT_TRUE(tp->can_recv());
 
   concurrency::scheduler sched;
   mock_connection mc(*tp);
 
-  char buf[64] = {};
-  size_t remaining = 0;
+  sgl msgl;
   ssize_t retval = -1;
-  auto t = recv_coro(sched, mc, buf, sizeof(buf), remaining, retval);
+  auto t = recv_coro(sched, mc, msgl, retval);
   sched.schedule(t.handle);
   sched.run();
 
   EXPECT_GT(retval, 0);
-  EXPECT_EQ(remaining, 0u);
+  char buf[64] = {};
+  msgl.head->read(buf);
   EXPECT_STREQ(buf, "hello");
 }
 
@@ -223,19 +212,17 @@ TEST_F(TransportCoroTest, RecvSingleSuspendResume) {
   concurrency::scheduler sched;
   mock_connection mc(*tp);
 
-  char buf[64] = {};
-  size_t remaining = 0;
+  sgl msgl;
   ssize_t retval = -1;
 
-  auto t = recv_coro(sched, mc, buf, sizeof(buf), remaining, retval);
+  auto t = recv_coro(sched, mc, msgl, retval);
   sched.schedule(t.handle);
   sched.run();
   EXPECT_EQ(retval, -1); // still suspended
   EXPECT_TRUE(mc.coro.has_value());
 
   const char payload[] = "world";
-  tp->process_pkt(make_data_pkt({1}, true, true, payload, sizeof(payload),
-                                sizeof(payload)));
+  tp->process_pkt(make_data_pkt({1}, true, payload, sizeof(payload)));
 
   // make_progress should resume the coro
   mc.make_progress();
@@ -243,6 +230,8 @@ TEST_F(TransportCoroTest, RecvSingleSuspendResume) {
   sched.run(); // let the coro finish
 
   EXPECT_GT(retval, 0);
+  char buf[64] = {};
+  msgl.head->read(buf);
   EXPECT_STREQ(buf, "world");
 }
 
@@ -250,25 +239,24 @@ TEST_F(TransportCoroTest, RecvSingleSuspendResume) {
 TEST_F(TransportCoroTest, RecvMultiSegment) {
   establish();
 
-  tp->process_pkt(make_data_pkt({1}, true, false, "AAA", 3, 9));
-  tp->process_pkt(make_data_pkt({2}, false, false, "BBB", 3, 9));
-  tp->process_pkt(make_data_pkt({3}, false, true, "CCC", 3, 9));
+  tp->process_pkt(make_data_pkt({1}, false, "AAA", 3));
+  tp->process_pkt(make_data_pkt({2}, false, "BBB", 3));
+  tp->process_pkt(make_data_pkt({3}, true, "CCC", 3));
 
   ASSERT_TRUE(tp->can_recv());
 
   concurrency::scheduler sched;
   mock_connection mc(*tp);
 
-  char buf[64] = {};
-  size_t remaining = 0;
+  sgl msgl;
   ssize_t retval = -1;
-  auto t = recv_coro(sched, mc, buf, sizeof(buf), remaining, retval);
+  auto t = recv_coro(sched, mc, msgl, retval);
   sched.schedule(t.handle);
   sched.run();
 
   EXPECT_EQ(retval, 9);
-  EXPECT_EQ(remaining, 0u);
-  printf("%s\n", buf);
+  char buf[64] = {};
+  msgl.head->read(buf);
   EXPECT_EQ(std::memcmp(buf, "AAABBBCCC", 9), 0);
 }
 
@@ -280,11 +268,13 @@ TEST_F(TransportCoroTest, SendViaCoro) {
   mock_connection mc(*tp);
 
   char data[] = "testdata";
-  msg_hdr hdr;
-  hdr.set_data(data, sizeof(data));
+  sgl msgl;
+  auto *m = slab->alloc_default(sizeof(data));
+  std::memcpy(m->data<char>(), data, sizeof(data));
+  msgl.add_segment_safe(mbuf_take_owner_ship(m));
   ssize_t retval = -1;
 
-  auto t = send_coro(sched, mc, hdr, retval);
+  auto t = send_coro(sched, mc, std::move(msgl), retval);
   sched.schedule(t.handle);
   sched.run();
 
@@ -294,8 +284,6 @@ TEST_F(TransportCoroTest, SendViaCoro) {
   auto *sent = mock->pop();
   auto *fhdr = sent->data<protocol::ft_header>();
   EXPECT_EQ(fhdr->type, protocol::pkt_type::FT_MSG);
-  EXPECT_EQ(sent->data_len, sizeof(data) + sizeof(protocol::ft_header) + 8);
-  EXPECT_TRUE(fhdr->som);
   EXPECT_TRUE(fhdr->eom);
 }
 
@@ -322,8 +310,7 @@ TEST_F(TransportCoroTest, TwoConnectionsRecvThenSend) {
     hdr->sport = kDport2;
     hdr->dport = kSport2;
     hdr->seq = {0};
-    hdr->wnd = 64;
-    hdr->som = true;
+    hdr->crd = 64;
     hdr->eom = true;
     hdr->ackframe = 0;
     hdr->sack = 0;
@@ -336,33 +323,29 @@ TEST_F(TransportCoroTest, TwoConnectionsRecvThenSend) {
   concurrency::scheduler sched;
   mock_connection mc1(*tp);
   mock_connection mc2(tp2);
-  std::vector<char> buf1(64), buf2(64);
   char payload1[] = "from_conn1";
   char payload2[] = "from_conn2";
 
-  size_t rem1 = 0, rem2 = 0;
-  msg_hdr hdr1, hdr2;
+  sgl rsgl1, rsgl2;
 
-  auto t1 = recv_send_coro(sched, mc1, hdr1, buf1, sizeof(payload1), rem1);
+  auto t1 = recv_send_coro(sched, mc1, slab, rsgl1, sizeof(payload1));
   sched.schedule(t1.handle);
-  auto t2 = recv_send_coro(sched, mc2, hdr2, buf2, sizeof(payload2), rem2);
+  auto t2 = recv_send_coro(sched, mc2, slab, rsgl2, sizeof(payload2));
   sched.schedule(t2.handle);
   sched.run();
 
-  tp->process_pkt(make_data_pkt({1}, true, true, payload1, sizeof(payload1),
-                                sizeof(payload1)));
-  tp2.process_pkt(make_data_pkt({1}, true, true, payload2, sizeof(payload2),
-                                sizeof(payload2)));
+  tp->process_pkt(make_data_pkt({1}, true, payload1, sizeof(payload1)));
+  tp2.process_pkt(make_data_pkt({1}, true, payload2, sizeof(payload2)));
 
   mc1.make_progress();
   mc2.make_progress();
   sched.run();
 
-  EXPECT_EQ(rem1, 0u);
-  EXPECT_STREQ(buf1.data(), "from_conn1");
-
-  EXPECT_EQ(rem2, 0u);
-  EXPECT_STREQ(buf2.data(), "from_conn2");
+  char buf1[64] = {}, buf2[64] = {};
+  rsgl1.head->read(buf1);
+  rsgl2.head->read(buf2);
+  EXPECT_STREQ(buf1, "from_conn1");
+  EXPECT_STREQ(buf2, "from_conn2");
 
   ASSERT_GE(mock->size(), 1u);
   ASSERT_GE(mock2.size(), 1u);
@@ -370,19 +353,17 @@ TEST_F(TransportCoroTest, TwoConnectionsRecvThenSend) {
   auto *sent1 = mock->pop();
   auto *fhdr1 = sent1->data<protocol::ft_header>();
   EXPECT_EQ(fhdr1->type, protocol::pkt_type::FT_MSG);
-  EXPECT_TRUE(fhdr1->som);
   EXPECT_TRUE(fhdr1->eom);
 
   auto *sent2 = mock2.pop();
   auto *fhdr2 = sent2->data<protocol::ft_header>();
   EXPECT_EQ(fhdr2->type, protocol::pkt_type::FT_MSG);
-  EXPECT_TRUE(fhdr2->som);
   EXPECT_TRUE(fhdr2->eom);
 }
 
 // Two connections: coro1 recvs first, then coro2 recvs; coro1 is blocked on
-// send (wnd=0) with a large (3-segment) payload, coro2 sends freely; coro1
-// gets wnd=1 → partial send (1 segment), then wnd=2 → remaining 2 segments.
+// send (crd=0) with a large (3-segment) payload, coro2 sends freely; coro1
+// gets crd=1 → partial send (1 segment), then crd=2 → remaining 2 segments.
 TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
   static constexpr uint16_t kSport2 = 300;
   static constexpr uint16_t kDport2 = 400;
@@ -395,7 +376,7 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
   cfg2.transport_ports.dport = kDport2;
   mock_transport tp2(&mock2, slab, cfg2, kSport2, kDport2);
 
-  // Establish tp1 with wnd=0 — no send credits
+  // Establish tp1 with crd=0 — no send credits
   {
     auto *pkt = slab->alloc_default(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
@@ -403,8 +384,7 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
     hdr->sport = kDport;
     hdr->dport = kSport;
     hdr->seq = {0};
-    hdr->wnd = 0;
-    hdr->som = true;
+    hdr->crd = 0;
     hdr->eom = true;
     hdr->ackframe = 0;
     hdr->sack = 0;
@@ -415,7 +395,7 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
     mock->clear();
   }
 
-  // Establish tp2 with wnd=64 — plenty of send credits
+  // Establish tp2 with crd=64 — plenty of send credits
   {
     auto *pkt = slab->alloc_default(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
@@ -423,8 +403,7 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
     hdr->sport = kDport2;
     hdr->dport = kSport2;
     hdr->seq = {0};
-    hdr->wnd = 64;
-    hdr->som = true;
+    hdr->crd = 64;
     hdr->eom = true;
     hdr->ackframe = 0;
     hdr->sack = 0;
@@ -439,40 +418,36 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
   mock_connection mc2(tp2);
 
   std::vector<char> big_payload(2 * kSegSz - 512, 'A');
-  std::vector<char> buf1(2 * kSegSz - 512), buf2(64);
   char payload2[] = "beta";
-  size_t rem1 = 0, rem2 = 0;
-  msg_hdr hdr1, hdr2;
 
-  auto t1 = recv_send_coro(sched, mc1, hdr1, buf1, big_payload.size(), rem1);
+  sgl rsgl1, rsgl2;
+
+  auto t1 = recv_send_coro(sched, mc1, slab, rsgl1, big_payload.size());
   sched.schedule(t1.handle);
-  auto t2 = recv_send_coro(sched, mc2, hdr2, buf2, sizeof(payload2), rem2);
+  auto t2 = recv_send_coro(sched, mc2, slab, rsgl2, sizeof(payload2));
   sched.schedule(t2.handle);
   sched.run();
 
   EXPECT_TRUE(mc1.coro.has_value()); // suspended on recv
   EXPECT_TRUE(mc2.coro.has_value()); // suspended on recv
 
-  tp->process_pkt(make_data_pkt({1}, true, false, big_payload.data(), kSegSz,
-                                big_payload.size()));
+  tp->process_pkt(make_data_pkt({1}, false, big_payload.data(), kSegSz));
 
   mc1.make_progress();
   sched.run();
-  tp->process_pkt(make_data_pkt({2}, false, true, big_payload.data() + kSegSz,
-              kSegSz - 512, 0));
+  tp->process_pkt(
+      make_data_pkt({2}, true, big_payload.data() + kSegSz, kSegSz - 512));
   mc1.make_progress();
   sched.run();
 
-  // coro1 completed recv, now suspended on send (wnd=0 — can't send)
-  EXPECT_EQ(rem1, 0u);
+  // coro1 completed recv, now suspended on send (crd=0 — can't send)
   EXPECT_TRUE(mc1.coro.has_value()); // blocked on send
   EXPECT_EQ(mock->size(), 0u);       // nothing sent yet
 
   // --- Phase 2: coro2 receives and sends freely (has credits) ---
   {
     char payload2[] = "beta";
-    auto *dp2 = make_data_pkt({1}, true, true, payload2, sizeof(payload2),
-                              sizeof(payload2));
+    auto *dp2 = make_data_pkt({1}, true, payload2, sizeof(payload2));
     auto *dh2 = dp2->data<protocol::ft_header>();
     dh2->sport = kDport2;
     dh2->dport = kSport2;
@@ -481,7 +456,9 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
   mc2.make_progress();
   sched.run();
 
-  EXPECT_STREQ(buf2.data(), "beta");
+  char buf2[64] = {};
+  rsgl2.head->read(buf2);
+  EXPECT_STREQ(buf2, "beta");
   EXPECT_FALSE(mc2.coro.has_value()); // coro2 finished
   ASSERT_GE(mock2.size(), 1u);
 
@@ -493,8 +470,8 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
   EXPECT_TRUE(mc1.coro.has_value());
   EXPECT_EQ(mock->size(), 0u);
 
-  // --- Phase 3: first wnd_ret (wnd=1) → coro1 sends 1 of 3 segments ---
-  tp->process_pkt(make_wnd_ret({3}, 1));
+  // --- Phase 3: first crd_ret (crd=1) → coro1 sends 1 of 3 segments ---
+  tp->process_pkt(make_crd_ret({3}, 1));
   mc1.make_progress();
   sched.run();
 
@@ -505,11 +482,10 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
   auto *partial = mock->pop();
   auto *phdr = partial->data<protocol::ft_header>();
   EXPECT_EQ(phdr->type, protocol::pkt_type::FT_MSG);
-  EXPECT_TRUE(phdr->som);
   EXPECT_FALSE(phdr->eom); // not the last segment
 
-  // --- Phase 4: second wnd_ret (wnd=2) → coro1 sends remaining 2 segments ---
-  tp->process_pkt(make_wnd_ret({4}, 1));
+  // --- Phase 4: second crd_ret (crd=2) → coro1 sends remaining 2 segments ---
+  tp->process_pkt(make_crd_ret({4}, 1));
   mc1.make_progress();
   sched.run();
 
@@ -519,12 +495,11 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
   auto *seg2 = mock->pop();
   auto *shdr2 = seg2->data<protocol::ft_header>();
   EXPECT_EQ(shdr2->type, protocol::pkt_type::FT_MSG);
-  EXPECT_FALSE(shdr2->som);
   EXPECT_TRUE(shdr2->eom);
 }
 
 TEST_F(TransportCoroTest, SendLargePayload) {
-  // Establish with wnd=2 so only 2 segments can be sent initially
+  // Establish with crd=2 so only 2 segments can be sent initially
   {
     auto *pkt = slab->alloc_default(sizeof(protocol::ft_header));
     auto *hdr = pkt->data<protocol::ft_header>();
@@ -532,8 +507,7 @@ TEST_F(TransportCoroTest, SendLargePayload) {
     hdr->sport = kDport;
     hdr->dport = kSport;
     hdr->seq = {0};
-    hdr->wnd = 2;
-    hdr->som = true;
+    hdr->crd = 2;
     hdr->eom = true;
     hdr->ackframe = 0;
     hdr->sack = 0;
@@ -551,11 +525,19 @@ TEST_F(TransportCoroTest, SendLargePayload) {
   for (size_t i = 0; i < kPayloadSize; ++i)
     payload[i] = static_cast<char>('A' + (i % 26));
 
-  msg_hdr hdr;
-  hdr.set_data(payload.data(), payload.size());
+  sgl msgl;
+  size_t off = 0;
+  while (off < kPayloadSize) {
+    auto to_cpy = std::min<size_t>(kPayloadSize - off, slab_allocator::kMaxDataLen);
+    auto *m = slab->alloc_default(to_cpy);
+    std::memcpy(m->data<char>(), payload.data() + off, to_cpy);
+    msgl.add_segment_safe(mbuf_take_owner_ship(m));
+    off += slab_allocator::kMaxDataLen;
+  }
   ssize_t retval = -1;
+  printf("%u\n", msgl.segs);
 
-  auto t = send_coro(sched, mc, hdr, retval);
+  auto t = send_coro(sched, mc, std::move(msgl), retval);
   sched.schedule(t.handle);
   sched.run();
 
@@ -570,15 +552,13 @@ TEST_F(TransportCoroTest, SendLargePayload) {
     EXPECT_EQ(fhdr->type, protocol::pkt_type::FT_MSG);
     EXPECT_FALSE(fhdr->eom); // more segments remain
 
-    size_t meta = fhdr->som ? sizeof(protocol::ft_msg_payload) : 0;
-    auto *seg_start =
-        pkt->data<char>(sizeof(protocol::ft_header) + meta);
-    size_t seg_len = pkt->data_len - sizeof(protocol::ft_header) - meta;
+    auto *seg_start = pkt->data<char>(sizeof(protocol::ft_header));
+    size_t seg_len = pkt->data_len - sizeof(protocol::ft_header);
     reassembled.insert(reassembled.end(), seg_start, seg_start + seg_len);
   }
 
   // Grant enough credits for the remaining segments
-  tp->process_pkt(make_wnd_ret({3}, 64));
+  tp->process_pkt(make_crd_ret({3}, 64));
   mc.make_progress();
   sched.run();
 
@@ -593,7 +573,6 @@ TEST_F(TransportCoroTest, SendLargePayload) {
     auto *pkt = mock->pop();
     auto *fhdr = pkt->data<protocol::ft_header>();
     EXPECT_EQ(fhdr->type, protocol::pkt_type::FT_MSG);
-    EXPECT_FALSE(fhdr->som); // continuation segments
 
     bool is_last = mock->size() == 0;
     if (is_last)
@@ -602,8 +581,7 @@ TEST_F(TransportCoroTest, SendLargePayload) {
       EXPECT_FALSE(fhdr->eom);
 
     size_t meta = 0; // no ft_msg_payload on continuation segments
-    auto *seg_start =
-        pkt->data<char>(sizeof(protocol::ft_header) + meta);
+    auto *seg_start = pkt->data<char>(sizeof(protocol::ft_header) + meta);
     size_t seg_len = pkt->data_len - sizeof(protocol::ft_header) - meta;
     reassembled.insert(reassembled.end(), seg_start, seg_start + seg_len);
   }
@@ -615,9 +593,8 @@ TEST_F(TransportCoroTest, SendLargePayload) {
 // --- DONE acknowledgement tests ---
 
 // Helper: build a FT_DONE packet that the remote would send to us.
-static mbuf *make_done_pkt(slab_allocator *slab,
-                                   seq_t seq, seq_t ack,
-                                   uint16_t sport, uint16_t dport) {
+static mbuf *make_done_pkt(slab_allocator *slab, seq_t seq, seq_t ack,
+                           uint16_t sport, uint16_t dport) {
   auto *msg = slab->alloc_default(sizeof(protocol::ft_header));
   auto *hdr = msg->data<protocol::ft_header>();
   hdr->type = protocol::pkt_type::FT_DONE;
@@ -627,8 +604,7 @@ static mbuf *make_done_pkt(slab_allocator *slab,
   hdr->ack = ack;
   hdr->ackframe = 0;
   hdr->sack = 0;
-  hdr->wnd = 0;
-  hdr->som = 0;
+  hdr->crd = 0;
   hdr->eom = 0;
   return msg;
 }
@@ -640,8 +616,7 @@ TEST_F(TransportCoroTest, SendAfterWndReturn) {
   h->sport = kDport;
   h->dport = kSport;
   h->seq = {0};
-  h->wnd = 0; // no send credits
-  h->som = true;
+  h->crd = 0; // no send credits
   h->eom = true;
   h->ackframe = 0;
   h->sack = 0;
@@ -656,19 +631,21 @@ TEST_F(TransportCoroTest, SendAfterWndReturn) {
   mock_connection mc(*tp);
 
   char data[] = "x";
-  msg_hdr hdr;
-  hdr.set_data(data, sizeof(data));
+  sgl msgl;
+  auto *m = slab->alloc_default(sizeof(data));
+  std::memcpy(m->data<char>(), data, sizeof(data));
+  msgl.add_segment_safe(mbuf_take_owner_ship(m));
   ssize_t retval = -1;
 
   // No credits — coro will suspend
-  auto t = send_coro(sched, mc, hdr, retval);
+  auto t = send_coro(sched, mc, std::move(msgl), retval);
   sched.schedule(t.handle);
   sched.run();
   EXPECT_EQ(retval, -1);
   EXPECT_TRUE(mc.coro.has_value());
 
   // Grant credits via WND_RET
-  tp->process_pkt(make_wnd_ret({1}, 8));
+  tp->process_pkt(make_crd_ret({1}, 8));
 
   mc.make_progress();
   EXPECT_FALSE(mc.coro.has_value());

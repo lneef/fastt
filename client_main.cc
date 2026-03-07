@@ -4,6 +4,8 @@
 #include "kv.h"
 #include "kv_protocol.h"
 #include "msg_fragment.h"
+#include "sgl.h"
+#include "slab_allocator.h"
 #include "util.h"
 #include <arpa/inet.h>
 #include <atomic>
@@ -29,7 +31,6 @@ struct netconfig {
   rte_ether_addr dmac;
   uint32_t sip, dip;
   uint16_t dport;
-  bool large = false;
   std::vector<uint16_t> sports;
 };
 
@@ -53,7 +54,6 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
       {"dmac", required_argument, 0, 0},
       {"sport", required_argument, 0, 0},
       {"dport", required_argument, 0, 0},
-      {"large", no_argument, 0, 0},
       {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
@@ -79,61 +79,11 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
     case 4:
       conf.dport = atoi(optarg);
       break;
-    case 5: {
-      conf.large = true;
-      break;
-    }
     default:
       break;
     }
   }
   return conf;
-}
-
-static int lcore_large(void *arg) {
-  auto *adapter = static_cast<lcore_adapter *>(arg);
-  auto me = rte_lcore_index(rte_lcore_id());
-  auto &cif = *adapter->cifs[me];
-  int retval = 0;
-  std::vector<int> data(256 * 1024, 'A');
-  auto do_send = [&](connection &con, msg_hdr &hdr) -> ssize_t {
-    auto sent = 0u;
-    while (sent < hdr.len) {
-      auto ret = con.send(hdr);
-      if (ret == -EAGAIN) {
-        cif.poll();
-        continue;
-      }
-      sent += ret;
-    }
-    return sent;
-  };
-  auto do_recv = [&](connection &con, void *buf) -> ssize_t {
-    auto rcvd = 0u;
-    size_t remaining = 0;
-    while (rcvd < sizeof(retval)) {
-      auto ret = con.recv(static_cast<uint8_t *>(buf) + rcvd,
-                          sizeof(retval) - rcvd, remaining);
-      if (ret == -EAGAIN) {
-        cif.poll();
-        continue;
-      }
-      rcvd += ret;
-    }
-    return rcvd;
-  };
-  auto *con = cif.open(adapter->cfg, me, adapter->dmac);
-  if (!con)
-    return -1;
-  msg_hdr hdr;
-  std::iota(data.begin(),  data.end(), 0);
-
-  hdr.set_data(data.data(), data.size() * sizeof(int));
-  do_send(*con, hdr);
-  do_recv(*con, &retval);
-  assert(retval == 0);
-  cif.close(*con);
-  return 0;
 }
 
 static constexpr auto dur = 1e6;
@@ -146,16 +96,20 @@ static int lcore_fn(void *arg) {
   auto &cif = *adapter->cifs[me];
   kv_proxy kv(&cif);
   kv.connect(adapter->cfg, rte_lcore_id(), adapter->dmac);
+  auto *sb = cif.manager.get_allocator();
   uint64_t t = 0;
   uint64_t c = 0;
 
-  kv::kv_packet<kv::kv_request> req;
-  kv::kv_packet<kv::kv_completion> resp;
   auto now = rte_get_timer_cycles();
-  ssize_t rcvd = 0;
   while (t < dur) {
     cif.poll();
-    while ((rcvd = kv.recv(&resp, sizeof(resp)) > 0)) {
+    for (;;) {
+      sgl rsgl;
+      auto rcvd = kv.recv(rsgl);
+      if (rcvd <= 0)
+        break;
+      kv::kv_packet<kv::kv_completion> resp;
+      rsgl.head->read(&resp);
       assert(resp.payload.key == kv[resp.id].key);
       kv.complete(resp.id);
       ++c;
@@ -164,17 +118,23 @@ static int lcore_fn(void *arg) {
     if (!tx)
       continue;
     int64_t key = dist(rng);
-    kv::create_kv_request(reinterpret_cast<uint8_t *>(&req), tx->id, key);
+    auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
+    kv::create_kv_request(m->data<uint8_t>(), tx->id, key);
     tx->key = key;
-    auto sent = kv.send(&req, sizeof(req));
-    assert(sent == sizeof(req));
+    sgl ssgl;
+    ssgl.add_segment_safe(mbuf_take_owner_ship(m));
+    auto sent = kv.send(ssgl);
+    assert(sent == sizeof(kv::kv_packet<kv::kv_request>));
     ++t;
   }
   while (c < dur) {
     cif.poll();
-    rcvd = kv.recv(&resp, sizeof(resp));
+    sgl rsgl;
+    auto rcvd = kv.recv(rsgl);
     if (rcvd < 0)
       continue;
+    kv::kv_packet<kv::kv_completion> resp;
+    rsgl.head->read(&resp);
     assert(resp.payload.key == kv[resp.id].key);
     kv.complete(resp.id);
     ++c;
@@ -221,10 +181,7 @@ static void run(lcore_function_t *f, void *args) {
         con_config{conf.sip, conf.sports[i]}, rte_lcore_count());
     ++i;
   }
-  if (!conf.large)
-    run(lcore_fn, &adapter);
-  else
-    run(lcore_large, &adapter);
+  run(lcore_fn, &adapter);
   ifc->stop();
   std::cout << "avg: " << lat.load() / rte_lcore_count() << std::endl;
   return 0;

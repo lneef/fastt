@@ -5,6 +5,7 @@
 #include <deque>
 #include <msg_fragment.h>
 #include <rte_cycles.h>
+#include <rte_vect.h>
 
 #include "debug.h"
 #include "filter.h"
@@ -45,35 +46,32 @@ struct rack {
 
 struct sender_entry {
   list_hook link;
-  mbuf *packet;
+  mbuf_ptr packet;
   uint64_t xmit_ts = 0;
   seq_t seq;
+  uint16_t crd = 0;
   bool sacked : 4;
   bool retransmitted : 4;
-  sender_entry() : packet(nullptr), seq(0), retransmitted(false) {}
-  sender_entry(mbuf *packet, uint64_t now, seq_t seq,
-               bool retransmitted)
-      : packet(packet), xmit_ts(now), seq(seq), sacked(false),
-        retransmitted(retransmitted) {} 
+  sender_entry(mbuf_ptr &&packet, uint64_t now, seq_t seq, uint16_t crd, bool retransmitted)
+      : packet(std::move(packet)), xmit_ts(now), seq(seq), crd(crd),
+        sacked(false), retransmitted(retransmitted) {}
 
   sender_entry(const sender_entry &) = delete;
 
   ~sender_entry() {
     if (link.is_linked())
       link.unlink();
-    if(packet)
-        mbuf_free(packet);
   }
 };
 
-class transport_input {
+class transport_txpath {
 public:
   struct statistics {
     seq_t acked;
     uint64_t retransmitted, rtt;
     statistics() : acked(0), retransmitted(0) {}
   };
-  transport_input() : rtt(), timeout() {}
+  transport_txpath() : rtt(), timeout() {}
 
   void rto_retransmit(uint64_t ts) {
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
@@ -81,7 +79,7 @@ public:
       ++it;
       if (entry.seq == least_unacked_pkt || ts - entry.xmit_ts >= rck.rtt) {
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
-        assert(entry.link.is_linked());  
+        assert(entry.link.is_linked());
         entry.link.unlink();
         retransmission_queue.push_back(entry);
       }
@@ -92,6 +90,8 @@ public:
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
+
+      printf("%lu %lu %u %u\n", now, entry.xmit_ts, entry.seq.v, rck.end_seq.v);
       if (!rack::send_after(rck.xmit_ts, rck.end_seq, entry.xmit_ts, entry.seq))
         break;
       if (now >= entry.xmit_ts + rck.rtt) {
@@ -125,8 +125,8 @@ public:
           cumulative_rtt = std::min<uint64_t>(ack_rtt, cumulative_rtt);
         }
         assert(desc.link.is_linked());
-        inflight -= desc.packet->data_len - protocol::defs::kuserDataOffset;
       }
+      budget += desc.crd;
       unacked.pop_front();
     }
 
@@ -137,17 +137,17 @@ public:
   }
 
   template <typename F>
-  void record_ctrl_pkt(mbuf* pkt, F &&ctor, uint64_t now) {
+  void record_ctrl_pkt(mbuf *pkt, F &&ctor, uint64_t now) {
     if (all_acked())
       rearm(now);
     ctor(pkt, seq);
     pkt->xmit = false;
-    unacked.emplace_back(pkt, now, seq++, false);
+    unacked.emplace_back(mbuf_take_owner_ship(pkt), now, seq++, 0, false);
     xmit_list.push_back(unacked.back());
   }
 
   template <typename F>
-  bool record_pkt(mbuf *pkt, F &&ctor, uint64_t now) {
+  bool record_pkt(mbuf_ptr &&pkt, F &&ctor, uint64_t now) {
     if (budget == 0)
       return false;
     if (all_acked())
@@ -155,8 +155,7 @@ public:
     --budget;
     ctor(pkt, seq);
     pkt->xmit = false;
-    inflight += pkt->data_len;
-    unacked.emplace_back(pkt, now, seq++, false);
+    unacked.emplace_back(std::move(pkt), now, seq++, 1, false);
     xmit_list.push_back(unacked.back());
     return true;
   }
@@ -169,7 +168,7 @@ public:
     while (sz-- > 0) {
       auto &desc = retransmission_queue.front();
       prepare_retransmit(&desc, now);
-      f(desc.packet);
+      f(desc.packet.get());
     }
   }
 
@@ -208,14 +207,14 @@ public:
       if (!val)
         continue;
       if (!desc.sacked) {
-        assert(ts >= desc.xmit_ts);  
+         printf("%u\n", desc.seq.v); 
+        assert(ts >= desc.xmit_ts);
         auto ack_rtt = ts - desc.xmit_ts;
         if (rck.valid_rtt(ts, desc.xmit_ts, desc.retransmitted)) {
           rck.update(desc.xmit_ts, desc.seq);
           sack_rtt = std::min<uint64_t>(ack_rtt, sack_rtt);
         }
 
-        inflight -= desc.packet->data_len - protocol::defs::kuserDataOffset;
         desc.sacked = true;
         assert(desc.link.is_linked());
         desc.link.unlink();
@@ -265,7 +264,6 @@ private:
   uint32_t budget = 0;
   seq_t seq{0};
   seq_t least_unacked_pkt{0};
-  uint64_t inflight = 0;
 
   uint64_t rtt = 0;
   const uint64_t default_rto = get_ticks_ms() * 10;

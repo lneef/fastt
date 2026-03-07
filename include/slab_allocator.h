@@ -1,9 +1,11 @@
 #pragma once
+#include "transport/protocol.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <generic/rte_prefetch.h>
 #include <memory>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -80,15 +82,16 @@ struct slab {
   slab *next;
   slab *prev;
   obj_header *freelist;
-  uint32_t capacity;
+  uint32_t inuse;
   uint32_t padding;
+  intptr_t iova;
 
   static void list_remove(slab *s) {
     s->prev->next = s->next;
     s->next->prev = s->prev;
   }
 
-  slab() : next(nullptr), prev(nullptr), freelist(nullptr) {}
+  slab() : next(nullptr), prev(nullptr), freelist(nullptr), inuse() {}
 };
 
 struct slab_cache {
@@ -121,29 +124,30 @@ struct slab_cache {
 inline void mbuf_free(mbuf *buf);
 
 using mbuf_ptr = std::unique_ptr<mbuf, decltype(&mbuf_free)>;
-
 class slab_allocator {
+public:    
   static constexpr size_t kDefaultHeadroom = 128;
-  static constexpr size_t kDefaultSize = 2048;
+  static constexpr size_t kMaxDataLen = 1500 - protocol::defs::kHeaderMTUlen;
+  static constexpr size_t kDefaultSize = kMaxDataLen + kDefaultHeadroom + sizeof(mbuf);
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
-
 public:
   slab_allocator() : cache(kDefaultSize) {
       alloc_new_slab(cache);
   }
 
-  mbuf *alloc_default(uint16_t data_len) {
+ mbuf *alloc_default(uint16_t data_len) {
+    assert(data_len <= kMaxDataLen);  
     if (cache.partial.empty())
       alloc_new_slab(cache);
     auto *s = cache.partial.front();
     auto *obj = s->freelist;
     s->freelist = obj->next;
+    ++s->inuse;
     if (!s->freelist) {
       slab::list_remove(s);
       cache.full.list_push(s);
     }
-    auto *m = reinterpret_cast<mbuf *>(obj);
-    return new (m)
+    return new (obj)
         mbuf{this, nullptr, kDefaultSize, 1, data_len, kDefaultHeadroom, false};
   }
 
@@ -152,16 +156,15 @@ public:
                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
     assert(region != MAP_FAILED);
     auto *s = static_cast<slab *>(region);
-    auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
+    auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab) + color;
+    color += 64;
     s->freelist = nullptr;
-    s->capacity = 1;
     s->freelist = new (base) obj_header;
     size_t space = kSlabSize - sizeof(slab);
     size_t off = 0;
     while (off + 2 * c.obj_size <= space) {
       auto *obj = reinterpret_cast<obj_header *>(base + off);
       obj->next = new (base + off + c.obj_size) obj_header;
-      s->capacity++;
       off += c.obj_size;
     }
     auto *obj = reinterpret_cast<obj_header*>(base + off);
@@ -177,6 +180,7 @@ public:
     auto *hdr = reinterpret_cast<obj_header *>(obj);
     hdr->next = slb->freelist;
     slb->freelist = hdr;
+    --slb->inuse;
     if (was_full) {
       slab::list_remove(slb);
       cache.partial.list_push(slb);
@@ -211,6 +215,7 @@ public:
   }
 
 private:
+  uint8_t color = 0;
   slab_cache cache;
 };
 

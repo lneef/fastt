@@ -3,6 +3,7 @@
 #include "client.h"
 #include "connection.h"
 #include "msg_fragment.h"
+#include "sgl.h"
 #include "util.h"
 #include <bits/types/struct_iovec.h>
 #include <cstddef>
@@ -72,16 +73,12 @@ public:
 
   void complete(uint16_t id) { slots.put(id); }
 
-  ssize_t recv(void *buf, size_t sz) {
-    ;
-    size_t remaining = 0;
-    return con->recv(buf, sz, remaining);
+  ssize_t recv(sgl& rsgl) {
+    return con->recv(rsgl);
   }
 
-  ssize_t send(void *buf, size_t sz) {
-    msg_hdr m;
-    m.set_data(buf, sz);
-    return con->send(m);
+  ssize_t send(sgl &ssgl) {
+    return con->send(ssgl);
   }
 
   void lookup(int64_t key, msg_fragment *msg, uint64_t id) {

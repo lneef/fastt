@@ -126,25 +126,19 @@ TEST_F(PacketIfCopyTest, CopiesFtHeaderPayload) {
   // Build a realistic FT_MSG packet with ft_header + ft_msg_payload + user data
   constexpr size_t kUserData = 64;
   auto ft_size =
-      sizeof(protocol::ft_header) + sizeof(protocol::ft_msg_payload) + kUserData;
+      sizeof(protocol::ft_header) + kUserData;
   std::vector<uint8_t> ft_payload(ft_size);
 
   auto *hdr = reinterpret_cast<protocol::ft_header *>(ft_payload.data());
   hdr->type = protocol::pkt_type::FT_MSG;
   hdr->seq = {42};
   hdr->ack = {10};
-  hdr->som = 1;
   hdr->eom = 1;
-  hdr->wnd = 8;
+  hdr->crd = 8;
   hdr->sport = htons(5000);
   hdr->dport = htons(6000);
 
-  auto *msg_pyld = reinterpret_cast<protocol::ft_msg_payload *>(
-      ft_payload.data() + sizeof(protocol::ft_header));
-  msg_pyld->out = kUserData;
-
-  auto *user = ft_payload.data() + sizeof(protocol::ft_header) +
-               sizeof(protocol::ft_msg_payload);
+  auto *user = ft_payload.data() + sizeof(protocol::ft_header);
   for (size_t i = 0; i < kUserData; ++i)
     user[i] = static_cast<uint8_t>('A' + (i % 26));
 
@@ -160,13 +154,11 @@ TEST_F(PacketIfCopyTest, CopiesFtHeaderPayload) {
   EXPECT_EQ(copied_hdr->type, protocol::pkt_type::FT_MSG);
   EXPECT_EQ(copied_hdr->seq, seq_t(42));
   EXPECT_EQ(copied_hdr->ack, seq_t(10));
-  EXPECT_EQ(copied_hdr->som, 1u);
   EXPECT_EQ(copied_hdr->eom, 1u);
-  EXPECT_EQ(copied_hdr->wnd, 8u);
+  EXPECT_EQ(copied_hdr->crd, 8u);
 
   // Verify user data after header
-  auto *copied_user = m->data<uint8_t>(sizeof(protocol::ft_header) +
-                                        sizeof(protocol::ft_msg_payload));
+  auto *copied_user = m->data<uint8_t>(sizeof(protocol::ft_header));
   for (size_t i = 0; i < kUserData; ++i)
     EXPECT_EQ(copied_user[i], static_cast<uint8_t>('A' + (i % 26))) << "at i=" << i;
 

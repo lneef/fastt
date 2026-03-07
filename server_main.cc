@@ -5,7 +5,6 @@
 #include "server.h"
 #include "task/async.h"
 #include "task/task.h"
-#include <algorithm>
 #include <arpa/inet.h>
 #include <atomic>
 #include <bits/types/struct_iovec.h>
@@ -97,50 +96,29 @@ int lcore_server_fun(void *arg) {
   auto myid = rte_lcore_index(rte_lcore_id());
   auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
   auto *server = adapters[myid].iface.get();
-  server->register_service(2,
-                           [&](concurrency::scheduler &schdlr,
-                               connection &con) -> concurrency::task {
-                             kv::kv_packet<kv::kv_request> req;
-                             kv::kv_packet<kv::kv_completion> resp;
-                             while (true) {
-                               size_t rem = 0;
-                               auto sz = co_await recv(schdlr, con, &req,
-                                                       sizeof(req), rem);
-                               if (sz == 0) {
-                                 co_return;
-                               }
-                               assert(sz == sizeof(req));
-                               serve(&resp, &req);
-                               msg_hdr m;
-                               m.set_data(&resp, sizeof(resp));
-                               auto sent = co_await send(schdlr, con, m);
-                               if (sent == 0) {
-                                 co_return;
-                               }
-                               assert(sent == sizeof(resp));
-                             }
-                           });
+  auto *slab = server->get_alloc();
   server->register_service(
-      10,
+      2,
       [&](concurrency::scheduler &schdlr,
           connection &con) -> concurrency::task {
-        const size_t buf_len = 256 * 1024;
-        std::vector<int> buf(buf_len);
-        size_t rem = 0;
+        sgl ssgl;
+        sgl rsgl;
         while (true) {
-          auto sz = co_await recv(schdlr, con, buf.data(), buf_len * sizeof(int), rem);
+          auto sz = co_await recv(schdlr, con, rsgl);
           if (sz == 0) {
             co_return;
           }
-          assert(sz == buf_len);
-          for (int i = 0; i < static_cast<int>(buf_len); ++i) {
-            assert(buf[i] == i);
+          assert(sz == sizeof(kv::kv_packet<kv::kv_request>));
+          auto pkt_ptr = slab->alloc_default_safe(
+              sizeof(kv::kv_packet<kv::kv_completion>));
+          serve(pkt_ptr->data<kv::kv_packet<kv::kv_completion>>(),
+                rsgl.head->data<kv::kv_packet<kv::kv_request>>());
+          ssgl.add_segment_safe(std::move(pkt_ptr));
+          auto sent = co_await send(schdlr, con, std::move(ssgl));
+          if (sent == 0) {
+            co_return;
           }
-          int ret = 0;
-          msg_hdr hdr;
-          hdr.set_data(&ret, sizeof(ret));
-          auto st = co_await send(schdlr, con, hdr);
-          assert(st == sizeof(ret));
+          assert(sent == sizeof(kv::kv_packet<kv::kv_completion>));
         }
       });
 

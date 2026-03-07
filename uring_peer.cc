@@ -1,5 +1,3 @@
-/* SPDX-License-Identifier: MIT */
-
 #include <arpa/inet.h>
 #include <bit>
 #include <bits/getopt_core.h>

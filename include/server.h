@@ -2,6 +2,7 @@
 
 #include "connection.h"
 #include "msg_fragment.h"
+#include "slab_allocator.h"
 #include "util.h"
 
 #include <boost/unordered/unordered_flat_map.hpp>
@@ -32,6 +33,8 @@ public:
       void run(){
           manager.run(scheduler);
       }
+
+    slab_allocator* get_alloc(){ return manager.get_allocator(); }
 
   statistics get_stats() { return manager.get_stats(); }
 private:

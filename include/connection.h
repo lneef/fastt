@@ -1,10 +1,10 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
 #include <netinet/in.h>
+#include <sys/types.h>
 #include <type_traits>
 #include <utility>
 
@@ -12,6 +12,7 @@
 #include "dev.h"
 #include "msg_fragment.h"
 #include "packet_if.h"
+#include "sgl.h"
 #include "slab_allocator.h"
 #include "task/task.h"
 #include "transport/protocol.h"
@@ -43,17 +44,18 @@ public:
 
   void check_timeout(uint64_t now) { transport_impl->check_timeout(now); }
 
-  ssize_t send(msg_hdr &hdr) { return transport_impl->send(hdr); }
+  ssize_t send(sgl &msgl){
+      return transport_impl->send_sgl(msgl);
+  }
 
-  ssize_t recv(void *buf, size_t size, size_t &remaining) {
-    return transport_impl->recv(buf, size, remaining);
+  ssize_t recv(sgl& msgl){
+      return transport_impl->recv(msgl);
   }
 
   transport_statistics get_transport_stats() const {
     return transport_impl->get_stats();
   }
 
-  void transport_ctrl() { transport_impl->check_ctrl(); }
 
   bool up() const { return transport_impl->up(); }
 
@@ -128,7 +130,6 @@ public:
   void check_timeouts() {
     for (auto &con : active) {
       auto now = rte_get_timer_cycles();
-      con.transport_ctrl();
       con.check_timeout(now);
     }
   }
@@ -249,6 +250,10 @@ public:
     auto ft = con->get_flow_tuple();
     ft.dip = pkt_if.get_sip();
     flows.erase(ft);
+  }
+
+  slab_allocator* get_allocator(){
+      return &sb;
   }
 
   void flush() { pkt_if.flush_out_buffer(); }
