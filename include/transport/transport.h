@@ -93,7 +93,7 @@ public:
     bool is_sack = trx.has_holes();
     seq_t ack = trx.get_last_rcvd_in_seq();
     if (is_sack) {
-      if (acb.has_unacked_pkts())
+      if (!acb.has_unacked_pkts())
         return false;
       msg = sb->alloc_default_safe(sizeof(protocol::ft_header) +
                                    sizeof(protocol::ft_sack_payload));
@@ -192,6 +192,7 @@ public:
       ttx.acknowledge(hdr->ack, ts);
       assert(hdr->crd > 0);
       ttx.update_budget(hdr->crd);
+      trx.insert(hdr->seq, msg, acb);
       cstate = connection_state::ESTABLISHED;
       break;
     }

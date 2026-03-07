@@ -91,7 +91,6 @@ public:
       auto &entry = *it;
       ++it;
 
-      printf("%lu %lu %u %u\n", now, entry.xmit_ts, entry.seq.v, rck.end_seq.v);
       if (!rack::send_after(rck.xmit_ts, rck.end_seq, entry.xmit_ts, entry.seq))
         break;
       if (now >= entry.xmit_ts + rck.rtt) {
