@@ -14,8 +14,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <rte_branch_prediction.h>
-#include <rte_mbuf.h>
 #include <sys/types.h>
 
 struct ack_cb {

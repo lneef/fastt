@@ -10,7 +10,7 @@
 
 #include "debug.h"
 #include "dev.h"
-#include "msg_fragment.h"
+#include "dpdk/allocator.h"
 #include "packet_if.h"
 #include "sgl.h"
 #include "slab_allocator.h"
@@ -97,7 +97,7 @@ public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
                      uint32_t sip,
-                     std::shared_ptr<msg_fragment_allocator> allocator,
+                     std::shared_ptr<dpdk_allocator> allocator,
                      P *parent, uint16_t cores)
       : dev(port, txq, rxq), 
         pkt_if(&dev, allocator, &sb, sip, port), active(), cores(cores),
@@ -109,7 +109,6 @@ public:
   }
 
   void handle_pkt(mbuf *pkt, flow_tuple &ft) {
-
     FASTT_LOG_DEBUG("Got pkt via UDP ports: %s \n", ft.print().c_str());
     auto *header = pkt->data<protocol::ft_header>();
     if (unlikely(header->type == protocol::FT_SYN)) {
@@ -167,30 +166,14 @@ public:
   void run(concurrency::scheduler &scheduler);
 
   void fetch_from_qpair() {
-    std::array<flow_tuple, kdefaultBurstSize> fts;
-    std::array<mbuf *, kdefaultBurstSize> mbufs;
-    uint16_t valid = 0, i = 0;
-    assert(vec.i == 0);
-    dev.rx_burst(vec);
-    for (uint16_t i = 0; i < vec.i; ++i) {
-      auto *pkt = pkt_if.consume_pkt(vec.pkts[i]);
-      if (!pkt)
-        continue;
-      vec.pkts[valid++] = pkt;
+    std::array<flow_tuple, packet_if::kDefaultInBurstSize> fts;
+    packet_vector<mbuf*, packet_if::kDefaultInBurstSize> mbufs;
+    pkt_if.fetch_from_qpair(fts, mbufs);
+    uint16_t i = 0;
+    for (auto* pkt : mbufs) {
+      auto &ft = fts[i++];
+      handle_pkt(pkt, ft);
     }
-    vec.i = valid;
-    assert(i == 0);
-    for (auto *msg : vec) {
-      mbufs[i] = pkt_if.strip_header_and_copy(msg, fts[i]);
-      ++i;
-    }
-    i = 0;
-    for (; i < vec.i; ++i) {
-      auto &ft = fts[i];
-      handle_pkt(mbufs[i], ft);
-    }
-    vec.clear();
-    assert(vec.i == 0);
   }
 
   template <typename F> void accept_connections(F &&cb) {
@@ -240,8 +223,6 @@ public:
     for (auto &con : active)
       stats[i++] = con.transport_impl->get_stats();
     statistics sts;
-    sts.no_rx = dev.no_rx;
-    sts.total_rx_polled = dev.total_rx;
     sts.ts = std::move(stats);
     return sts;
   }
@@ -271,7 +252,6 @@ private:
   uint32_t open_connections = 0;
 
   flow_table<flow_tuple, std::unique_ptr<connection>> flows;
-  packet_vector<kdefaultBurstSize> vec;
   union {
     client_iface *client_parent;
     server_iface *server_parent;

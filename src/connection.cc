@@ -1,6 +1,5 @@
 #include "connection.h"
 #include "debug.h"
-#include "msg_fragment.h"
 #include "server.h"
 
 #include <cassert>

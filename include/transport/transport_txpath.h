@@ -3,9 +3,6 @@
 #include <cassert>
 #include <cstdint>
 #include <deque>
-#include <msg_fragment.h>
-#include <rte_cycles.h>
-#include <rte_vect.h>
 
 #include "debug.h"
 #include "filter.h"

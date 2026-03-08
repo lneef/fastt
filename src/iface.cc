@@ -1,6 +1,6 @@
 #include "debug.h"
 #include "iface.h"
-#include "msg_fragment.h"
+#include "dpdk/allocator.h"
 #include "util.h"
 #include <cstdint>
 #include <memory>
@@ -23,7 +23,7 @@ int fastt::init() {
   FASTT_LOG_DEBUG("init fasst\n");
   rte_timer_subsystem_init();
   init_timing();
-  return msg_fragment::init();
+  return 0;
 }
 
 static inline int setup_reta(uint16_t port, uint32_t nrx, uint32_t reta_size){
@@ -47,7 +47,7 @@ static inline int setup_reta(uint16_t port, uint32_t nrx, uint32_t reta_size){
 }
 
 std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
-                                           uint16_t nrx, std::vector<std::shared_ptr<msg_fragment_allocator>>& pools) {
+                                           uint16_t nrx, std::vector<std::shared_ptr<dpdk_allocator>>& pools) {
   uint16_t nb_rxd, nb_txd;
   int retval;
   std::unique_ptr<iface> ifc(new iface()); /*c++11*/

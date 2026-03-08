@@ -2,10 +2,11 @@
 
 #include "debug.h"
 #include "dev.h"
-#include "msg_fragment.h"
+#include "dpdk/allocator.h"
 #include "slab_allocator.h"
 #include "transport/protocol.h"
 #include "util.h"
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <netinet/in.h>
@@ -35,18 +36,21 @@ struct packet_drop_sim {
 
 class packet_if {
   static constexpr uint16_t kdefaultTTL = 64;
-  static constexpr uint16_t kDefaultOutBurstSize = 32;  
+  static constexpr uint16_t kDefaultOutBurstSize = 32;
+
 public:
-  packet_if(qpair *qp, std::shared_ptr<msg_fragment_allocator> msg_allocator, slab_allocator *sb,
-            uint32_t sip, uint16_t port)
-      : arp_table(), msg_allocator(msg_allocator), sb(sb), qp(qp),
-        sip(sip) {
+  static constexpr uint16_t kDefaultInBurstSize = 64;
+  packet_if(qpair *qp, std::shared_ptr<dpdk_allocator> pool, slab_allocator *sb, uint32_t sip,
+            uint16_t port)
+      : arp_table(), pool(pool), sb(sb), qp(qp), sip(sip) {
     rte_eth_macaddr_get(port, &smac);
     sim.set_rate(0.0);
   }
 
-  rte_udp_hdr *udp_header(msg_fragment *msg, uint16_t sport, uint16_t dport, uint16_t data_len) {
-    auto *udp = msg->data<rte_udp_hdr>(protocol::defs::kudpOffset);
+  rte_udp_hdr *udp_header(rte_mbuf *msg, uint16_t sport, uint16_t dport,
+                          uint16_t data_len) {
+    auto *udp =
+        rte_pktmbuf_mtod_offset(msg, rte_udp_hdr *, protocol::defs::kudpOffset);
     udp->src_port = sport;
     udp->dst_port = dport;
     udp->dgram_cksum = 0;
@@ -55,15 +59,17 @@ public:
     return udp;
   }
 
-  void ip_header(msg_fragment *msg, rte_udp_hdr *udp_header, uint32_t source,
+  void ip_header(rte_mbuf *msg, rte_udp_hdr *udp_header, uint32_t source,
                  uint32_t target, uint16_t data_len) {
-    auto *ipv4 = msg->data<rte_ipv4_hdr>(protocol::defs::kipOffset);
+    auto *ipv4 =
+        rte_pktmbuf_mtod_offset(msg, rte_ipv4_hdr *, protocol::defs::kipOffset);
     ipv4->src_addr = source;
     ipv4->dst_addr = target;
     ipv4->fragment_offset = htons(RTE_IPV4_HDR_DF_FLAG);
     ipv4->next_proto_id = IPPROTO_UDP;
     ipv4->time_to_live = kdefaultTTL;
-    ipv4->total_length = htons(data_len + sizeof(rte_udp_hdr) + sizeof(rte_ipv4_hdr));
+    ipv4->total_length =
+        htons(data_len + sizeof(rte_udp_hdr) + sizeof(rte_ipv4_hdr));
     ipv4->hdr_checksum = 0;
     ipv4->version_ihl = RTE_IPV4_VHL_DEF;
     ipv4->type_of_service = 0;
@@ -76,9 +82,9 @@ public:
     udp_header->dgram_cksum = rte_ipv4_phdr_cksum(ipv4, msg->ol_flags);
   }
 
-  void eth_header(msg_fragment *msg, const rte_ether_addr &smac,
+  void eth_header(rte_mbuf *msg, const rte_ether_addr &smac,
                   const rte_ether_addr &dmac) {
-    auto *eth = msg->data<rte_ether_hdr>();
+    auto *eth = rte_pktmbuf_mtod(msg, rte_ether_hdr *);
     rte_ether_addr_copy(&dmac, &eth->dst_addr);
     rte_ether_addr_copy(&smac, &eth->src_addr);
     eth->ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
@@ -86,9 +92,10 @@ public:
   }
 
   void consume_pkt_mbuf(mbuf *pkt, transport_config &cfg) {
-    auto *dpdk_mbuf = msg_allocator->alloc_msg_fragment(
-        pkt->data_len + protocol::defs::kftOffset);
-    rte_memcpy(dpdk_mbuf->data<uint8_t>(protocol::defs::kftOffset),
+
+    auto *dpdk_mbuf = rte_pktmbuf_alloc(pool->get());
+    rte_memcpy(rte_pktmbuf_mtod_offset(dpdk_mbuf, uint8_t *,
+                                       protocol::defs::kftOffset),
                pkt->data<uint8_t>(), pkt->data_len);
     auto *udp = udp_header(dpdk_mbuf, cfg.transport_ports.sport,
                            cfg.transport_ports.dport, pkt->data_len);
@@ -96,8 +103,7 @@ public:
     auto it = arp_table.find(cfg.ip);
     assert(it != arp_table.end());
     eth_header(dpdk_mbuf, smac, it->second);
-    FASTT_DUMP_PKT(dpdk_mbuf, dpdk_mbuf->len());
-    add_to_out_buffer(static_cast<rte_mbuf *>(dpdk_mbuf));
+    qp->enqueue_pkt(dpdk_mbuf);
   }
 
   void add_mapping(uint32_t ip, rte_ether_addr &addr) {
@@ -106,7 +112,6 @@ public:
 
   void broken_packet(rte_mbuf *pkt) {
     FASTT_LOG_DEBUG("Got broken packet\n");
-    FASTT_DUMP_PKT(static_cast<msg_fragment *>(pkt), pkt->data_len);
     rte_pktmbuf_free(pkt);
   }
 
@@ -138,7 +143,7 @@ public:
     ft.dport = udp->dst_port;
   }
 
-  msg_fragment *consume_pkt(rte_mbuf *mbuf) {
+  rte_mbuf *consume_pkt(rte_mbuf *mbuf) {
     if (!check_ether(mbuf)) {
       broken_packet(mbuf);
       return nullptr;
@@ -158,50 +163,54 @@ public:
       rte_pktmbuf_free(mbuf);
       return nullptr;
     }
-    return static_cast<msg_fragment*>(mbuf);
+    return mbuf;
   }
 
-  void flush_out_buffer(){
-      if(out_buffer.i == 0)
-          return;
-      do_send();
-  }
+  void flush_out_buffer() { qp->flush(); }
 
-  mbuf* strip_header_and_copy(msg_fragment *msg, flow_tuple &ft) {
+  mbuf *strip_header_and_copy(rte_mbuf *msg, flow_tuple &ft) {
     strip_ether_ip(msg, ft);
     strip_udp(msg, ft);
-    auto *mbuf_pkt = sb->alloc_default(msg->pkt_len - protocol::defs::kftOffset); 
-    rte_memcpy(mbuf_pkt->data<uint8_t>(), msg->data<uint8_t>(protocol::defs::kftOffset), mbuf_pkt->data_len);
+    auto *mbuf_pkt =
+        sb->alloc_default(msg->pkt_len - protocol::defs::kftOffset);
+    rte_memcpy(
+        mbuf_pkt->data<uint8_t>(),
+        rte_pktmbuf_mtod_offset(msg, uint8_t *, protocol::defs::kftOffset),
+        mbuf_pkt->data_len);
     rte_pktmbuf_free(msg);
     return mbuf_pkt;
+  }
+
+  void fetch_from_qpair(std::array<flow_tuple, kDefaultInBurstSize> &fts,
+                        packet_vector<mbuf *, kDefaultInBurstSize> &mbufs) {
+    uint16_t valid = 0, i = 0;
+    assert(vec.i == 0);
+    qp->rx_burst(vec);
+    for (uint16_t i = 0; i < vec.i; ++i) {
+      auto *pkt = consume_pkt(vec.pkts[i]);
+      if (!pkt)
+        continue;
+      vec.pkts[valid++] = pkt;
+    }
+    vec.i = valid;
+    assert(i == 0);
+    for (auto *msg : vec) {
+      mbufs.pkts[i] = strip_header_and_copy(msg, fts[i]);
+      ++i;
+    }
+    mbufs.i = i;
+    vec.clear();
   }
 
   uint32_t get_sip() const { return sip; }
 
 private:
-  void do_send(){
-    uint16_t sent = 0;
-    do{
-        sent += qp->tx_burst(out_buffer.buf.data() + sent, out_buffer.i - sent);
-    }while(sent < out_buffer.i);
-    out_buffer.i = 0;
-  }
-
-  void add_to_out_buffer(rte_mbuf* pkt){
-      if(out_buffer.i == kDefaultOutBurstSize)
-          do_send();
-      out_buffer.buf[out_buffer.i++] = pkt;
-  }
-
   packet_drop_sim sim;
   flow_table<uint32_t, rte_ether_addr> arp_table;
   rte_ether_addr smac;
-  std::shared_ptr<msg_fragment_allocator> msg_allocator;
+  std::shared_ptr<dpdk_allocator> pool;
   slab_allocator *sb;
   qpair *qp;
-  struct{
-      std::array<rte_mbuf*, kDefaultOutBurstSize> buf;
-      size_t i = 0;
-  }out_buffer;
+  packet_vector<rte_mbuf *, kDefaultInBurstSize> vec;
   uint32_t sip;
 };

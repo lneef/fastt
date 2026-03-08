@@ -2,63 +2,69 @@
 
 #include "arch/ena.h"
 #include "arch/nic.h"
-#include "debug.h"
-#include "msg_fragment.h"
 #include "util.h"
 #include <cstdint>
 #include <memory>
+#include <rte_build_config.h>
 #include <rte_cycles.h>
 #include <rte_ethdev.h>
 
-#include <array>
+#include <rte_malloc.h>
 #include <rte_mbuf.h>
+#include <rte_memory.h>
+#include <string>
 
 class qpair {
   static constexpr uint16_t kDefaultInputBurstSize = 32;
 
 public:
   qpair(uint16_t port, uint16_t txq, uint16_t rxq)
-      : port(port), txq(txq), rxq(rxq), 
-        nic_arch(std::make_unique<ena::ena>()) {};
+      : port(port), txq(txq), rxq(rxq),
+        tx_buffer(static_cast<rte_eth_dev_tx_buffer *>(
+            rte_zmalloc(("tx_buffer" + std::to_string(txq)).c_str(),
+                        RTE_ETH_TX_BUFFER_SIZE(kDefaultInputBurstSize),
+                        RTE_CACHE_LINE_SIZE))),
+        nic_arch(std::make_unique<ena::ena>()) {
+    assert(tx_buffer);
+    rte_eth_tx_buffer_init(tx_buffer, kDefaultInputBurstSize);
+    rte_eth_tx_buffer_set_err_callback(tx_buffer, unsent_cb, this);
+  };
 
-  uint16_t tx_burst(rte_mbuf **pkts, uint16_t cnt) {
-    auto now = rte_get_timer_cycles();
-    auto sent = rte_eth_tx_burst(port, txq, pkts, cnt);
-    for (uint16_t i = 0; i < sent; ++i)
-      *static_cast<msg_fragment *>(pkts[i])->get_ts() = now;
-    return sent;
-  }
- 
-  template <typename F> void rx_burst(F &&cb) {
-    std::array<rte_mbuf *, kDefaultInputBurstSize> pkts;
-    auto now = rte_get_timer_cycles();
-    auto rcvd =
-        rte_eth_rx_burst(port, rxq, pkts.data(), kDefaultInputBurstSize);
-    for (uint16_t i = 0; i < rcvd; ++i) {
-      *static_cast<msg_fragment *>(pkts[i])->get_ts() = now;
-      cb(static_cast<msg_fragment *>(pkts[i]));
-    }
+  ~qpair() {
+      rte_pktmbuf_free_bulk(tx_buffer->pkts, tx_buffer->length);
+      rte_free(tx_buffer); 
   }
 
-  template <unsigned N> void rx_burst(packet_vector<N> &vec) {
-    auto now = rte_get_timer_cycles();
-    auto rcvd = rte_eth_rx_burst(port, rxq,
-                                 reinterpret_cast<rte_mbuf **>(vec.pkts.data()),
-                                 vec.pkts.size());
-    for (auto i = 0; i < rcvd; ++i)
-      *vec.pkts[i]->get_ts() = now;
+  void enqueue_pkt(rte_mbuf *pkt) {
+    rte_eth_tx_buffer(port, txq, tx_buffer, pkt);
+  }
+
+  template <unsigned N> void rx_burst(packet_vector<rte_mbuf*, N> &vec) {
+    auto rcvd = rte_eth_rx_burst(port, rxq, vec.pkts.data(), vec.pkts.size());
     vec.i = rcvd;
-    ++total_rx;
-    no_rx += rcvd == 0;
   }
+
+  void flush() { rte_eth_tx_buffer_flush(port, txq, tx_buffer); }
 
 private:
+  static void unsent_cb(rte_mbuf** pkts, uint16_t unsent, void* userdata){
+      static constexpr uint16_t kRetryTOus = 10;
+      auto* qp = static_cast<qpair*>(userdata);
+      auto now = rte_get_timer_cycles();
+      auto end = now + get_ticks_us() * kRetryTOus;
+      auto sent = 0u;
+      do{
+          sent += rte_eth_tx_burst(qp->port, qp->txq, pkts + sent, unsent - sent);
+      }while(sent < unsent && rte_get_timer_cycles() < end);
+      if(unsent - sent)
+          rte_pktmbuf_free_bulk(pkts + sent, unsent - sent);
+  }
+
   uint16_t port;
   uint16_t txq;
   uint16_t rxq;
+  rte_eth_dev_tx_buffer *tx_buffer;
 
 public:
   std::unique_ptr<nic> nic_arch;
-  uint64_t no_rx = 0;
-  uint64_t total_rx = 0;
 };

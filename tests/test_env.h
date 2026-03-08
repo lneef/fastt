@@ -1,6 +1,5 @@
 #pragma once
 
-#include "msg_fragment.h"
 #include "util.h"
 
 #include <gtest/gtest.h>
@@ -13,7 +12,6 @@ public:
     int argc = sizeof(argv) / sizeof(argv[0]);
     int ret = rte_eal_init(argc, const_cast<char **>(argv));
     ASSERT_GE(ret, 0) << "Failed to initialize DPDK EAL";
-    ASSERT_EQ(msg_fragment::init(), 0) << "Failed to register timestamp dynfield";
     init_timing();
   }
 

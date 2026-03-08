@@ -156,9 +156,7 @@ public:
                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
     assert(region != MAP_FAILED);
     auto *s = static_cast<slab *>(region);
-    auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab) + color;
-    color += 64;
-    s->freelist = nullptr;
+    auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
     s->freelist = new (base) obj_header;
     size_t space = kSlabSize - sizeof(slab);
     size_t off = 0;
@@ -215,7 +213,6 @@ public:
   }
 
 private:
-  uint8_t color = 0;
   slab_cache cache;
 };
 

@@ -1,5 +1,4 @@
 #pragma once
-#include "msg_fragment.h"
 #include <boost/intrusive/link_mode.hpp>
 #include <boost/intrusive/list_hook.hpp>
 #include <boost/intrusive/options.hpp>
@@ -8,10 +7,7 @@
 #include <cstdint>
 #include <format>
 #include <string>
-#include <generic/rte_cycles.h>
-#include <rte_ether.h>
-#include <rte_mbuf.h>
-#include <rte_mbuf_core.h>
+#include <rte_cycles.h>
 #include <utility>
 
 #include <boost/intrusive/list.hpp>
@@ -39,6 +35,15 @@ bit_cast(const From& src) noexcept {
     return dst;
 }
 };
+template <typename T, unsigned N> struct packet_vector {
+  std::array<T, N> pkts;
+  uint16_t i = 0;
+
+  constexpr void clear() { i = 0; }
+
+  auto begin() { return pkts.begin(); }
+  auto end() { return pkts.begin() + i; }
+};
 
 void init_timing();
 
@@ -55,16 +60,6 @@ using intrusive_list_t = bi::list<T, bi::member_hook<T, list_hook, link>,
 __inline uint64_t get_ticks_us() { return to_us; }
 
 __inline uint64_t get_ticks_ms() { return to_ms; }
-
-template <unsigned N> struct packet_vector {
-  std::array<msg_fragment *, N> pkts;
-  uint16_t i = 0;
-
-  constexpr void clear() { i = 0; }
-
-  auto begin() { return pkts.begin(); }
-  auto end() { return pkts.begin() + i; }
-};
 
 //-------------------------------------------------------------------------------
 /*
