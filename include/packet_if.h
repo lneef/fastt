@@ -40,8 +40,8 @@ class packet_if {
 
 public:
   static constexpr uint16_t kDefaultInBurstSize = 64;
-  packet_if(qpair *qp, std::shared_ptr<dpdk_allocator> pool, slab_allocator *sb, uint32_t sip,
-            uint16_t port)
+  packet_if(qpair *qp, std::shared_ptr<dpdk_allocator> pool, slab_allocator *sb,
+            uint32_t sip, uint16_t port)
       : arp_table(), pool(pool), sb(sb), qp(qp), sip(sip) {
     rte_eth_macaddr_get(port, &smac);
     sim.set_rate(0.0);
@@ -94,7 +94,9 @@ public:
   void consume_pkt_mbuf(mbuf *pkt, transport_config &cfg) {
 
     auto *dpdk_mbuf = rte_pktmbuf_alloc(pool->get());
-    rte_memcpy(rte_pktmbuf_mtod_offset(dpdk_mbuf, uint8_t *,
+    dpdk_mbuf->data_len = pkt->data_len;
+    dpdk_mbuf->pkt_len = pkt->data_len;
+    std::memcpy(rte_pktmbuf_mtod_offset(dpdk_mbuf, uint8_t *,
                                        protocol::defs::kftOffset),
                pkt->data<uint8_t>(), pkt->data_len);
     auto *udp = udp_header(dpdk_mbuf, cfg.transport_ports.sport,
@@ -103,6 +105,7 @@ public:
     auto it = arp_table.find(cfg.ip);
     assert(it != arp_table.end());
     eth_header(dpdk_mbuf, smac, it->second);
+    assert(dpdk_mbuf->pkt_len == pkt->data_len);
     qp->enqueue_pkt(dpdk_mbuf);
   }
 
@@ -138,7 +141,8 @@ public:
   }
 
   void strip_udp(rte_mbuf *mbuf, flow_tuple &ft) {
-    auto *udp = rte_pktmbuf_mtod(mbuf, rte_udp_hdr *);
+    auto *udp = rte_pktmbuf_mtod_offset(mbuf, rte_udp_hdr *,
+                                        protocol::defs::kudpOffset);
     ft.sport = udp->src_port;
     ft.dport = udp->dst_port;
   }
@@ -173,7 +177,7 @@ public:
     strip_udp(msg, ft);
     auto *mbuf_pkt =
         sb->alloc_default(msg->pkt_len - protocol::defs::kftOffset);
-    rte_memcpy(
+    std::memcpy(
         mbuf_pkt->data<uint8_t>(),
         rte_pktmbuf_mtod_offset(msg, uint8_t *, protocol::defs::kftOffset),
         mbuf_pkt->data_len);
@@ -183,7 +187,7 @@ public:
 
   void fetch_from_qpair(std::array<flow_tuple, kDefaultInBurstSize> &fts,
                         packet_vector<mbuf *, kDefaultInBurstSize> &mbufs) {
-    uint16_t valid = 0, i = 0;
+    uint16_t valid = 0, out = 0;
     assert(vec.i == 0);
     qp->rx_burst(vec);
     for (uint16_t i = 0; i < vec.i; ++i) {
@@ -193,12 +197,13 @@ public:
       vec.pkts[valid++] = pkt;
     }
     vec.i = valid;
-    assert(i == 0);
+    assert(out == 0);
     for (auto *msg : vec) {
-      mbufs.pkts[i] = strip_header_and_copy(msg, fts[i]);
-      ++i;
+      mbufs.pkts[out] = strip_header_and_copy(msg, fts[out]);
+      ++out;
     }
-    mbufs.i = i;
+    mbufs.i = out;
+    assert(out == valid);
     vec.clear();
   }
 

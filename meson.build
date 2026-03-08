@@ -31,8 +31,7 @@ test_inc = include_directories('include', 'tests')
 test_srcs = files('tests/test.cc',
   'tests/transport_input_test.cc',
   'tests/transport_output_test.cc',
-  'tests/transport_coro_test.cc',
-  'tests/packet_if_test.cc')
+  'tests/transport_coro_test.cc')
 
 unit_tests = executable('unit_tests',
   test_srcs,

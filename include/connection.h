@@ -92,7 +92,6 @@ public:
 
 class connection_manager {
   static constexpr uint16_t kdefaultBurstSize = 64;
-
 public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
