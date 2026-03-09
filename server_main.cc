@@ -7,7 +7,6 @@
 #include "task/task.h"
 #include <arpa/inet.h>
 #include <atomic>
-#include <bits/types/struct_iovec.h>
 #include <cstdint>
 #include <cstring>
 #include <getopt.h>

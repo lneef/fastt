@@ -56,6 +56,8 @@ public:
     udp->dgram_cksum = 0;
     udp->dgram_len = rte_cpu_to_be_16(data_len + sizeof(rte_udp_hdr));
     msg->l4_len = sizeof(rte_udp_hdr);
+    msg->data_len += msg->l4_len;
+    msg->pkt_len += msg->l4_len;
     return udp;
   }
 
@@ -75,6 +77,8 @@ public:
     ipv4->type_of_service = 0;
     ipv4->packet_id = 0;
     msg->l3_len = sizeof(rte_ipv4_hdr);
+    msg->data_len += msg->l3_len;
+    msg->pkt_len += msg->l3_len;
 
     msg->ol_flags = 0;
     msg->ol_flags |=
@@ -89,6 +93,8 @@ public:
     rte_ether_addr_copy(&smac, &eth->src_addr);
     eth->ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
     msg->l2_len = sizeof(rte_ether_hdr);
+    msg->data_len += msg->l2_len;
+    msg->pkt_len += msg->l2_len;
   }
 
   void consume_pkt_mbuf(mbuf *pkt, transport_config &cfg) {
@@ -97,15 +103,16 @@ public:
     dpdk_mbuf->data_len = pkt->data_len;
     dpdk_mbuf->pkt_len = pkt->data_len;
     std::memcpy(rte_pktmbuf_mtod_offset(dpdk_mbuf, uint8_t *,
-                                       protocol::defs::kftOffset),
-               pkt->data<uint8_t>(), pkt->data_len);
+                                        protocol::defs::kftOffset),
+                pkt->data<uint8_t>(), pkt->data_len);
     auto *udp = udp_header(dpdk_mbuf, cfg.transport_ports.sport,
                            cfg.transport_ports.dport, pkt->data_len);
     ip_header(dpdk_mbuf, udp, sip, cfg.ip, pkt->data_len);
     auto it = arp_table.find(cfg.ip);
     assert(it != arp_table.end());
     eth_header(dpdk_mbuf, smac, it->second);
-    assert(dpdk_mbuf->pkt_len == pkt->data_len);
+    assert(dpdk_mbuf->pkt_len == pkt->data_len + dpdk_mbuf->l2_len +
+                                     dpdk_mbuf->l3_len + dpdk_mbuf->l4_len);
     qp->enqueue_pkt(dpdk_mbuf);
   }
 
