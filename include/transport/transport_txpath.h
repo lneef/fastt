@@ -203,7 +203,6 @@ public:
       if (!val)
         continue;
       if (!desc.sacked) {
-         printf("%u\n", desc.seq.v); 
         assert(ts >= desc.xmit_ts);
         auto ack_rtt = ts - desc.xmit_ts;
         if (rck.valid_rtt(ts, desc.xmit_ts, desc.retransmitted)) {

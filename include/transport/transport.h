@@ -101,7 +101,7 @@ public:
         return false;
       auto *sack_payload =
           msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));
-      trx.copy_bitset(sack_payload);
+      trx.pack_sack(sack_payload);
       acb.mark_as_acked(acb.rcv_una);
       FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %u\n",
                       sack_payload->bit_map_len, ack.v);

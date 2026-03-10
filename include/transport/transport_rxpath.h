@@ -157,7 +157,7 @@ struct transport_rxpath {
         rb.pop_front();
       }
     }
-    acb.rcv_una = next_seq;
+    acb.rcv_una = get_last_rcvd_in_seq();
   }
 
   bool inside(seq_t seq) {
@@ -171,7 +171,7 @@ struct transport_rxpath {
 
   bool has_holes() { return max_rx_in_window != next_seq - 1; }
 
-  uint16_t copy_bitset(protocol::ft_sack_payload *data) {
+  uint16_t pack_sack(protocol::ft_sack_payload *data) {
     uint16_t id = 0;
     seq_t highest_seq = next_seq + protocol::ft_sack_payload::kBitMapLen * 64;
     if (likely(highest_seq > max_rx_in_window))
@@ -182,10 +182,9 @@ struct transport_rxpath {
             sizeof(
                 uint64_t)); /* 64 since least_in_window is part of the window */
 
-    for (auto i = next_seq; i <= max_rx_in_window; ++i, ++id) {
-      auto ind = get_bit_indices_64(id);
-      data->bit_map[ind.first] |= static_cast<uint64_t>(wnd[index(i)])
-                                  << ind.second;
+    for (auto i = next_seq; i <= highest_seq; ++i, ++id) {
+      data->bit_map[id / 64] |= static_cast<uint64_t>(wnd[index(i)])
+                                  << (id & 63);
     }
     data->bit_map_len = id;
     return id;

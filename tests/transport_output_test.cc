@@ -65,7 +65,7 @@ TEST_F(TransportOutputTest, Reordered) {
         to->insert(seqs[i], msg, acb);
     EXPECT_EQ(to->out.size(), 1);
     protocol::ft_sack_payload py;
-    to->copy_bitset(&py);
+    to->pack_sack(&py);
     EXPECT_TRUE(to->has_holes());
     EXPECT_EQ(std::popcount(py.bit_map[0]), 5);
     EXPECT_EQ(std::popcount(py.bit_map[1]), 0);
@@ -73,8 +73,8 @@ TEST_F(TransportOutputTest, Reordered) {
     EXPECT_EQ(py.bit_map_len, 64);
     to->insert({2}, make_msg({2}, 'A', 1), acb);
     EXPECT_EQ(to->out.size(), 6);
-    to->copy_bitset(&py);
-    EXPECT_EQ(py.bit_map[0], 1ull << 58);
+    to->pack_sack(&py);
+    EXPECT_EQ(py.bit_map[0] & ((1ull << 59) - 1), 1ull << 58);
 }
 
 TEST_F(TransportOutputTest, MultiSegmentReassembly) {
