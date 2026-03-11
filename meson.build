@@ -3,7 +3,7 @@ project('dpdk-perf', 'cpp',
   default_options: ['warning_level=2', 'cpp_std=c++23', 'buildtype=debugoptimized'])
 
 cmake = import('cmake')
-dpdk_dep = dependency('libdpdk', method: 'pkg-config', required: true, static: true, version: '25.11.0')
+dpdk_dep = dependency('libdpdk', method: 'pkg-config', required: true, static: true)
 tlx_proj = cmake.subproject('tlx')
 tlx_dep = tlx_proj.dependency('tlx')
 hdr_hist = cmake.subproject('hdr_histogram')
@@ -21,7 +21,7 @@ fastt_lib = static_library('fastt', sources, include_directories: include_direct
 
 executable('client', 'client_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep], link_with: fastt_lib, link_args: ['-lcap'])
 executable('server', 'server_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep, tlx_dep], link_with: fastt_lib, link_args: ['-lcap'])
-executable('uring', 'uring_peer.cc', include_directories: include_directories('include'), dependencies: [tlx_dep], link_args: ['-luring'])
+executable('uring', 'uring_peer.cc', include_directories: include_directories('include'), dependencies: [tlx_dep, dpdk_dep], link_args: ['-luring', '-lcap'])
 
 # testing
 gtest_dep = dependency('gtest', required: true)
