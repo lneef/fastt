@@ -66,9 +66,9 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
   });
   flush();
   for (auto &con : active)
+    con.acknowledge_all();
+  for (auto &con : active)
     concurrency::make_progress(con);
   scheduler.run();
-  for (auto &con : active)
-    con.acknowledge_all();
   check_timeouts();
 }

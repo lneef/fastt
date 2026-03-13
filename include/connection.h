@@ -80,6 +80,10 @@ public:
 
   bool done() const { return transport_impl->all_acked(); }
 
+  hdr_histogram* get_hist(){
+      return transport_impl->get_hist();
+  }
+
 private:
   friend class connection_manager;
   std::unique_ptr<transport<>> transport_impl;

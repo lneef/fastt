@@ -4,6 +4,7 @@
 #include "util.h"
 #include <algorithm>
 #include <cstdint>
+#include <hdr/hdr_histogram.h>
 
 /*
  * Swift Congestion Control without pacing, so large scale incasts
@@ -35,17 +36,20 @@ struct swift {
   uint64_t retransmit_cnt, last_decrease;
   float base_target_delay, cwnd_size;
   float pacing = 0;
+  hdr_histogram *hist;
   const uint64_t min_wd_size;
 
   swift(uint64_t target_delay)
       :  retransmit_cnt(0), last_decrease(0),
         base_target_delay(target_delay), cwnd_size(initial_len),
-        min_wd_size(initial_len) {}
+        min_wd_size(initial_len) {
+            hdr_init(10, 200, 3, &hist);
+        }
 
   void on_ack(uint64_t acked, uint64_t now, uint64_t srtt, uint64_t delay) {
     retransmit_cnt = 0;
     bool can_decrease = now - last_decrease > srtt;
-
+    hdr_record_value(hist, delay / get_ticks_us());
     // Skip hop delay
     auto target_delay =
         base_target_delay +

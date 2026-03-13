@@ -304,6 +304,10 @@ public:
     return (ttx.get_current_wnd() > 0);
   }
 
+  hdr_histogram* get_hist(){
+      return cc.hist; 
+  }
+
   ssize_t send_single_seg(sgl &msgl) {
     if (!ttx.can_transmit(msgl.begin()->data_len + sizeof(protocol::ft_header)))
       return -EAGAIN;
