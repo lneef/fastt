@@ -79,7 +79,7 @@ iface::configure_port(uint16_t port_id, uint16_t ntx, uint16_t nrx,
     port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_IPV4_CKSUM;
 
   bool rss = false;
-  if (nrx > 0 && (dev_info.rx_offload_capa & RTE_ETH_RX_OFFLOAD_RSS_HASH)) {
+  if (nrx > 1) {
     auto &rssconf = port_conf.rx_adv_conf.rss_conf;
     port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
     port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;

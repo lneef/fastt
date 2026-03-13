@@ -8,6 +8,7 @@
 #include "filter.h"
 #include "protocol.h"
 #include "slab_allocator.h"
+#include "transport/congestion_control.h"
 #include "transport/seq.h"
 #include "util.h"
 
@@ -49,7 +50,8 @@ struct sender_entry {
   uint16_t crd = 0;
   bool sacked : 4;
   bool retransmitted : 4;
-  sender_entry(mbuf_ptr &&packet, uint64_t now, seq_t seq, uint16_t crd, bool retransmitted)
+  sender_entry(mbuf_ptr &&packet, uint64_t now, seq_t seq, uint16_t crd,
+               bool retransmitted)
       : packet(std::move(packet)), xmit_ts(now), seq(seq), crd(crd),
         sacked(false), retransmitted(retransmitted) {}
 
@@ -68,22 +70,27 @@ public:
     uint64_t retransmitted, rtt;
     statistics() : acked(0), retransmitted(0) {}
   };
-  transport_txpath() : rtt(), timeout() {}
+  transport_txpath(swift &cc) : cc(cc), rtt(), timeout() {}
 
   void rto_retransmit(uint64_t ts) {
+    uint64_t lost = 0;
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
       if (entry.seq == least_unacked_pkt || ts - entry.xmit_ts >= rck.rtt) {
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
         assert(entry.link.is_linked());
+        inflight -= entry.packet->data_len;
         entry.link.unlink();
         retransmission_queue.push_back(entry);
+        ++lost;
       }
     }
+    cc.on_retransmission_timeout(lost, rtt, ts);
   }
 
   void detect_loss(uint64_t now) {
+    uint64_t lost = 0;
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
@@ -94,12 +101,19 @@ public:
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
         assert(entry.link.is_linked());
         entry.link.unlink();
+        inflight -= entry.packet->data_len;
         retransmission_queue.push_back(entry);
+        ++lost;
       }
     }
+    if (lost)
+      cc.on_fast_recovery(now, rtt);
   }
 
   unsigned get_current_wnd() const { return budget; }
+  bool can_transmit(size_t requested){
+      return budget > 0 && cc.space(inflight, requested);
+  }
 
   bool check_timeout(uint64_t now) {
     if (now > timeout)
@@ -111,6 +125,7 @@ public:
 
   void cleanup_acked_pkts(seq_t seq, uint64_t ts) {
     uint64_t cumulative_rtt = ~0ull;
+    uint64_t acked = 0;
     while (!unacked.empty() && unacked.front().seq <= seq) {
       auto &desc = unacked.front();
       assert(ts >= desc.xmit_ts);
@@ -121,8 +136,11 @@ public:
           cumulative_rtt = std::min<uint64_t>(ack_rtt, cumulative_rtt);
         }
         assert(desc.link.is_linked());
+        inflight -= desc.packet->data_len;
       }
       budget += desc.crd;
+      acked += desc.packet->data_len;
+
       unacked.pop_front();
     }
 
@@ -130,6 +148,8 @@ public:
       update_srtt(cumulative_rtt);
       rck.rtt = cumulative_rtt;
     }
+
+    cc.on_ack(acked, ts, rtt, cumulative_rtt);
   }
 
   template <typename F>
@@ -138,6 +158,7 @@ public:
       rearm(now);
     ctor(pkt, seq);
     pkt->xmit = false;
+    inflight += pkt->data_len;
     unacked.emplace_back(mbuf_take_owner_ship(pkt), now, seq++, 0, false);
     xmit_list.push_back(unacked.back());
   }
@@ -151,6 +172,7 @@ public:
     --budget;
     ctor(pkt, seq);
     pkt->xmit = false;
+    inflight += pkt->data_len;
     unacked.emplace_back(std::move(pkt), now, seq++, 1, false);
     xmit_list.push_back(unacked.back());
     return true;
@@ -163,8 +185,11 @@ public:
     auto now = rte_get_timer_cycles();
     while (sz-- > 0) {
       auto &desc = retransmission_queue.front();
+      if(!cc.space(inflight, desc.packet->data_len))
+          break;
+      if (!f(desc.packet.get()))
+        break;
       prepare_retransmit(&desc, now);
-      f(desc.packet.get());
     }
   }
 
@@ -177,6 +202,7 @@ public:
     entry->retransmitted = true;
     entry->packet->xmit = false;
     entry->link.unlink();
+    inflight += entry->packet->data_len;
     xmit_list.push_back(*entry);
   }
 
@@ -213,6 +239,7 @@ public:
         desc.sacked = true;
         assert(desc.link.is_linked());
         desc.link.unlink();
+        inflight -= desc.packet->data_len;
       }
     }
 
@@ -251,6 +278,9 @@ public:
 private:
   static constexpr uint64_t kMinRTT = 10;
   statistics stats;
+
+  swift &cc;
+  uint64_t inflight = 0;
 
   std::deque<sender_entry> unacked;
   intrusive_list_t<sender_entry> retransmission_queue;

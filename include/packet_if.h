@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <generic/rte_cycles.h>
 #include <netinet/in.h>
 #include <random>
 #include <rte_byteorder.h>

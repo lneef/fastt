@@ -1,17 +1,24 @@
 #pragma once
+#include <arpa/inet.h>
 #include <boost/intrusive/link_mode.hpp>
 #include <boost/intrusive/list_hook.hpp>
 #include <boost/intrusive/options.hpp>
 #include <cstddef>
-#include <arpa/inet.h>
 #include <cstdint>
+#include <cstdlib>
 #include <format>
-#include <string>
 #include <rte_cycles.h>
+#include <string>
 #include <utility>
 
 #include <boost/intrusive/list.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
+
+#define ensure(x)                                                              \
+  do {                                                                         \
+    if (!(x))                                                                  \
+      std::abort();                                                            \
+  } while (0);
 
 namespace bi = boost::intrusive;
 namespace bu = boost::unordered;
@@ -22,19 +29,19 @@ extern uint64_t to_ms;
 /*
  * bitcast
  */
-namespace cast{
+namespace cast {
 template <typename To, typename From>
-typename std::enable_if<sizeof(To) == sizeof(From) && 
-    std::is_trivially_copyable<From>::value &&
-    std::is_trivially_copyable<To>::value,
-    To>::type
+typename std::enable_if<sizeof(To) == sizeof(From) &&
+                            std::is_trivially_copyable<From>::value &&
+                            std::is_trivially_copyable<To>::value,
+                        To>::type
 
-bit_cast(const From& src) noexcept {
-    To dst;
-    std::memcpy(&dst, &src, sizeof(To));
-    return dst;
+bit_cast(const From &src) noexcept {
+  To dst;
+  std::memcpy(&dst, &src, sizeof(To));
+  return dst;
 }
-};
+}; // namespace cast
 template <typename T, unsigned N> struct packet_vector {
   std::array<T, N> pkts;
   uint16_t i = 0;
@@ -134,11 +141,10 @@ struct flow_tuple {
   uint16_t sport, dport;
 
   std::string print() const {
-    return std::format("{}.{}.{}.{}:{} -> {}.{}.{}.{}:{}",
-           sip & 0xff, (sip >> 8) & 0xff, (sip >> 16) & 0xff, sip >> 24,
-           ntohs(sport),
-           dip & 0xff, (dip >> 8) & 0xff, (dip >> 16) & 0xff, dip >> 24,
-           ntohs(dport));
+    return std::format("{}.{}.{}.{}:{} -> {}.{}.{}.{}:{}", sip & 0xff,
+                       (sip >> 8) & 0xff, (sip >> 16) & 0xff, sip >> 24,
+                       ntohs(sport), dip & 0xff, (dip >> 8) & 0xff,
+                       (dip >> 16) & 0xff, dip >> 24, ntohs(dport));
   }
 
   friend bool operator==(const flow_tuple &lhs, const flow_tuple &rhs);

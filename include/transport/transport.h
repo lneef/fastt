@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cerrno>
 #include <cstdint>
+#include <generic/rte_cycles.h>
 #include <sys/types.h>
 
 #include "debug.h"
@@ -13,8 +14,9 @@
 #include "sgl.h"
 #include "slab_allocator.h"
 #include "transport/seq.h"
-#include "transport_txpath.h"
 #include "transport_rxpath.h"
+#include "transport/congestion_control.h"
+#include "transport_txpath.h"
 #include "util.h"
 
 struct transport_statistics {
@@ -43,9 +45,11 @@ enum class connection_state {
 class connection;
 template <typename P = packet_if> class transport {
   friend class connection;
+  static constexpr uint16_t kFlowLimit = 1;
 
 public:
   static constexpr uint16_t kMaxPayload = 1500 - protocol::defs::kHeaderMTUlen;
+  static constexpr uint16_t kMaxBurstSize = 16;
   struct {
     uint64_t sent = 0;
     uint64_t retransmissions = 0;
@@ -53,12 +57,14 @@ public:
 
   transport(P *pkt_sink, slab_allocator *sb, transport_config cfg,
             uint16_t sport, uint16_t dport)
-      : trx(), builder(sport, dport), cfg(cfg), ttx(), sb(sb), acb(),
+      : cc(get_ticks_us() * 100), trx(), builder(sport, dport), cfg(cfg), ttx(cc), sb(sb), acb(),
         pkt_if(pkt_sink) {}
 
   void perform_recovery() {
-    ttx.advance_recovery(
-        [&](mbuf *pkt) { pkt_if->consume_pkt_mbuf(pkt, cfg); });
+    ttx.advance_recovery([&](mbuf *pkt) -> bool {
+      pkt_if->consume_pkt_mbuf(pkt, cfg);
+      return true;
+    });
   }
 
   void check_timeout(uint64_t now) {
@@ -70,22 +76,6 @@ public:
       ttx.rto_retransmit(now);
       ttx.rearm(now);
     }
-  }
-
-  void send_ctrl(uint16_t wnd) {
-    auto now = rte_get_timer_cycles();
-    auto *pkt = sb->alloc_default(sizeof(protocol::ft_header));
-    ttx.record_ctrl_pkt(
-        pkt,
-        [&](mbuf *pkt, seq_t seq) {
-          auto ack = trx.get_last_rcvd_in_seq();
-          bool ackframe = acb.has_unacked_pkts() && !trx.has_holes();
-          if (ackframe)
-            acb.mark_as_acked(ack);
-          builder.prepare_ctrl_pkt(pkt, seq, ack, wnd, ackframe);
-        },
-        now);
-    pkt_if->consume_pkt_mbuf(pkt, cfg);
   }
 
   bool acknowledge() {
@@ -102,7 +92,7 @@ public:
       auto *sack_payload =
           msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));
       trx.pack_sack(sack_payload);
-      acb.mark_as_acked(acb.rcv_una);
+      acb.mark_as_acked(ack);
       FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %u\n",
                       sack_payload->bit_map_len, ack.v);
     } else {
@@ -111,13 +101,11 @@ public:
       msg = sb->alloc_default_safe(sizeof(protocol::ft_header));
       if (!msg)
         return false;
-      acb.mark_as_acked(acb.rcv_una);
+      acb.mark_as_acked(ack);
       FASTT_LOG_DEBUG("Sending ACK ack=%u\n", ack.v);
     }
-    if (trx.seen_done) {
-      assert(cstate == connection_state::DISCONNECTING);
+    if (trx.seen_done)
       cstate = connection_state::DISCONNECTED;
-    }
 
     builder.prepare_ack_pkt(msg.get(), ack, is_sack);
     pkt_if->consume_pkt_mbuf(msg.get(), cfg);
@@ -127,7 +115,7 @@ public:
   bool check_pkt(mbuf *pkt, seq_t seq) {
     if (trx.is_retransmission(seq)) {
       ++stats.retransmissions;
-      if(!acb.pending_dup_acks)
+      if (!acb.pending_dup_acks)
         acb.add_dump_ack();
       mbuf_free(pkt);
       return false;
@@ -210,14 +198,14 @@ public:
     }
     case protocol::pkt_type::FT_DONE: {
       FASTT_LOG_DEBUG("Got DONE seq=%u ack=%u\n", hdr->seq.v, hdr->ack.v);
-      if(trx.is_retransmission(hdr->seq)){
-          ++acb.pending_dup_acks;
-          acknowledge();
-          mbuf_free(msg);
-          return false;
-      }else if(trx.exceeds_capacity(hdr->seq)){
-          mbuf_free(msg);
-          return false;
+      if (trx.is_retransmission(hdr->seq)) {
+        ++acb.pending_dup_acks;
+        acknowledge();
+        mbuf_free(msg);
+        return false;
+      } else if (trx.exceeds_capacity(hdr->seq)) {
+        mbuf_free(msg);
+        return false;
       }
       ttx.acknowledge(hdr->ack, ts);
       // if the connection is done and only the last packet if missing proceed
@@ -235,6 +223,8 @@ public:
   }
 
   void close_connection() {
+    // just send for now  
+    // we wait till everything is acked anyway because of RPC pattern
     auto now = rte_get_timer_cycles();
     auto *pkt = sb->alloc_default(sizeof(protocol::ft_header));
     ttx.record_ctrl_pkt(
@@ -307,16 +297,15 @@ public:
   connection_state get_state() const { return cstate; }
 
   bool can_recv() {
-    return trx.has_buffered_mbufs_frags() ||
-           cstate != connection_state::ESTABLISHED;
+    return trx.has_buffered_mbufs_frags();
   }
 
   bool can_send() {
-    return ttx.get_current_wnd() > 0 || cstate != connection_state::ESTABLISHED;
+    return (ttx.get_current_wnd() > 0);
   }
 
   ssize_t send_single_seg(sgl &msgl) {
-    if (!ttx.get_current_wnd())
+    if (!ttx.can_transmit(msgl.begin()->data_len))
       return -EAGAIN;
     auto now = rte_get_timer_cycles();
     auto pkt = std::move(msgl).take_head();
@@ -386,6 +375,7 @@ public:
   }
 
 private:
+  swift cc;
   transport_rxpath trx;
   protocol::builder builder;
   transport_config cfg;
@@ -393,5 +383,6 @@ private:
   slab_allocator *sb;
   ack_cb acb;
   P *pkt_if;
+  float rate;
   connection_state cstate = connection_state::ESTABLISHING;
 };

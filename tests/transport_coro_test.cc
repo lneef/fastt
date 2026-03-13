@@ -17,6 +17,10 @@
 struct mock_packet_if {
   std::deque<mbuf *> sent_pkts;
 
+  void consume_pkt_mbuf(mbuf *pkt, transport_config &, uint64_t ) {
+    sent_pkts.push_back(pkt);
+  }
+
   void consume_pkt_mbuf(mbuf *pkt, transport_config &) {
     sent_pkts.push_back(pkt);
   }
@@ -543,7 +547,7 @@ TEST_F(TransportCoroTest, SendLargePayload) {
 
   EXPECT_EQ(retval, -1);
   EXPECT_TRUE(mc.coro.has_value());
-  ASSERT_EQ(mock->size(), 2u);
+  ASSERT_EQ(mock->size(), 1u);
 
   std::vector<char> reassembled;
   while (mock->size()) {

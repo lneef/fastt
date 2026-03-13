@@ -1,6 +1,7 @@
 #include "slab_allocator.h"
 #include "test_env.h"
 
+#include "transport/congestion_control.h"
 #include "transport/protocol.h"
 #include "transport/seq.h"
 #include "transport/transport_txpath.h"
@@ -11,7 +12,8 @@ class TransportInputTest : public ::testing::Test {
 protected:
   void SetUp() override {
     allocator = new slab_allocator{};
-    ti = new transport_txpath();
+    cc = new swift(rte_get_timer_hz());
+    ti = new transport_txpath(*cc);
     ti->update_budget(128);
   }
 
@@ -30,6 +32,7 @@ protected:
   }
 
   slab_allocator *allocator;
+  swift *cc;
   transport_txpath *ti;
 };
 
@@ -54,7 +57,7 @@ TEST_F(TransportInputTest, SackMarksCorrectEntries) {
     ti->detect_loss(rte_get_timer_cycles());
 
     std::vector<mbuf*> retransmitted;
-    ti->advance_recovery([&](mbuf* m) { retransmitted.push_back(m); });
+    ti->advance_recovery([&](mbuf* m) { retransmitted.push_back(m); return true; });
 
     EXPECT_EQ(retransmitted.size(), 2u);
 }
@@ -98,7 +101,7 @@ TEST_F(TransportInputTest, RetransmissionTransmitsCorrectPacket) {
 
     // Collect retransmitted packets
     std::vector<mbuf*> retransmitted;
-    ti->advance_recovery([&](mbuf* m) { retransmitted.push_back(m); });
+    ti->advance_recovery([&](mbuf* m) { retransmitted.push_back(m); return true; });
 
     // Expect seq 1 and seq 3 to be retransmitted (seq 2 was SACKed)
     ASSERT_EQ(retransmitted.size(), 1u);
@@ -197,11 +200,11 @@ TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
         ;
     ti->detect_loss(rte_get_timer_cycles());
     std::vector<mbuf*> retransmitted;
-    ti->advance_recovery([&](mbuf *m) { retransmitted.push_back(m); });
+    ti->advance_recovery([&](mbuf *m) { retransmitted.push_back(m); return true; });
     EXPECT_EQ(retransmitted.size(), 3u);
 
     std::vector<mbuf*> second_round;
-    ti->advance_recovery([&](mbuf* m) { second_round.push_back(m); });
+    ti->advance_recovery([&](mbuf* m) { second_round.push_back(m); return true; });
     EXPECT_EQ(second_round.size(), 0u);
 
     protocol::ft_sack_payload sack2{};
@@ -217,7 +220,7 @@ TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
     // Only the still-unsacked packets that weren't already queued should appear
     // seq 3, 5, 7 were already retransmitted, so they should not be re-queued
     std::vector<mbuf*> third_round;
-    ti->advance_recovery([&](mbuf* m) { third_round.push_back(m); });
+    ti->advance_recovery([&](mbuf* m) { third_round.push_back(m); return true; });
     EXPECT_EQ(third_round.size(), 0u);
 }
 

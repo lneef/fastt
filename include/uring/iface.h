@@ -50,12 +50,12 @@ struct reassembly_buffer {
   std::vector<uint8_t> buffer;
   unsigned off = 0;
   reassembly_buffer(size_t size) : buffer(size) {}
- 
+
   bool enough_space(size_t len) const { return buffer.size() - off >= len; }
 
-  uint8_t *data(){ return buffer.data(); }
+  uint8_t *data() { return buffer.data(); }
 
-  void reset(unsigned noff){ off = noff; }
+  void reset(unsigned noff) { off = noff; }
 
   void cpy(void *buf, size_t size) {
     std::memcpy(buffer.data() + off, buf, size);
@@ -73,8 +73,7 @@ struct slot {
   slot() : rbuffer(kDefaultAssemblyBufferSize) {}
 };
 
-template <size_t elemsize>
-struct buffer_pool {
+template <size_t elemsize> struct buffer_pool {
   static constexpr size_t kElemSize = elemsize;
   struct [[gnu::packed]] header {
     header *next;
@@ -108,9 +107,10 @@ struct buffer_pool {
 };
 
 struct iface_base {
-
-  int flag;  
+  int flag;
   uint16_t port;
+
+  std::deque<std::pair<int, int>> rx_renew;
   struct tcp_info info;
   struct io_uring_napi napi{};
   std::unique_ptr<qpair> ctx;
@@ -165,7 +165,7 @@ struct iface_base {
   }
 
   int process_cqe_send(struct io_uring_cqe *cqe) {
-    if (cqe->res < 0){
+    if (cqe->res < 0) {
       fprintf(stderr, "bad send %s\n", strerror(-cqe->res));
       return cqe->res;
     }
@@ -177,37 +177,40 @@ struct iface_base {
     return 0;
   }
 
-
-  void uring_socketopt(int fd, int optname, void* optval, socklen_t len){
-      auto *sqe = io_uring_get_sqe(&ctx->ring);
-      io_uring_prep_cmd_sock(sqe, SOCKET_URING_OP_SETSOCKOPT, fd, IPPROTO_TCP, optname, optval, len);
-      io_uring_sqe_set_data64(sqe, kSetSockTag);
+  void uring_socketopt(int fd, int optname, void *optval, socklen_t len) {
+    auto *sqe = io_uring_get_sqe(&ctx->ring);
+    io_uring_prep_cmd_sock(sqe, SOCKET_URING_OP_SETSOCKOPT, fd, IPPROTO_TCP,
+                           optname, optval, len);
+    io_uring_sqe_set_data64(sqe, kSetSockTag);
   }
 
-  void uring_set_no_delay(int fd){
-      flag = 1;
-      uring_socketopt(fd, TCP_NODELAY, &flag, sizeof(flag));
+  void uring_set_no_delay(int fd) {
+    flag = 1;
+    uring_socketopt(fd, TCP_NODELAY, &flag, sizeof(flag));
   }
 
-  void uring_set_bbr(int fd){
-      uring_socketopt(fd, TCP_CONGESTION, std::bit_cast<void*>(&tcp::bbr_congestion), sizeof(tcp::bbr_congestion));
+  void uring_set_bbr(int fd) {
+    uring_socketopt(fd, TCP_CONGESTION,
+                    std::bit_cast<void *>(&tcp::bbr_congestion),
+                    sizeof(tcp::bbr_congestion));
   }
 
-  void uring_gettcpstats(int fd){
-      auto *sqe = ctx->get_sqe();
-      io_uring_prep_cmd_sock(sqe, SOCKET_URING_OP_GETSOCKOPT, fd, IPPROTO_TCP, TCP_INFO, &info, sizeof(tcp_info));
-      io_uring_sqe_set_data64(sqe, kGetSockTCPInfoTag);
+  void uring_gettcpstats(int fd) {
+    auto *sqe = ctx->get_sqe();
+    io_uring_prep_cmd_sock(sqe, SOCKET_URING_OP_GETSOCKOPT, fd, IPPROTO_TCP,
+                           TCP_INFO, &info, sizeof(tcp_info));
+    io_uring_sqe_set_data64(sqe, kGetSockTCPInfoTag);
   }
 
-  int process_cmd_cqe(io_uring_cqe *cqe){
-      switch(cqe->user_data){
-          case kSetSockTag:
-          case kGetSockTCPInfoTag:
-              return 0;
-          default:
-              assert(0);
-      }
+  int process_cmd_cqe(io_uring_cqe *cqe) {
+    switch (cqe->user_data) {
+    case kSetSockTag:
+    case kGetSockTCPInfoTag:
       return 0;
+    default:
+      assert(0);
+    }
+    return 0;
   }
 
   virtual ~iface_base() = default;
@@ -215,9 +218,9 @@ struct iface_base {
 
 struct client_iface : iface_base {
   int fd;
-  reassembly_buffer rbuffer;
+  slot slt;
 
-  client_iface() : iface_base(), rbuffer(slot::kDefaultAssemblyBufferSize) {}
+  client_iface() : iface_base(), slt() {}
 
   int uring_connect(struct sockaddr_in *addr) {
     auto *seq = io_uring_get_sqe(&ctx->ring);
@@ -245,8 +248,8 @@ struct client_iface : iface_base {
     case 0:
       return process_cqe_send(cqe);
     case 1:
-      if(cqe->user_data > kMaxClientFdTag)
-          return process_cmd_cqe(cqe);
+      if (cqe->user_data > kMaxClientFdTag)
+        return process_cmd_cqe(cqe);
       return process_cqe_recv(this, cqe, fd, 0, f);
     }
     return 0;
@@ -276,7 +279,7 @@ struct server_iface : iface_base {
 
   int setup(int port_arg) { return setup_base(port_arg, clients.front()); }
 
-  int prepare_listen( in_addr_t s_addr) {
+  int prepare_listen(in_addr_t s_addr) {
     int enable = 1;
     int ret = setsockopt(clients.front(), SOL_SOCKET, SO_REUSEADDR, &enable,
                          sizeof(enable));
@@ -286,7 +289,7 @@ struct server_iface : iface_base {
     }
     struct sockaddr_in addr = {.sin_family = AF_INET,
                                .sin_port = port,
-                               .sin_addr = { s_addr },
+                               .sin_addr = {s_addr},
                                .sin_zero = {0}};
     ret = bind(clients.front(), reinterpret_cast<struct sockaddr *>(&addr),
                sizeof(addr));
@@ -338,8 +341,8 @@ struct server_iface : iface_base {
       return process_cqe_send(cqe);
     }
     case 1: {
-      if(cqe->user_data > kMaxClientFdTag)
-          return process_cmd_cqe(cqe);
+      if (cqe->user_data > kMaxClientFdTag)
+        return process_cmd_cqe(cqe);
       auto idx = untag(cqe->user_data);
       if (idx == 0)
         return handle_accept(cqe);
@@ -354,16 +357,14 @@ struct server_iface : iface_base {
     return 0;
   }
 
-  ~server_iface() override{
-      close(clients.front());
-  }
+  ~server_iface() override { close(clients.front()); }
 };
 
 template <typename T> int add_recv(T *iface, int fd, int idx) {
   struct io_uring_sqe *sqe;
   sqe = iface->ctx->get_sqe();
-  if (!sqe) {
-    assert(0);  
+  if (!sqe) {  
+    iface->rx_renew.emplace_back(fd, idx);  
     return -1;
   }
 
@@ -379,6 +380,15 @@ __inline void recycle_buffer(qpair *ctx, int idx) {
   io_uring_buf_ring_add(ctx->buf_ring, ctx->get_buffer(idx), ctx->buffer_size(),
                         idx, io_uring_buf_ring_mask(kNumBuffer), 0);
   io_uring_buf_ring_advance(ctx->buf_ring, 1);
+}
+
+template<typename T> void drain_rx_renew(T* iface){
+    while(!iface->rx_renew.empty()){
+        auto [fd, idx] = iface->rx_renew.front();
+        if(add_recv(iface, fd, idx))
+            break;
+        iface->rx_renew.pop_front();
+    }
 }
 
 template <typename T>
@@ -399,9 +409,7 @@ int process_cqe_recv(T *st, struct io_uring_cqe *cqe, int fd, unsigned sidx,
     return -1;
   }
   idx = cqe->flags >> 16; // 16 bits is bid
-  auto *buf = st->ctx->get_buffer(idx);
-  ret = f(buf, cqe->res, sidx);
-  recycle_buffer(st->ctx.get(), idx);
-  return ret;
+  ret = f(idx, cqe->res, sidx);
+  return 0;
 }
 } // namespace uring

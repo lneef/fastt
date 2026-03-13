@@ -1,4 +1,6 @@
 #pragma once
+#include "debug.h"
+#include "transport/protocol.h"
 #include "util.h"
 #include <algorithm>
 #include <cstdint>
@@ -24,9 +26,9 @@ static __inline constexpr float fast_inv_sqrt(float val) {
 }
 
 struct swift {
-  static constexpr float mss = 9001;
-  static constexpr float initial_len = 9001;
-  static constexpr float ai = 32;
+  static constexpr float mss = 1500 - protocol::defs::kftOffset;
+  static constexpr float initial_len = 1500 - protocol::defs::kftOffset;
+  static constexpr float ai = 16;
   static constexpr float beta = 0.8;
   static constexpr float max_md = 0.5;
   static constexpr uint64_t reset_threshold = 16;
@@ -38,11 +40,11 @@ struct swift {
   swift(uint64_t target_delay)
       :  retransmit_cnt(0), last_decrease(0),
         base_target_delay(target_delay), cwnd_size(initial_len),
-        min_wd_size(initial_len / 16) {}
+        min_wd_size(initial_len) {}
 
   void on_ack(uint64_t acked, uint64_t now, uint64_t srtt, uint64_t delay) {
     retransmit_cnt = 0;
-    bool can_decrease = now - last_decrease > srtt * get_ticks_us();
+    bool can_decrease = now - last_decrease > srtt;
 
     // Skip hop delay
     auto target_delay =
@@ -62,7 +64,7 @@ struct swift {
   void on_retransmission_timeout(std::size_t nb, uint64_t rtt, uint64_t now) {
     if (nb == 0)
       return;
-    bool can_decrease = now - last_decrease >= rtt * get_ticks_us();
+    bool can_decrease = now - last_decrease >= rtt;
     retransmit_cnt += nb;
     if (retransmit_cnt > reset_threshold) {
       cwnd_size = min_wd_size;
@@ -75,7 +77,7 @@ struct swift {
 
   void on_fast_recovery(uint64_t now, uint64_t rtt) {
     retransmit_cnt = 0;
-    bool can_decrease = now - last_decrease >= rtt * get_ticks_us();
+    bool can_decrease = now - last_decrease >= rtt;
     if (can_decrease) {
       cwnd_size = (1 - max_md) * cwnd_size;
       last_decrease = now;
@@ -86,12 +88,14 @@ struct swift {
   void update_stats() {
     // TODO: fix this according to real impl
     // but we currently dont have a pacer
-    cwnd_size = std::clamp<float>(cwnd_size, 0.1 * mss, 128 * mss);
+    cwnd_size = std::clamp<float>(cwnd_size, 1 * mss, 128 * mss);
   }
 
   unsigned space(size_t inflight, size_t requested) const {
     // cwnd could have been decreased by a loss or excess rtt  
-    return std::min<unsigned>(requested, cwnd_size > inflight ? cwnd_size - inflight : 0);
+    auto cap = std::min<unsigned>(requested, cwnd_size > inflight ? cwnd_size - inflight : 0);
+    FASTT_LOG_DEBUG("cwnd%u\n", cap);
+    return cap;
   }
 
 
