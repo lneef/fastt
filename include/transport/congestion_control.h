@@ -50,7 +50,7 @@ struct swift {
     auto target_delay =
         base_target_delay +
         std::max<float>(
-            std::min<float>(fast_inv_sqrt(cwnd_size) * 5.4 - 0.48, 5), 0);
+            std::min<float>(fast_inv_sqrt(cwnd_size) * 5.4 - 0.48, 5), 0) * get_ticks_us();
     if (delay < target_delay) {
       cwnd_size += (ai) / cwnd_size * (acked);
     } else if (can_decrease) {

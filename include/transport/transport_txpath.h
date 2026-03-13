@@ -49,11 +49,12 @@ struct sender_entry {
   seq_t seq;
   uint16_t crd = 0;
   bool sacked : 4;
-  bool retransmitted : 4;
+  bool retransmitted : 2;
+  bool queued : 2;
   sender_entry(mbuf_ptr &&packet, uint64_t now, seq_t seq, uint16_t crd,
                bool retransmitted)
       : packet(std::move(packet)), xmit_ts(now), seq(seq), crd(crd),
-        sacked(false), retransmitted(retransmitted) {}
+        sacked(false), retransmitted(retransmitted), queued(false) {}
 
   sender_entry(const sender_entry &) = delete;
 
@@ -82,6 +83,7 @@ public:
         assert(entry.link.is_linked());
         inflight -= entry.packet->data_len;
         entry.link.unlink();
+        entry.queued = true;
         retransmission_queue.push_back(entry);
         ++lost;
       }
@@ -102,6 +104,7 @@ public:
         assert(entry.link.is_linked());
         entry.link.unlink();
         inflight -= entry.packet->data_len;
+        entry.queued = true;
         retransmission_queue.push_back(entry);
         ++lost;
       }
@@ -111,8 +114,8 @@ public:
   }
 
   unsigned get_current_wnd() const { return budget; }
-  bool can_transmit(size_t requested){
-      return budget > 0 && cc.space(inflight, requested);
+  bool can_transmit(size_t requested) {
+    return budget > 0 && cc.space(inflight, requested);
   }
 
   bool check_timeout(uint64_t now) {
@@ -136,7 +139,10 @@ public:
           cumulative_rtt = std::min<uint64_t>(ack_rtt, cumulative_rtt);
         }
         assert(desc.link.is_linked());
-        inflight -= desc.packet->data_len;
+      }
+      if(!desc.sacked && !desc.queued){
+          assert(inflight >= desc.packet->data_len);
+          inflight -= desc.packet->data_len;
       }
       budget += desc.crd;
       acked += desc.packet->data_len;
@@ -149,7 +155,7 @@ public:
       rck.rtt = cumulative_rtt;
     }
 
-    cc.on_ack(acked, ts, rtt, cumulative_rtt);
+    cc.on_ack(acked, ts, rtt, rck.rtt);
   }
 
   template <typename F>
@@ -185,8 +191,9 @@ public:
     auto now = rte_get_timer_cycles();
     while (sz-- > 0) {
       auto &desc = retransmission_queue.front();
-      if(!cc.space(inflight, desc.packet->data_len))
-          break;
+      assert(desc.queued);
+      if (!cc.space(inflight, desc.packet->data_len))
+        break;
       if (!f(desc.packet.get()))
         break;
       prepare_retransmit(&desc, now);
@@ -201,6 +208,7 @@ public:
     entry->xmit_ts = ts;
     entry->retransmitted = true;
     entry->packet->xmit = false;
+    entry->queued = false;
     entry->link.unlink();
     inflight += entry->packet->data_len;
     xmit_list.push_back(*entry);

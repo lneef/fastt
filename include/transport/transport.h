@@ -305,7 +305,7 @@ public:
   }
 
   ssize_t send_single_seg(sgl &msgl) {
-    if (!ttx.can_transmit(msgl.begin()->data_len))
+    if (!ttx.can_transmit(msgl.begin()->data_len) + sizeof(protocol::ft_header))
       return -EAGAIN;
     auto now = rte_get_timer_cycles();
     auto pkt = std::move(msgl).take_head();
