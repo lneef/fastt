@@ -27,8 +27,8 @@ public:
   }
 
   void close(connection &con) {
-    con.close();
-    while (!con.done())
+    con.close_connection();
+    while (!con.all_acked())
       poll();
     manager.close(&con);
   }

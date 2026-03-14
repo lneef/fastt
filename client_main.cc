@@ -168,7 +168,7 @@ static int lcore_fn(void *arg) {
     rx_fn(kv);
   }
 
-  auto stats = kv.con->get_transport_stats();
+  auto stats = kv.con->get_stats();
   kv.close();
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   auto end = rte_get_timer_cycles();

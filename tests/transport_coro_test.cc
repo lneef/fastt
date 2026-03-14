@@ -76,7 +76,7 @@ struct mock_connection {
 
   bool can_recv() const { return tp.can_recv(); }
 
-  ssize_t send(sgl &msgl) { return tp.send_sgl(msgl); }
+  ssize_t send_sgl(sgl &msgl) { return tp.send_sgl(msgl); }
 
   ssize_t recv(sgl &msgl) { return tp.recv(msgl); }
 };

@@ -65,10 +65,10 @@ public:
   }
 
   ssize_t send(sgl &ssgl) {
-    return con->send(ssgl);
+    return con->send_sgl(ssgl);
   }
 
-  void acknowledge_all() { con->acknowledge_all(); }
+  void acknowledge_all() { con->acknowledge(); }
 
   void close() {
       ifc->close(*con);

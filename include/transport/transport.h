@@ -10,6 +10,7 @@
 #include "packet_if.h"
 #include "protocol.h"
 #include "protocol_util.h"
+#include "task/task.h"
 
 #include "sgl.h"
 #include "slab_allocator.h"
@@ -42,11 +43,11 @@ enum class connection_state {
   DISCONNECTED
 };
 
-class connection;
-template <typename P = packet_if> class transport {
-  friend class connection;
-  static constexpr uint16_t kFlowLimit = 1;
+class connection_manager;
 
+template <typename P = packet_if> class transport {
+  static constexpr uint16_t kFlowLimit = 1;
+  friend class connection_manager;
 public:
   static constexpr uint16_t kMaxPayload = 1500 - protocol::defs::kHeaderMTUlen;
   static constexpr uint16_t kMaxBurstSize = 16;
@@ -389,4 +390,8 @@ private:
   P *pkt_if;
   float rate;
   connection_state cstate = connection_state::ESTABLISHING;
+public:
+    std::optional<concurrency::coro_handle> coro;
+  list_hook link;
+  list_hook ready;
 };
