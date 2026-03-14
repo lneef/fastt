@@ -9,13 +9,19 @@
 #include "util.h"
 #include <arpa/inet.h>
 #include <atomic>
+#include <bits/getopt_core.h>
 #include <cassert>
+#include <cerrno>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <generic/rte_cycles.h>
 #include <getopt.h>
+#include <hdr/hdr_histogram.h>
+#include <hdr/hdr_histogram_log.h>
 #include <iostream>
 #include <memory>
 #include <random>
@@ -29,6 +35,8 @@ struct netconfig {
   rte_ether_addr dmac;
   uint32_t sip, dip;
   uint16_t dport;
+  uint64_t duration;
+  double rate;
   std::vector<uint16_t> sports;
 };
 
@@ -37,6 +45,8 @@ struct lcore_adapter {
   std::vector<std::shared_ptr<dpdk_allocator>> allocator;
   con_config cfg;
   rte_ether_addr dmac;
+  uint64_t duration;
+  double rate;
 
   lcore_adapter(std::size_t n, con_config cfg)
       : cifs(n), allocator(n, nullptr), cfg(cfg) {}
@@ -47,12 +57,10 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 
   netconfig conf;
   static const struct option long_options[] = {
-      {"dip", required_argument, 0, 0},
-      {"sip", required_argument, 0, 0},
-      {"dmac", required_argument, 0, 0},
-      {"sport", required_argument, 0, 0},
-      {"dport", required_argument, 0, 0},
-      {0, 0, 0, 0}};
+      {"dip", required_argument, 0, 0},   {"sip", required_argument, 0, 0},
+      {"dmac", required_argument, 0, 0},  {"sport", required_argument, 0, 0},
+      {"dport", required_argument, 0, 0}, {"duration", required_argument, 0, 0},
+      {"rate", required_argument, 0, 0},  {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
     switch (option_index) {
@@ -77,6 +85,12 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
     case 4:
       conf.dport = atoi(optarg);
       break;
+    case 5:
+      conf.duration = atoll(optarg) * rte_get_timer_hz();
+      break;
+    case 6:
+      conf.rate = std::stod(optarg);
+      break;
     default:
       break;
     }
@@ -84,7 +98,6 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
   return conf;
 }
 
-static constexpr auto dur = 1e6;
 static int lcore_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
@@ -95,50 +108,68 @@ static int lcore_fn(void *arg) {
   kv_proxy kv(&cif);
   kv.connect(adapter->cfg, rte_lcore_id(), adapter->dmac);
   auto *sb = cif.manager.get_allocator();
-  uint64_t t = 0;
-  uint64_t c = 0;
 
-  auto now = rte_get_timer_cycles();
-  while (t < dur) {
-    cif.poll();
+  std::exponential_distribution<double> exp(adapter->rate);
+  auto start_time = rte_get_timer_cycles() + 10 * rte_get_timer_hz();
+  auto ticks_per_sec = rte_get_timer_hz();
+  auto end_time = start_time + adapter->duration;
+  auto next = start_time + ticks_per_sec * exp(rng);
+  hdr_histogram *hist;
+  hdr_init(1, 500'000, 3, &hist);
+
+  std::deque<uint64_t> times;
+  std::deque<int64_t> reqs;
+  auto rx_fn = [&](kv_proxy &pry) {
     for (;;) {
       sgl rsgl;
-      auto rcvd = kv.recv(rsgl);
-      if (rcvd <= 0)
+      auto rcvd = pry.recv(rsgl);
+      if (!rcvd)
         break;
       kv::kv_packet<kv::kv_completion> resp;
       rsgl.head->read(&resp);
-      assert(resp.payload.key == kv[resp.id].key);
-      kv.complete(resp.id);
-      ++c;
+      ensure(resp.payload.key == reqs.front());
+      assert(!times.empty());
+      hdr_record_value(hist, (rte_get_timer_cycles() - times.front()) /
+                                 get_ticks_us());
+      times.pop_front();
+      reqs.pop_front();
     }
-    auto *tx = kv.start();
-    if (!tx)
+  };
+
+  auto now = rte_get_timer_cycles();
+  times.push_back(next);
+  while (times.front() < end_time) {
+    cif.poll();
+    rx_fn(kv);
+    if (rte_get_timer_cycles() < times.empty())
       continue;
     int64_t key = dist(rng);
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
-    kv::create_kv_request(m->data<uint8_t>(), tx->id, key);
-    tx->key = key;
+    kv::create_kv_request(m->data<uint8_t>(), 0, key);
+    reqs.push_back(key);
     sgl ssgl;
     ssgl.add_segment_safe(mbuf_take_owner_ship(m));
-    auto sent = kv.send(ssgl);
-    assert(sent == sizeof(kv::kv_packet<kv::kv_request>));
-    ++t;
+    auto sent = 0u;
+    while (sent < sizeof(kv::kv_packet<kv::kv_request>)) {
+      auto retval = kv.send(ssgl);
+      if (retval == -EAGAIN) {
+        cif.poll();
+        rx_fn(kv);
+      } else {
+        sent += retval;
+      }
+    }
+    next = next + exp(rng) * rte_get_timer_hz();
+    times.push_back(next);
   }
-  while (c < dur) {
+
+  while (!times.empty()) {
     cif.poll();
-    sgl rsgl;
-    auto rcvd = kv.recv(rsgl);
-    if (rcvd < 0)
-      continue;
-    kv::kv_packet<kv::kv_completion> resp;
-    rsgl.head->read(&resp);
-    assert(resp.payload.key == kv[resp.id].key);
-    kv.complete(resp.id);
-    ++c;
+    rx_fn(kv);
   }
-  kv.close();
+
   auto stats = kv.con->get_transport_stats();
+  kv.close();
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   auto end = rte_get_timer_cycles();
   std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
@@ -160,8 +191,8 @@ static void run(lcore_function_t *f, void *args) {
   std::vector<std::shared_ptr<dpdk_allocator>> allocators;
   allocators.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
-    allocators.emplace_back(dpdk_allocator::create(
-        ("mpool" + std::to_string(i)).c_str(), 4095));
+    allocators.emplace_back(
+        dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095));
     ++i;
   }
   auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);
