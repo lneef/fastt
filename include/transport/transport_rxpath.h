@@ -17,9 +17,9 @@
 
 struct ack_cb {
   static constexpr size_t kSACKCnt = 3;
-  seq_t rcv_una{~0u};
-  seq_t rcv_acked{~0u};
-  seq_t rcv_high{~0u};
+  seq_t rcv_una;
+  seq_t rcv_acked;
+  seq_t rcv_high;
   uint16_t pending_dup_acks = 0;
 
   void mark_as_acked(seq_t seq) {
@@ -36,6 +36,8 @@ struct ack_cb {
   bool has_unacked_pkts() const {
     return rcv_una > rcv_acked || pending_dup_acks > 0;
   }
+
+  ack_cb(seq_t seq = {~0u}): rcv_una(seq), rcv_acked(seq), rcv_high(seq) {}
 
   void add_dump_ack() {
     // we send at most kSACKCnt
@@ -123,7 +125,6 @@ struct transport_rxpath {
       return;
     }
     reassembly.segs += pkt->nb_segs;
-    reassembly.used_budget += pkt->nb_segs;
     bool end = hdr->eom;
     pkt->adj(sizeof(protocol::ft_header));
     reassembly.size += pkt->data_len;
@@ -216,7 +217,6 @@ struct transport_rxpath {
     mbuf *first = nullptr, *last = nullptr;
     uint64_t size = 0;
     uint32_t segs = 0;
-    uint32_t used_budget = 0;
     void reset() {
       first = last = nullptr;
       segs = 0;

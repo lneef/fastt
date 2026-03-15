@@ -34,15 +34,14 @@ struct statistics {
 class connection_manager {
   static constexpr uint16_t kdefaultBurstSize = 64;
   friend connection;
+
 public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
-                     uint32_t sip,
-                     std::shared_ptr<dpdk_allocator> allocator,
+                     uint32_t sip, std::shared_ptr<dpdk_allocator> allocator,
                      P *parent, uint16_t cores)
-      : dev(port, txq, rxq), 
-        pkt_if(&dev, allocator, &sb, sip, port), active(), cores(cores),
-        is_client(is_client) {
+      : dev(port, txq, rxq), pkt_if(&dev, allocator, &sb, sip, port), active(),
+        cores(cores), is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
     else
@@ -59,11 +58,14 @@ public:
       protocol::extract_ports(ft, pkt);
       FASTT_LOG_DEBUG("Got packet via %s\n", ft.print().c_str());
       auto it = flows.find(ft);
-      if (likely(it != flows.end())){
+      if (likely(it != flows.end())) {
         it->second->process_pkt(pkt);
-        if(!is_client && !it->second->ready.is_linked())
-            ready.push_back(*it->second);
-      }else {
+        if (!it->second->ready.is_linked())
+          ready.push_back(*it->second);
+        if (!it->second->ack_outstanding.is_linked())
+          ack_outstanding.push_back(*it->second);
+
+      } else {
         mbuf_free(pkt);
       }
     }
@@ -93,26 +95,34 @@ public:
   void poll_client() {
     fetch_from_qpair();
     update_current_timer_cycles();
-    for (auto it = active.begin(), end = active.end(); it != end;) {
-      auto &timpl = *it;
-      ++it;
-      timpl.perform_recovery();
-      timpl.acknowledge();
-      if (timpl.get_state() == connection_state::DISCONNECTED)
-        timpl.link.unlink();
+    for (size_t i = 0u, end = ack_outstanding.size(); i < end; ++i) {
+      auto &con = ack_outstanding.front();
+      if (con.acknowledge())
+        ack_outstanding.push_back(con);
+      ack_outstanding.pop_front();
     }
-    check_timeouts();
     flush();
+
+    for (auto it = ready.begin(), end = ready.end(); it != end;) {
+      auto &con = *it;
+      ++it;
+      con.perform_recovery();
+      if (con.get_state() == connection_state::DISCONNECTED)
+        con.link.unlink();
+    }
+    ready.clear();
+
+    check_timeouts();
   }
 
   void run(concurrency::scheduler &scheduler);
 
   void fetch_from_qpair() {
     std::array<flow_tuple, packet_if::kDefaultInBurstSize> fts;
-    packet_vector<mbuf*, packet_if::kDefaultInBurstSize> mbufs;
+    packet_vector<mbuf *, packet_if::kDefaultInBurstSize> mbufs;
     pkt_if.fetch_from_qpair(fts, mbufs);
     uint16_t i = 0;
-    for (auto* pkt : mbufs) {
+    for (auto *pkt : mbufs) {
       auto &ft = fts[i++];
       handle_pkt(pkt, ft);
     }
@@ -143,16 +153,16 @@ public:
     FASTT_LOG_DEBUG("New Connection %s \n", tuple.print().c_str());
     // swap ports since we need the rx port as src
     auto [it, inserted] = flows.emplace(
-        tuple, std::make_unique<connection>(&pkt_if, &sb, this, cfg, tuple.dport,
-                                            tuple.sport));
+        tuple, std::make_unique<connection>(&pkt_if, &sb, this, cfg,
+                                            tuple.dport, tuple.sport));
     if (inserted) {
       active.push_front(*it->second);
       ++open_connections;
     } else if (it->second->get_state() == connection_state::DISCONNECTED) {
       // if the connection has been closed, replace it
       it->second.reset();
-      it->second = std::make_unique<connection>(&pkt_if, &sb, this, cfg, tuple.dport,
-                                                tuple.sport);
+      it->second = std::make_unique<connection>(&pkt_if, &sb, this, cfg,
+                                                tuple.dport, tuple.sport);
       active.push_front(*it->second);
       inserted = true;
     }
@@ -175,17 +185,11 @@ public:
     flows.erase(ft);
   }
 
-  slab_allocator* get_allocator(){
-      return &sb;
-  }
+  slab_allocator *get_allocator() { return &sb; }
 
-  __inline uint64_t get_current_timer_cycles() const{
-      return r_ts;
-  }
+  __inline uint64_t get_current_timer_cycles() const { return r_ts; }
 
-  void update_current_timer_cycles(){
-      r_ts = rte_get_timer_cycles();
-  }
+  void update_current_timer_cycles() { r_ts = rte_get_timer_cycles(); }
 
   void flush() { pkt_if.flush_out_buffer(); }
 
@@ -198,7 +202,8 @@ private:
   packet_if pkt_if;
   uint64_t r_ts = rte_get_timer_cycles();
   intrusive_list_t<connection> active;
-  intrusive_list_t<connection> ready;
+  intrusive_list_t<connection, &connection::ready> ready;
+  intrusive_list_t<connection, &connection::ack_outstanding> ack_outstanding;
   uint16_t cores;
   bool is_client;
   uint32_t open_connections = 0;

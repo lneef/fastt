@@ -63,17 +63,17 @@ public:
     }
   }
 
-  bool acknowledge() {
+  unsigned acknowledge() {
     mbuf_ptr msg = mbuf_take_owner_ship(nullptr);
     bool is_sack = trx.has_holes();
     seq_t ack = trx.get_last_rcvd_in_seq();
     if (is_sack) {
       if (!acb.has_unacked_pkts())
-        return false;
+        return 0;
       msg = sb->alloc_default_safe(sizeof(protocol::ft_header) +
                                    sizeof(protocol::ft_sack_payload));
       if (!msg)
-        return false;
+        return acb.pending_dup_acks;
       auto *sack_payload =
           msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));
       trx.pack_sack(sack_payload);
@@ -82,10 +82,10 @@ public:
                       sack_payload->bit_map_len, ack.v);
     } else {
       if (!acb.has_unacked_pkts())
-        return false;
+        return 0;
       msg = sb->alloc_default_safe(sizeof(protocol::ft_header));
       if (!msg)
-        return false;
+        return 1;
       acb.mark_as_acked(ack);
       FASTT_LOG_DEBUG("Sending ACK ack=%u\n", ack.v);
     }
@@ -94,7 +94,7 @@ public:
 
     builder.prepare_ack_pkt(msg.get(), ack, is_sack);
     pkt_if->consume_pkt_mbuf(msg.get(), cfg);
-    return true;
+    return acb.pending_dup_acks;
   }
 
   bool check_pkt(mbuf *pkt, seq_t seq) {
@@ -376,4 +376,5 @@ public:
   std::optional<concurrency::coro_handle> coro;
   list_hook link;
   list_hook ready;
+  list_hook ack_outstanding;
 };
