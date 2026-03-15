@@ -4,7 +4,6 @@
 #include "sgl.h"
 #include "slab_allocator.h"
 #include "transport/seq.h"
-#include "util.h"
 
 #include <algorithm>
 #include <bitset>
@@ -90,7 +89,7 @@ struct transport_rxpath {
   static constexpr unsigned kLowThreshold = 128;
   static constexpr unsigned kMaxGrantSize = 128;
   static constexpr unsigned kMaxBitMapSize = 2 * kMaxGrantSize;
-  transport_rxpath() : max_rx_in_window(~0), next_seq() {}
+  transport_rxpath(seq_t max_rx_in_window = {~0u}, seq_t next_seq = {0}) : max_rx_in_window(max_rx_in_window), next_seq(next_seq) {}
 
   seq_t get_last_rcvd_in_seq() const { return seq_t{next_seq - 1}; }
 

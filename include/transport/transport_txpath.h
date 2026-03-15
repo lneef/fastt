@@ -15,6 +15,7 @@
 struct rack {
   static constexpr uint64_t kMinRTT = 30;
   static bool send_after(uint64_t t1, seq_t seq1, uint64_t t2, seq_t seq2) {
+    printf("%u %u\n", seq1.v, seq2.v);
     if (t1 > t2)
       return true;
     else if (t1 == t2 && seq1 > seq2)
@@ -36,9 +37,11 @@ struct rack {
     }
   }
 
+  rack(seq_t end_seq) : end_seq(end_seq) {}
+
   uint64_t min_rtt{kMinRTT * get_ticks_us()}, rtt = 0;
   uint64_t xmit_ts = 0;
-  seq_t end_seq{~0u};
+  seq_t end_seq;
   uint64_t dup_ack_cnt = 0;
 };
 
@@ -71,7 +74,9 @@ public:
     uint64_t retransmitted, rtt;
     statistics() : acked(0), retransmitted(0) {}
   };
-  transport_txpath(swift &cc) : cc(cc), rtt(), timeout() {}
+  transport_txpath(swift &cc, seq_t seq = {0})
+      : cc(cc), seq(seq), least_unacked_pkt(seq), rtt(), timeout(),
+        rck(seq - 1) {}
 
   void rto_retransmit(uint64_t ts) {
     uint64_t lost = 0;
@@ -97,7 +102,7 @@ public:
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
-
+      printf("%u\n", entry.seq.v);
       if (!rack::send_after(rck.xmit_ts, rck.end_seq, entry.xmit_ts, entry.seq))
         break;
       if (now >= entry.xmit_ts + rck.rtt) {
@@ -197,21 +202,19 @@ public:
         break;
       if (!f(desc.packet.get()))
         break;
-      prepare_retransmit(&desc, now);
-    }
-  }
 
-  void prepare_retransmit(sender_entry *entry, uint64_t ts) {
-    ++stats.retransmitted;
-    // inc reference count
-    // in total we have n + 1 where n is the number of transmissions
-    // entry->msg n reduction because of cleanup
-    entry->xmit_ts = ts;
-    entry->retransmitted = true;
-    entry->packet->xmit = false;
-    entry->queued = false;
-    entry->link.unlink();
-    xmit_list.push_back(*entry);
+      ++stats.retransmitted;
+      // inc reference count
+      // in total we have n + 1 where n is the number of transmissions
+      // entry->msg n reduction because of cleanup
+      desc.xmit_ts = now;
+      desc.retransmitted = true;
+      desc.packet->xmit = false;
+      desc.queued = false;
+      desc.link.unlink();
+      ++inflight_pkts;
+      xmit_list.push_back(desc);
+    }
   }
 
   void acknowledge(seq_t seq, uint64_t ts) {
@@ -297,8 +300,8 @@ private:
   intrusive_list_t<sender_entry> xmit_list;
 
   uint32_t budget = 0;
-  seq_t seq{0};
-  seq_t least_unacked_pkt{0};
+  seq_t seq;
+  seq_t least_unacked_pkt;
 
   uint64_t rtt = 0;
   const uint64_t default_rto = get_ticks_ms() * 10;

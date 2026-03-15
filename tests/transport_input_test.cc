@@ -171,6 +171,84 @@ TEST_F(TransportInputTest, CumulativeAckReturnsCrdAfterSack) {
     EXPECT_EQ(ti->get_current_wnd(), 128u);
 }
 
+TEST_F(TransportInputTest, CumulativeAckSeqWrapAround) {
+    // Start near UINT32_MAX so sequences wrap around 0
+    delete ti;
+    ti = new transport_txpath(*cc, seq_t{UINT32_MAX - 2});
+    ti->update_budget(128);
+
+    // Send 6 packets: seqs MAX-2, MAX-1, MAX, 0, 1, 2
+    for (int i = 0; i < 6; ++i) {
+        auto *msg = make_pkt();
+        bool ok = ti->record_pkt(mbuf_take_owner_ship(msg), [](mbuf_ptr&, seq_t) {}, rte_get_timer_cycles());
+        ASSERT_TRUE(ok);
+    }
+    EXPECT_EQ(ti->size(), 6u);
+    EXPECT_EQ(ti->get_seq(), seq_t{3});
+    EXPECT_EQ(ti->get_current_wnd(), 122u);
+
+    // Cumulative ACK through seq MAX (wraps across boundary), covers 3 packets
+    ti->acknowledge(seq_t{UINT32_MAX}, rte_get_timer_cycles());
+    EXPECT_EQ(ti->size(), 3u);
+    EXPECT_EQ(ti->get_current_wnd(), 125u);
+
+    // Cumulative ACK through seq 2 (post-wrap), covers remaining 3 packets
+    ti->acknowledge(seq_t{2}, rte_get_timer_cycles());
+    EXPECT_EQ(ti->size(), 0u);
+    EXPECT_EQ(ti->get_current_wnd(), 128u);
+}
+
+TEST_F(TransportInputTest, SackSeqWrapAround) {
+    // Start near UINT32_MAX so sequences wrap around 0
+    delete ti;
+    ti = new transport_txpath(*cc, seq_t{UINT32_MAX - 2});
+    ti->update_budget(128);
+
+    // Send 6 packets: seqs MAX-2, MAX-1, MAX, 0, 1, 2
+    auto now = rte_get_timer_cycles(); 
+    for (int i = 0; i < 6; ++i) {
+        auto *msg = make_pkt();
+        bool ok = ti->record_pkt(mbuf_take_owner_ship(msg), [](mbuf_ptr&, seq_t) {}, now);
+        ASSERT_TRUE(ok);
+    }
+    EXPECT_EQ(ti->size(), 6u);
+    EXPECT_EQ(ti->get_current_wnd(), 122u);
+
+    {
+        auto now = rte_get_timer_cycles();
+        while (rte_get_timer_cycles() < now + 100 * get_ticks_us())
+            ;
+    }
+
+    // Cumulative ACK seq MAX-2, leaving unacked: MAX-1, MAX, 0, 1, 2
+    ti->acknowledge(seq_t{UINT32_MAX - 2}, rte_get_timer_cycles());
+    EXPECT_EQ(ti->size(), 5u);
+    EXPECT_EQ(ti->get_current_wnd(), 123u);
+
+    // SACK bits 1 and 3 in unacked [MAX-1, MAX, 0, 1, 2] → marks MAX and 1
+    protocol::ft_sack_payload sack{};
+    sack.bit_map[0] = (1ull << 1) | (1ull << 3);
+    sack.bit_map_len = 5;
+    ti->acknowledge_sack(&sack, rte_get_timer_cycles());
+    // SACK does not return credits
+    EXPECT_EQ(ti->get_current_wnd(), 123u);
+
+     now = rte_get_timer_cycles();
+    while (rte_get_timer_cycles() < now + 10 * get_ticks_us())
+        ;
+    ti->detect_loss(rte_get_timer_cycles());
+
+    // Unsacked packets: MAX-1 (bit 0), 0 (bit 2), 2 (bit 4) → 3 retransmitted
+    std::vector<mbuf*> retransmitted;
+    ti->advance_recovery([&](mbuf* m) { retransmitted.push_back(m); return true; }, rte_get_timer_cycles());
+    EXPECT_EQ(retransmitted.size(), 2u);
+
+    // Cumulative ACK through seq 2 covers everything, returns all remaining credits
+    ti->acknowledge(seq_t{2}, rte_get_timer_cycles());
+    EXPECT_EQ(ti->size(), 0u);
+    EXPECT_EQ(ti->get_current_wnd(), 128u);
+}
+
 TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
     // Record 8 packets (seq 0..7)
     for (int i = 0; i < 8; ++i) {
