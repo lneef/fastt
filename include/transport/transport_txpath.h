@@ -81,7 +81,7 @@ public:
       if (entry.seq == least_unacked_pkt || ts - entry.xmit_ts >= rck.rtt) {
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
         assert(entry.link.is_linked());
-        inflight -= entry.packet->data_len;
+        --inflight_pkts;
         entry.link.unlink();
         entry.queued = true;
         retransmission_queue.push_back(entry);
@@ -103,7 +103,7 @@ public:
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
         assert(entry.link.is_linked());
         entry.link.unlink();
-        inflight -= entry.packet->data_len;
+        --inflight_pkts;
         entry.queued = true;
         retransmission_queue.push_back(entry);
         ++lost;
@@ -114,8 +114,9 @@ public:
   }
 
   unsigned get_current_wnd() const { return budget; }
-  bool can_transmit(size_t requested) {
-    return budget > 0 && cc.space(inflight, requested);
+
+  bool can_transmit() {
+    return budget > 0 && (cc.space(inflight_pkts) > 0 || cc.rate_limited());
   }
 
   bool check_timeout(uint64_t now) {
@@ -140,13 +141,12 @@ public:
         }
         assert(desc.link.is_linked());
       }
-      if(!desc.sacked && !desc.queued){
-          assert(inflight >= desc.packet->data_len);
-          inflight -= desc.packet->data_len;
+      if (!desc.sacked && !desc.queued) {
+        assert(inflight_pkts >= 1);
+        --inflight_pkts;
       }
       budget += desc.crd;
-      acked += desc.packet->data_len;
-
+      ++acked;
       unacked.pop_front();
     }
 
@@ -164,7 +164,7 @@ public:
       rearm(now);
     ctor(pkt, seq);
     pkt->xmit = false;
-    inflight += pkt->data_len;
+    ++inflight_pkts;
     unacked.emplace_back(mbuf_take_owner_ship(pkt), now, seq++, 0, false);
     xmit_list.push_back(unacked.back());
   }
@@ -178,21 +178,20 @@ public:
     --budget;
     ctor(pkt, seq);
     pkt->xmit = false;
-    inflight += pkt->data_len;
+    ++inflight_pkts;
     unacked.emplace_back(std::move(pkt), now, seq++, 1, false);
     xmit_list.push_back(unacked.back());
     return true;
   }
 
-  template <typename F> void advance_recovery(F &&f) {
+  template <typename F> void advance_recovery(F &&f, uint64_t now) {
     if (retransmission_queue.empty())
       return;
     auto sz = retransmission_queue.size();
-    auto now = rte_get_timer_cycles();
     while (sz-- > 0) {
       auto &desc = retransmission_queue.front();
       assert(desc.queued);
-      if (!cc.space(inflight, desc.packet->data_len))
+      if (!cc.space(inflight_pkts))
         break;
       if (!f(desc.packet.get()))
         break;
@@ -210,7 +209,6 @@ public:
     entry->packet->xmit = false;
     entry->queued = false;
     entry->link.unlink();
-    inflight += entry->packet->data_len;
     xmit_list.push_back(*entry);
   }
 
@@ -247,7 +245,7 @@ public:
         desc.sacked = true;
         assert(desc.link.is_linked());
         desc.link.unlink();
-        inflight -= desc.packet->data_len;
+        --inflight_pkts;
       }
     }
 
@@ -258,16 +256,18 @@ public:
   }
 
   auto size() { return unacked.size(); }
+
   void update_srtt(uint64_t est) {
     if (rtt == 0)
       rtt = est;
     else
       rtt = filter::exp_filter(rtt, est);
-    rto = std::max(rtt, default_rto);
+    rto = std::max(2 * rtt, default_rto);
     stats.rtt = rtt;
   }
 
   seq_t get_seq() const { return seq; }
+
   uint64_t get_srtt() const { return rtt; }
 
   bool all_acked() const { return least_unacked_pkt == seq; }
@@ -288,7 +288,7 @@ private:
   statistics stats;
 
   swift &cc;
-  uint64_t inflight = 0;
+  uint64_t inflight_pkts = 0;
 
   std::deque<sender_entry> unacked;
   intrusive_list_t<sender_entry> retransmission_queue;

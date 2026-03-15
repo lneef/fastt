@@ -32,7 +32,7 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
                   ntohs(cfg.transport_ports.dport),
                   ntohs(cfg.transport_ports.sport));
   auto [it, inserted] = flows.emplace(
-      ft, std::make_unique<connection>(&pkt_if, &sb, cfg, sport, dport));
+      ft, std::make_unique<connection>(&pkt_if, &sb, this, cfg, sport, dport));
   if (!inserted)
     return nullptr;
   it->second->open_connection(rx_flow_sport, rx_flow_dport);
@@ -44,6 +44,7 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
 
 void connection_manager::run(concurrency::scheduler &scheduler) {
   fetch_from_qpair();
+  update_current_timer_cycles();
   accept_connections([&](connection *con) {
     assert(server_parent->services.find(ntohs(con->get_flow_tuple().sport)) !=
            server_parent->services.end());
@@ -51,11 +52,16 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
         server_parent->services[ntohs(con->get_flow_tuple().sport)];
     scheduler.schedule(service_handler(scheduler, *con).handle);
   });
-  flush();
+
   for (auto &con : ready)
     con.acknowledge();
-  for (auto &con : ready)
+  flush();
+
+  for (auto &con : ready){
+    con.perform_recovery();  
     concurrency::make_progress(con);
+  }
+
   ready.clear();
   scheduler.run();
   check_timeouts();

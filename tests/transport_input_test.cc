@@ -57,7 +57,7 @@ TEST_F(TransportInputTest, SackMarksCorrectEntries) {
     ti->detect_loss(rte_get_timer_cycles());
 
     std::vector<mbuf*> retransmitted;
-    ti->advance_recovery([&](mbuf* m) { retransmitted.push_back(m); return true; });
+    ti->advance_recovery([&](mbuf* m) { retransmitted.push_back(m); return true; }, rte_get_timer_cycles());
 
     EXPECT_EQ(retransmitted.size(), 2u);
 }
@@ -101,7 +101,7 @@ TEST_F(TransportInputTest, RetransmissionTransmitsCorrectPacket) {
 
     // Collect retransmitted packets
     std::vector<mbuf*> retransmitted;
-    ti->advance_recovery([&](mbuf* m) { retransmitted.push_back(m); return true; });
+    ti->advance_recovery([&](mbuf* m) { retransmitted.push_back(m); return true; }, rte_get_timer_cycles());
 
     // Expect seq 1 and seq 3 to be retransmitted (seq 2 was SACKed)
     ASSERT_EQ(retransmitted.size(), 1u);
@@ -200,11 +200,11 @@ TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
         ;
     ti->detect_loss(rte_get_timer_cycles());
     std::vector<mbuf*> retransmitted;
-    ti->advance_recovery([&](mbuf *m) { retransmitted.push_back(m); return true; });
+    ti->advance_recovery([&](mbuf *m) { retransmitted.push_back(m); return true; }, rte_get_timer_cycles());
     EXPECT_EQ(retransmitted.size(), 3u);
 
     std::vector<mbuf*> second_round;
-    ti->advance_recovery([&](mbuf* m) { second_round.push_back(m); return true; });
+    ti->advance_recovery([&](mbuf* m) { second_round.push_back(m); return true; }, rte_get_timer_cycles());
     EXPECT_EQ(second_round.size(), 0u);
 
     protocol::ft_sack_payload sack2{};
@@ -220,7 +220,7 @@ TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
     // Only the still-unsacked packets that weren't already queued should appear
     // seq 3, 5, 7 were already retransmitted, so they should not be re-queued
     std::vector<mbuf*> third_round;
-    ti->advance_recovery([&](mbuf* m) { third_round.push_back(m); return true; });
+    ti->advance_recovery([&](mbuf* m) { third_round.push_back(m); return true; }, rte_get_timer_cycles());
     EXPECT_EQ(third_round.size(), 0u);
 }
 

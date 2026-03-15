@@ -112,8 +112,8 @@ public:
     auto it = arp_table.find(cfg.ip);
     assert(it != arp_table.end());
     eth_header(dpdk_mbuf, smac, it->second);
-    assert(dpdk_mbuf->pkt_len == pkt->data_len + dpdk_mbuf->l2_len +
-                                     dpdk_mbuf->l3_len + dpdk_mbuf->l4_len);
+    assert(dpdk_mbuf->pkt_len == static_cast<size_t>(pkt->data_len + dpdk_mbuf->l2_len +
+                                     dpdk_mbuf->l3_len + dpdk_mbuf->l4_len));
     qp->enqueue_pkt(dpdk_mbuf);
   }
 

@@ -11,8 +11,19 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <generic/rte_cycles.h>
 #include <gtest/gtest.h>
 #include <optional>
+
+struct mock_manager {
+  uint64_t ts = 0;
+
+  mock_manager() : ts(rte_get_timer_cycles()) {}
+
+  uint64_t get_current_timer_cycles() const { return ts; }
+
+  void update_time() { ts = rte_get_timer_cycles(); }
+};
 
 struct mock_packet_if {
   std::deque<mbuf *> sent_pkts;
@@ -47,7 +58,7 @@ struct mock_packet_if {
 // --- thin wrapper around transport<mock_packet_if> that mimics the
 //     connection coro interface (make_progress / co_await send/recv) ---
 
-using mock_transport = transport<mock_packet_if>;
+using mock_transport = transport<mock_packet_if, mock_manager>;
 
 struct mock_connection {
   mock_transport &tp;
@@ -91,15 +102,17 @@ protected:
   void SetUp() override {
     slab = new slab_allocator{};
     mock = new mock_packet_if();
+    mgr = new mock_manager();
     cfg.ip = 0x01020304;
     cfg.transport_ports.sport = kSport;
     cfg.transport_ports.dport = kDport;
-    tp = new mock_transport(mock, slab, cfg, kSport, kDport);
+    tp = new mock_transport(mock, slab, mgr, cfg, kSport, kDport);
   }
 
   void TearDown() override {
     delete tp;
     delete mock;
+    delete mgr;
     delete slab;
   }
 
@@ -155,6 +168,7 @@ protected:
 
   slab_allocator *slab;
   mock_packet_if *mock;
+  mock_manager *mgr;
   transport_config cfg;
   mock_transport *tp;
 };
@@ -298,11 +312,12 @@ TEST_F(TransportCoroTest, TwoConnectionsRecvThenSend) {
   static constexpr uint16_t kDport2 = 400;
 
   mock_packet_if mock2;
+  mock_manager mgr2;
   transport_config cfg2;
   cfg2.ip = 0x05060708;
   cfg2.transport_ports.sport = kSport2;
   cfg2.transport_ports.dport = kDport2;
-  mock_transport tp2(&mock2, slab, cfg2, kSport2, kDport2);
+  mock_transport tp2(&mock2, slab, &mgr2, cfg2, kSport2, kDport2);
 
   // Establish both transports
   establish(); // tp1
@@ -374,11 +389,12 @@ TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
   static constexpr size_t kSegSz = mock_transport::kMaxPayload;
 
   mock_packet_if mock2;
+  mock_manager mgr2;
   transport_config cfg2;
   cfg2.ip = 0x05060708;
   cfg2.transport_ports.sport = kSport2;
   cfg2.transport_ports.dport = kDport2;
-  mock_transport tp2(&mock2, slab, cfg2, kSport2, kDport2);
+  mock_transport tp2(&mock2, slab, &mgr2, cfg2, kSport2, kDport2);
 
   // Establish tp1 with crd=0 — no send credits
   {
@@ -595,23 +611,6 @@ TEST_F(TransportCoroTest, SendLargePayload) {
 }
 
 // --- DONE acknowledgement tests ---
-
-// Helper: build a FT_DONE packet that the remote would send to us.
-static mbuf *make_done_pkt(slab_allocator *slab, seq_t seq, seq_t ack,
-                           uint16_t sport, uint16_t dport) {
-  auto *msg = slab->alloc_default(sizeof(protocol::ft_header));
-  auto *hdr = msg->data<protocol::ft_header>();
-  hdr->type = protocol::pkt_type::FT_DONE;
-  hdr->sport = sport;
-  hdr->dport = dport;
-  hdr->seq = seq;
-  hdr->ack = ack;
-  hdr->ackframe = 0;
-  hdr->sack = 0;
-  hdr->crd = 0;
-  hdr->eom = 0;
-  return msg;
-}
 
 TEST_F(TransportCoroTest, SendAfterWndReturn) {
   auto *pkt = slab->alloc_default(sizeof(protocol::ft_header));

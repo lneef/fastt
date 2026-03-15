@@ -24,7 +24,7 @@ class server_iface;
 class client_iface;
 class connection_manager;
 
-using connection = transport<>;
+using connection = transport<packet_if, connection_manager>;
 
 struct statistics {
   std::vector<transport_statistics> ts;
@@ -33,6 +33,7 @@ struct statistics {
 
 class connection_manager {
   static constexpr uint16_t kdefaultBurstSize = 64;
+  friend connection;
 public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
@@ -69,11 +70,8 @@ public:
   }
 
   void check_timeouts() {
-    for (auto &con : active) {
-      auto now = rte_get_timer_cycles();
-      con.check_timeout(now);
-      con.perform_recovery();
-    }
+    for (auto &con : active)
+      con.check_timeout(r_ts);
   }
 
   void acknowledge() {
@@ -94,6 +92,7 @@ public:
 
   void poll_client() {
     fetch_from_qpair();
+    update_current_timer_cycles();
     for (auto it = active.begin(), end = active.end(); it != end;) {
       auto &timpl = *it;
       ++it;
@@ -144,7 +143,7 @@ public:
     FASTT_LOG_DEBUG("New Connection %s \n", tuple.print().c_str());
     // swap ports since we need the rx port as src
     auto [it, inserted] = flows.emplace(
-        tuple, std::make_unique<connection>(&pkt_if, &sb, cfg, tuple.dport,
+        tuple, std::make_unique<connection>(&pkt_if, &sb, this, cfg, tuple.dport,
                                             tuple.sport));
     if (inserted) {
       active.push_front(*it->second);
@@ -152,7 +151,7 @@ public:
     } else if (it->second->get_state() == connection_state::DISCONNECTED) {
       // if the connection has been closed, replace it
       it->second.reset();
-      it->second = std::make_unique<connection>(&pkt_if, &sb, cfg, tuple.dport,
+      it->second = std::make_unique<connection>(&pkt_if, &sb, this, cfg, tuple.dport,
                                                 tuple.sport);
       active.push_front(*it->second);
       inserted = true;
@@ -180,6 +179,14 @@ public:
       return &sb;
   }
 
+  __inline uint64_t get_current_timer_cycles() const{
+      return r_ts;
+  }
+
+  void update_current_timer_cycles(){
+      r_ts = rte_get_timer_cycles();
+  }
+
   void flush() { pkt_if.flush_out_buffer(); }
 
   ~connection_manager() {}
@@ -189,6 +196,7 @@ private:
   qpair dev;
   slab_allocator sb;
   packet_if pkt_if;
+  uint64_t r_ts = rte_get_timer_cycles();
   intrusive_list_t<connection> active;
   intrusive_list_t<connection> ready;
   uint16_t cores;

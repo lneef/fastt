@@ -18,23 +18,8 @@
 #include "transport_rxpath.h"
 #include "transport/congestion_control.h"
 #include "transport_txpath.h"
+#include "transport_stats.h"
 #include "util.h"
-
-struct transport_statistics {
-  uint64_t retransmitted;
-  seq_t acked;
-  uint64_t sent, retransmissions;
-  double rtt;
-  transport_statistics(uint64_t retransmitted, seq_t acked, uint64_t sent,
-                       uint64_t retransmissions, uint64_t rtt_est)
-      : retransmitted(retransmitted), acked(acked), sent(sent),
-        retransmissions(retransmissions) {
-    rtt = static_cast<double>(rtt_est);
-  }
-
-  transport_statistics()
-      : retransmitted(), acked(), sent(), retransmissions(), rtt() {}
-};
 
 enum class connection_state {
   ESTABLISHING,
@@ -45,27 +30,25 @@ enum class connection_state {
 
 class connection_manager;
 
-template <typename P = packet_if> class transport {
-  static constexpr uint16_t kFlowLimit = 1;
-  friend class connection_manager;
+template <typename P = packet_if, typename M = connection_manager> class transport {
+  friend M;
 public:
   static constexpr uint16_t kMaxPayload = 1500 - protocol::defs::kHeaderMTUlen;
-  static constexpr uint16_t kMaxBurstSize = 16;
   struct {
     uint64_t sent = 0;
     uint64_t retransmissions = 0;
   } stats;
 
-  transport(P *pkt_sink, slab_allocator *sb, transport_config cfg,
+  transport(P *pkt_sink, slab_allocator *sb, M* manager, transport_config cfg,
             uint16_t sport, uint16_t dport)
-      : cc(get_ticks_us() * 100), trx(), builder(sport, dport), cfg(cfg), ttx(cc), sb(sb), acb(),
+      : cc(get_ticks_us() * 100), trx(), builder(sport, dport), cfg(cfg), ttx(cc), sb(sb), acb(), manager(manager),
         pkt_if(pkt_sink) {}
 
   void perform_recovery() {
     ttx.advance_recovery([&](mbuf *pkt) -> bool {
       pkt_if->consume_pkt_mbuf(pkt, cfg);
       return true;
-    });
+    }, manager->get_current_timer_cycles());
   }
 
   void check_timeout(uint64_t now) {
@@ -75,6 +58,7 @@ public:
       return;
     if (ttx.check_timeout(now)) {
       ttx.rto_retransmit(now);
+      perform_recovery();
       ttx.rearm(now);
     }
   }
@@ -129,7 +113,7 @@ public:
 
   bool process_pkt(mbuf *msg) {
     auto *hdr = msg->data<const protocol::ft_header>();
-    auto ts = rte_get_timer_cycles();
+    auto ts = manager->get_current_timer_cycles();
     switch (hdr->type) {
     case protocol::pkt_type::FT_MSG: {
       FASTT_LOG_DEBUG("Got new msg seq=%u ack=%u ackframe=%u wnd=%u\n",
@@ -226,7 +210,7 @@ public:
   void close_connection() {
     // just send for now  
     // we wait till everything is acked anyway because of RPC pattern
-    auto now = rte_get_timer_cycles();
+    auto now = manager->get_current_timer_cycles();
     auto *pkt = sb->alloc_default(sizeof(protocol::ft_header));
     ttx.record_ctrl_pkt(
         pkt,
@@ -251,7 +235,7 @@ public:
         msg->data<protocol::ft_init_payload>(sizeof(protocol::ft_header));
     init_payload->sport = rx_flow_sport;
     init_payload->dport = rx_flow_dport;
-    auto now = rte_get_timer_cycles();
+    auto now = manager->get_current_timer_cycles();
     ttx.record_ctrl_pkt(
         msg,
         [&, budget = trx.get_available_wnd()](mbuf *msg, seq_t seq) {
@@ -260,7 +244,7 @@ public:
           builder.prepare_init_header(msg, seq, budget);
         },
         now);
-    ttx.rearm(rte_get_timer_cycles());
+    ttx.rearm(manager->get_current_timer_cycles());
     auto *hdr = msg->data<protocol::ft_header>();
     assert(hdr->type == protocol::FT_SYN);
     FASTT_LOG_DEBUG("Sent SYN seq=%u wnd=%u flow=%s\n", hdr->seq.v, hdr->crd,
@@ -271,7 +255,7 @@ public:
   void accept_connection() {
     auto *pkt = sb->alloc_default(sizeof(protocol::ft_header));
     auto ack = trx.get_last_rcvd_in_seq();
-    auto now = rte_get_timer_cycles();
+    auto now = manager->get_current_timer_cycles();
     ttx.record_ctrl_pkt(
         pkt,
         [&, budget = trx.get_available_wnd()](mbuf *msg, seq_t seq) {
@@ -310,9 +294,9 @@ public:
   }
 
   ssize_t send_single_seg(sgl &msgl) {
-    if (!ttx.can_transmit(msgl.begin()->data_len + sizeof(protocol::ft_header)))
+    if (!ttx.can_transmit())
       return -EAGAIN;
-    auto now = rte_get_timer_cycles();
+    auto now = manager->get_current_timer_cycles();
     auto pkt = std::move(msgl).take_head();
     auto send_size = pkt->data_len;
     auto ctor = [&](mbuf_ptr &pkt, seq_t seq) {
@@ -387,11 +371,11 @@ private:
   transport_txpath ttx;
   slab_allocator *sb;
   ack_cb acb;
+  M* manager;
   P *pkt_if;
-  float rate;
   connection_state cstate = connection_state::ESTABLISHING;
 public:
-    std::optional<concurrency::coro_handle> coro;
+  std::optional<concurrency::coro_handle> coro;
   list_hook link;
   list_hook ready;
 };

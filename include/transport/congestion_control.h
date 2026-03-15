@@ -1,6 +1,4 @@
 #pragma once
-#include "debug.h"
-#include "transport/protocol.h"
 #include "util.h"
 #include <algorithm>
 #include <cstdint>
@@ -30,8 +28,8 @@ static __inline constexpr float fast_inv_sqrt(float val) {
 
 
 struct swift {
-  static constexpr float mss = 1500 - protocol::defs::kftOffset;
-  static constexpr float initial_len = 1500 - protocol::defs::kftOffset;
+  static constexpr float mss = 1;
+  static constexpr float initial_len = 8;
   static constexpr float ai = 16;
   static constexpr float beta = 0.8;
   static constexpr float max_md = 0.5;
@@ -46,14 +44,13 @@ struct swift {
       :  retransmit_cnt(0), last_decrease(0),
         base_target_delay(target_delay), cwnd_size(initial_len),
         min_wd_size(initial_len) {
-            hdr_init(10, 200, 3, &hist);
+            hdr_init(1, 200, 3, &hist);
             
         }
 
   void on_ack(uint64_t acked, uint64_t now, uint64_t srtt, uint64_t delay) {
     retransmit_cnt = 0;
     bool can_decrease = now - last_decrease > srtt;
-    hdr_record_value(hist, delay / get_ticks_us());
     // Skip hop delay
     auto target_delay =
         base_target_delay +
@@ -67,6 +64,10 @@ struct swift {
       last_decrease = now;
     }
     update_stats();
+  }
+
+  constexpr bool rate_limited() const{
+      return false;
   }
 
   void on_retransmission_timeout(std::size_t nb, uint64_t rtt, uint64_t now) {
@@ -99,10 +100,8 @@ struct swift {
     cwnd_size = std::clamp<float>(cwnd_size, 1 * mss, 128 * mss);
   }
 
-  unsigned space(size_t inflight, size_t requested) const {
-    // cwnd could have been decreased by a loss or excess rtt  
-    auto cap = std::min<unsigned>(requested, cwnd_size > inflight ? cwnd_size - inflight : 0);
-    FASTT_LOG_DEBUG("cwnd%u\n", cap);
+  unsigned space(size_t inflight) const {
+    auto cap = std::min<unsigned>(1, cwnd_size > inflight ? cwnd_size - inflight : 0);
     return cap;
   }
 
