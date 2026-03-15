@@ -239,8 +239,6 @@ public:
     ttx.record_ctrl_pkt(
         msg,
         [&, budget = trx.get_available_wnd()](mbuf *msg, seq_t seq) {
-          FASTT_LOG_DEBUG("Sent SYN seq=%u wnd=%u flow=%s\n", seq.v, budget,
-                          get_flow_tuple().print().c_str());
           builder.prepare_init_header(msg, seq, budget);
         },
         now);

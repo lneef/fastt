@@ -47,12 +47,9 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 
   netconfig conf;
   static const struct option long_options[] = {
-      {"dip", required_argument, 0, 0},
-      {"sip", required_argument, 0, 0},
-      {"dmac", required_argument, 0, 0},
-      {"sport", required_argument, 0, 0},
-      {"dport", required_argument, 0, 0},
-      {0, 0, 0, 0}};
+      {"dip", required_argument, 0, 0},   {"sip", required_argument, 0, 0},
+      {"dmac", required_argument, 0, 0},  {"sport", required_argument, 0, 0},
+      {"dport", required_argument, 0, 0}, {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
     switch (option_index) {
@@ -98,9 +95,7 @@ static int lcore_fn(void *arg) {
   uint64_t t = 0;
   uint64_t c = 0;
 
-  auto now = rte_get_timer_cycles();
-  while (t < dur) {
-    cif.poll();
+  auto rx_fn = [&] {
     for (;;) {
       sgl rsgl;
       auto rcvd = kv.recv(rsgl);
@@ -112,6 +107,12 @@ static int lcore_fn(void *arg) {
       kv.complete(resp.id);
       ++c;
     }
+  };
+
+  auto now = rte_get_timer_cycles();
+  while (t < dur) {
+    cif.poll();
+    rx_fn();
     auto *tx = kv.start();
     if (!tx)
       continue;
@@ -121,7 +122,16 @@ static int lcore_fn(void *arg) {
     tx->key = key;
     sgl ssgl;
     ssgl.add_segment_safe(mbuf_take_owner_ship(m));
-    auto sent = kv.send(ssgl);
+    auto sent = 0u;
+    while(sent < sizeof(kv::kv_packet<kv::kv_request>)){
+        auto retval = kv.send(ssgl);
+        if(retval == -EAGAIN){
+            cif.poll();
+            rx_fn();
+        }else
+            sent += retval;
+    }
+    kv.send(ssgl);
     assert(sent == sizeof(kv::kv_packet<kv::kv_request>));
     ++t;
   }
@@ -161,8 +171,8 @@ static void run(lcore_function_t *f, void *args) {
   std::vector<std::shared_ptr<dpdk_allocator>> allocators;
   allocators.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
-    allocators.emplace_back(dpdk_allocator::create(
-        ("mpool" + std::to_string(i)).c_str(), 4095));
+    allocators.emplace_back(
+        dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095));
     ++i;
   }
   auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);

@@ -81,8 +81,9 @@ public:
       if (entry.seq == least_unacked_pkt || ts - entry.xmit_ts >= rck.rtt) {
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
         assert(entry.link.is_linked());
-        --inflight_pkts;
         entry.link.unlink();
+        assert(inflight_pkts > 0);
+        --inflight_pkts;
         entry.queued = true;
         retransmission_queue.push_back(entry);
         ++lost;
@@ -103,6 +104,7 @@ public:
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
         assert(entry.link.is_linked());
         entry.link.unlink();
+        assert(inflight_pkts > 0);
         --inflight_pkts;
         entry.queued = true;
         retransmission_queue.push_back(entry);
@@ -142,7 +144,7 @@ public:
         assert(desc.link.is_linked());
       }
       if (!desc.sacked && !desc.queued) {
-        assert(inflight_pkts >= 1);
+        assert(inflight_pkts > 0);
         --inflight_pkts;
       }
       budget += desc.crd;

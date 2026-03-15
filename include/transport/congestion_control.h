@@ -36,7 +36,6 @@ struct swift {
   static constexpr uint64_t reset_threshold = 16;
   uint64_t retransmit_cnt, last_decrease;
   float base_target_delay, cwnd_size;
-  float pacing = 0;
   hdr_histogram *hist;
   const uint64_t min_wd_size;
 
