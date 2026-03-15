@@ -1,14 +1,14 @@
 #include "connection.h"
+#include "dpdk/allocator.h"
 #include "iface.h"
 #include "kv_protocol.h"
-#include "msg_fragment.h"
 #include "server.h"
 #include "task/async.h"
 #include "task/task.h"
 #include <arpa/inet.h>
 #include <atomic>
-#include <bits/types/struct_iovec.h>
 #include <cstdint>
+#include <cstring>
 #include <getopt.h>
 #include <memory>
 #include <random>
@@ -32,7 +32,7 @@ struct netconfig {
 
 struct lcore_server_adapter {
   std::unique_ptr<server_iface> iface;
-  std::shared_ptr<msg_fragment_allocator> allocator;
+  std::shared_ptr<dpdk_allocator> allocator;
 };
 
 static std::random_device dev;
@@ -95,43 +95,29 @@ int lcore_server_fun(void *arg) {
   auto myid = rte_lcore_index(rte_lcore_id());
   auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
   auto *server = adapters[myid].iface.get();
-  server->register_service(2,
-                           [&](concurrency::scheduler &schdlr,
-                               connection &con) -> concurrency::task {
-                             kv::kv_packet<kv::kv_request> req;
-                             kv::kv_packet<kv::kv_completion> resp;
-                             while (true) {
-                               size_t rem = 0;
-                               auto sz = co_await recv(schdlr, con, &req,
-                                                       sizeof(req), rem);
-                               if (sz == 0) {
-                                 con.accept_close();
-                                 co_return;
-                               }
-                               assert(sz == sizeof(req));
-                               serve(&resp, &req);
-                               msg_hdr m;
-                               m.set_data(&resp, sizeof(resp));
-                               auto sent = co_await send(schdlr, con, m);
-                               if (sent == 0) {
-                                 con.accept_close();
-                                 co_return;
-                               }
-                               assert(sent == sizeof(resp));
-                             }
-                           });
+  auto *slab = server->get_alloc();
   server->register_service(
-      10, [&](concurrency::scheduler &schdlr, connection &con) -> concurrency::task{
-        const size_t buf_len = 256 * 1024;
-        std::vector<char> buf(buf_len);
-        size_t rem = 0;
+      2,
+      [&](concurrency::scheduler &schdlr,
+          connection &con) -> concurrency::task {
+        sgl ssgl;
+        sgl rsgl;
         while (true) {
-          auto sz = co_await recv(schdlr, con, buf.data(), buf_len, rem);
+          auto sz = co_await recv(schdlr, con, rsgl);
           if (sz == 0) {
-            con.accept_close();
             co_return;
           }
-          assert(sz == buf_len);
+          assert(sz == sizeof(kv::kv_packet<kv::kv_request>));
+          auto pkt_ptr = slab->alloc_default_safe(
+              sizeof(kv::kv_packet<kv::kv_completion>));
+          serve(pkt_ptr->data<kv::kv_packet<kv::kv_completion>>(),
+                rsgl.head->data<kv::kv_packet<kv::kv_request>>());
+          ssgl.add_segment_safe(std::move(pkt_ptr));
+          auto sent = co_await send(schdlr, con, std::move(ssgl));
+          if (sent == 0) {
+            co_return;
+          }
+          assert(sent == sizeof(kv::kv_packet<kv::kv_completion>));
         }
       });
 
@@ -150,11 +136,11 @@ int run(netconfig &conf) {
   auto nthreads = rte_lcore_count();
   unsigned i = 0;
   uint16_t lcore_id;
-  std::vector<std::shared_ptr<msg_fragment_allocator>> allocators;
+  std::vector<std::shared_ptr<dpdk_allocator>> allocators;
   allocators.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
-    allocators.emplace_back(std::make_shared<msg_fragment_allocator>(
-        ("mpool" + std::to_string(i)).c_str(), 16383));
+     allocators.emplace_back(dpdk_allocator::create(
+        ("mpool" + std::to_string(i)).c_str(), 4095)); 
     ++i;
   }
   auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);

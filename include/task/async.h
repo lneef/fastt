@@ -1,15 +1,14 @@
 #pragma once
 #include "connection.h"
+#include "sgl.h"
 #include "task.h"
 
-concurrency::send_awaitable<connection> send(concurrency::scheduler &schdlr,
-                                             connection &con, msg_hdr &hdr) {
-  return concurrency::send_awaitable<connection>(schdlr, con, hdr);
+inline concurrency::send_awaitable_sgl<connection> send(concurrency::scheduler &schdlr,
+                                             connection &con, sgl&& msgl) {
+  return concurrency::send_awaitable_sgl<connection>(schdlr, con, std::move(msgl));
 }
 
-concurrency::recv_awaitable<connection> recv(concurrency::scheduler &schdlr,
-                                             connection &con, void *buf,
-                                             size_t len, size_t &remaining) {
-  return concurrency::recv_awaitable<connection>(schdlr, con, buf, len,
-                                                 remaining);
+inline concurrency::recv_awaitable_sgl<connection> recv(concurrency::scheduler &schdlr,
+                                             connection &con, sgl &msgl) {
+  return concurrency::recv_awaitable_sgl<connection>(schdlr, con, &msgl);
 }

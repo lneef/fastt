@@ -1,5 +1,3 @@
-/* SPDX-License-Identifier: MIT */
-
 #include <arpa/inet.h>
 #include <bit>
 #include <bits/getopt_core.h>
@@ -102,17 +100,32 @@ static uint64_t request_batch(uring::client_iface *st, slot_storage &slt_strge,
   return t;
 }
 
+static void copy_to_buffer(uring::iface_base &iface, uring::slot &slt){
+  while (!slt.incoming.empty()) {
+    auto [bidx, blen] = slt.incoming.front();
+    if (!slt.rbuffer.enough_space(blen))
+      break;
+    auto *buf = iface.ctx->get_buffer(bidx);
+    slt.rbuffer.cpy(buf, blen);
+    uring::recycle_buffer(iface.ctx.get(), bidx);
+    slt.incoming.pop_front();
+  }
+}
+
+
 unsigned prsd = 0;
-static std::pair<size_t, int> parse_request(uring::server_iface &iface,
-                                            uint8_t *data, size_t size,
-                                            unsigned idx) {
+static void parse_request(uring::server_iface &iface,
+                                            uring::slot &slt) {
   using kv_request_t = kv::kv_packet<kv::kv_request>;
   using kv_response_t = kv::kv_packet<kv::kv_completion>;
-  int ret = 0;
   unsigned i = 0;
   struct io_uring_sqe *sqe = nullptr;
   unsigned char *sbuf = nullptr;
   unsigned resp_off = 0;
+  copy_to_buffer(iface, slt);
+
+  auto size = slt.rbuffer.off;
+  auto *data = slt.rbuffer.data();
   for (; i < size;) {
     auto *req = reinterpret_cast<kv_request_t *>(data + i);
     if (size - i < sizeof(kv_request_t))
@@ -120,16 +133,15 @@ static std::pair<size_t, int> parse_request(uring::server_iface &iface,
 
     if (!sbuf) {
       sbuf = static_cast<uint8_t *>(iface.pool.alloc());
-      if (!sbuf) 
-          std::abort();
+      if (!sbuf) {
+        goto end;
+      }
     }
 
     if (!sqe) {
       sqe = iface.ctx->get_sqe();
       if (!sqe) {
-        assert(0);
         iface.pool.free(sbuf);
-        ret = -1;
         goto end;
       }
     }
@@ -138,28 +150,31 @@ static std::pair<size_t, int> parse_request(uring::server_iface &iface,
     resp_off += sizeof(kv_response_t);
     if (iface.pool.kElemSize - resp_off < sizeof(kv_response_t)) {
       iface.prepare_send(sbuf, resp_off, std::bit_cast<uint64_t>(sbuf),
-                         iface.clients[idx], sqe);
+                         iface.clients[slt.idx], sqe);
       resp_off = 0;
       sbuf = nullptr;
       sqe = nullptr;
     }
-
     i += sizeof(kv_request_t);
   }
 end:
   if (sqe)
     iface.prepare_send(sbuf, resp_off, std::bit_cast<uint64_t>(sbuf),
-                       iface.clients[idx], sqe);
+                       iface.clients[slt.idx], sqe);
   prsd += i;
   std::memmove(data, data + i, size - i);
-  return {size - i, ret};
+  slt.rbuffer.reset(size - i);
+  copy_to_buffer(iface, slt);
 }
 
-static std::pair<size_t, unsigned>
-parse_completion(slot_storage &slt_strge, uint8_t *data, size_t size) {
+static unsigned 
+parse_completion(uring::client_iface& iface, uring::slot& slt, slot_storage &slt_strge) {
   using packet_t = kv::kv_packet<kv::kv_completion>;
   unsigned i = 0;
   unsigned c = 0;
+  copy_to_buffer(iface, slt);
+  auto data = slt.rbuffer.data();
+  auto size = slt.rbuffer.off;
   for (; i < size;) {
     if (size - i < sizeof(packet_t))
       break;
@@ -172,7 +187,9 @@ parse_completion(slot_storage &slt_strge, uint8_t *data, size_t size) {
   }
   prsd += i;
   std::memmove(data, data + i, size - i);
-  return {size - i, c};
+  slt.rbuffer.reset(size - i);
+  copy_to_buffer(iface, slt);
+  return c;
 }
 
 static uint64_t process_completions(uring::client_iface *st,
@@ -189,13 +206,12 @@ static uint64_t process_completions(uring::client_iface *st,
     fprintf(stderr, "submission failed %s\n", strerror(-ret));
     return ret;
   }
+  uring::drain_rx_renew(st);
   io_uring_for_each_cqe(&st->ctx->ring, head, cqe) {
-    st->handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {
+    st->handle_cqe(cqe, [&](unsigned idx, size_t size, unsigned sidx) {
       (void)sidx;
-      st->rbuffer.cpy(buf, size);
-      auto [off, nc] = parse_completion(slt_strge, st->rbuffer.buffer.data(),
-                                        st->rbuffer.off);
-      st->rbuffer.reset(off);
+      st->slt.incoming.emplace_front(idx, size);
+      auto nc = parse_completion(*st, st->slt, slt_strge);
 
       c += nc;
       return 0;
@@ -265,28 +281,22 @@ static int server_fun(int port_arg, in_addr_t addr) {
       fprintf(stderr, "submission failed %s\n", strerror(-ret));
       return ret;
     }
+    uring::drain_rx_renew(&iface);
     unsigned cnt = 0;
     io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
-      ret = iface.handle_cqe(cqe, [&](void *buf, size_t size, unsigned sidx) {
-        auto &slt = iface.connection_state(sidx);
-        slt.rbuffer.cpy(buf, size);
-        rx += size;
-        auto [off, ret] =
-            parse_request(iface, slt.rbuffer.data(), slt.rbuffer.off, sidx);
-        slt.rbuffer.reset(off);
-        return ret;
-      });
+      iface.handle_cqe(cqe, [&](unsigned idx, size_t size, unsigned sidx) {
+            auto &slt = iface.connection_state(sidx);
+            slt.incoming.emplace_back(idx, size);
+            rx += size;
+            parse_request(iface, slt);
+            return 0;
+          });
       ++cnt;
-      if (ret)
-        break;
     }
     io_uring_cq_advance(&iface.ctx->ring, cnt);
 
-    for (auto &slt : iface.active) {
-      auto [off, ret] = parse_request(iface, slt.rbuffer.buffer.data(),
-                                      slt.rbuffer.off, slt.idx);
-      slt.rbuffer.reset(off);
-    }
+    for (auto &slt : iface.active) 
+        parse_request(iface, slt);
   }
   return 0;
 }

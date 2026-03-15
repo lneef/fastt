@@ -1,12 +1,15 @@
 #include "client.h"
 #include "connection.h"
+#include "dpdk/allocator.h"
 #include "iface.h"
 #include "kv.h"
 #include "kv_protocol.h"
-#include "msg_fragment.h"
+#include "sgl.h"
+#include "slab_allocator.h"
 #include "util.h"
 #include <arpa/inet.h>
 #include <atomic>
+#include <bits/getopt_core.h>
 #include <cassert>
 #include <cerrno>
 #include <charconv>
@@ -14,23 +17,15 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <generic/rte_cycles.h>
 #include <getopt.h>
+#include <hdr/hdr_histogram.h>
+#include <hdr/hdr_histogram_log.h>
 #include <iostream>
 #include <memory>
 #include <random>
 #include <ranges>
-#include <rte_common.h>
-#include <rte_cycles.h>
-#include <rte_eal.h>
-#include <rte_ethdev.h>
-#include <rte_ether.h>
-#include <rte_launch.h>
-#include <rte_lcore.h>
-#include <rte_mbuf.h>
-#include <rte_mbuf_core.h>
-#include <rte_mempool.h>
-#include <string_view>
 #include <sys/types.h>
 #include <vector>
 
@@ -40,15 +35,18 @@ struct netconfig {
   rte_ether_addr dmac;
   uint32_t sip, dip;
   uint16_t dport;
-  bool large = false;
+  uint64_t duration;
+  double rate;
   std::vector<uint16_t> sports;
 };
 
 struct lcore_adapter {
   std::vector<std::unique_ptr<client_iface>> cifs;
-  std::vector<std::shared_ptr<msg_fragment_allocator>> allocator;
+  std::vector<std::shared_ptr<dpdk_allocator>> allocator;
   con_config cfg;
   rte_ether_addr dmac;
+  uint64_t duration;
+  double rate;
 
   lcore_adapter(std::size_t n, con_config cfg)
       : cifs(n), allocator(n, nullptr), cfg(cfg) {}
@@ -59,13 +57,10 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 
   netconfig conf;
   static const struct option long_options[] = {
-      {"dip", required_argument, 0, 0},
-      {"sip", required_argument, 0, 0},
-      {"dmac", required_argument, 0, 0},
-      {"sport", required_argument, 0, 0},
-      {"dport", required_argument, 0, 0},
-      {"large", no_argument, 0, 0},
-      {0, 0, 0, 0}};
+      {"dip", required_argument, 0, 0},   {"sip", required_argument, 0, 0},
+      {"dmac", required_argument, 0, 0},  {"sport", required_argument, 0, 0},
+      {"dport", required_argument, 0, 0}, {"duration", required_argument, 0, 0},
+      {"rate", required_argument, 0, 0},  {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
     switch (option_index) {
@@ -90,10 +85,12 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
     case 4:
       conf.dport = atoi(optarg);
       break;
-    case 5: {
-      conf.large = true;
+    case 5:
+      conf.duration = atoll(optarg) * rte_get_timer_hz();
       break;
-    }
+    case 6:
+      conf.rate = std::stod(optarg);
+      break;
     default:
       break;
     }
@@ -101,40 +98,6 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
   return conf;
 }
 
-static int lcore_large(void *arg) {
-  auto *adapter = static_cast<lcore_adapter *>(arg);
-  auto me = rte_lcore_index(rte_lcore_id());
-  auto &cif = *adapter->cifs[me];
-  std::vector<char> data(256 * 1024, 'A');
-  auto do_send = [&](connection &con, msg_hdr &hdr) -> ssize_t {
-    auto sent = 0u;
-    while (sent < hdr.len) {
-      auto ret = con.send(hdr);
-      if (ret == -EAGAIN) {
-        cif.poll();
-        continue;
-      }
-      sent += ret;
-    }
-    return sent;
-  };
-  auto *con = cif.open_connection(adapter->cfg, rte_lcore_id(), adapter->dmac);
-  if (!con)
-    return -1;
-  while (!cif.probe_connection_setup_done(con))
-    ;
-  con->acknowledge_all(rte_get_timer_cycles());
-  cif.flush();
-
-  msg_hdr hdr;
-  hdr.set_data(data.data(), data.size());
-  do_send(*con, hdr);
-  con->wait_all_acked();
-  cif.close(con);
-  return 0;
-}
-
-static constexpr auto dur = 1e6;
 static int lcore_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
@@ -143,43 +106,70 @@ static int lcore_fn(void *arg) {
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
   kv_proxy kv(&cif);
-  kv.connect(adapter->cfg, 1, rte_lcore_id(), adapter->dmac);
-  uint64_t t = 0;
-  uint64_t c = 0;
+  kv.connect(adapter->cfg, rte_lcore_id(), adapter->dmac);
+  auto *sb = cif.manager.get_allocator();
 
-  kv::kv_packet<kv::kv_request> req;
-  kv::kv_packet<kv::kv_completion> resp;
-  auto now = rte_get_timer_cycles();
-  ssize_t rcvd = 0;
-  while (t < dur) {
-    cif.poll();
-    while ((rcvd = kv.recv(&resp, sizeof(resp)) > 0)) {
-      assert(resp.payload.key == kv[resp.id].key);
-      kv.complete(resp.id);
-      ++c;
+  std::exponential_distribution<double> exp(adapter->rate);
+  auto start_time = rte_get_timer_cycles() + 10 * rte_get_timer_hz();
+  auto ticks_per_sec = rte_get_timer_hz();
+  auto end_time = start_time + adapter->duration;
+  auto next = start_time + ticks_per_sec * exp(rng);
+  hdr_histogram *hist;
+  hdr_init(1, 500'000, 3, &hist);
+
+  std::deque<uint64_t> times;
+  std::deque<int64_t> reqs;
+  auto rx_fn = [&](kv_proxy &pry) {
+    for (;;) {
+      sgl rsgl;
+      auto rcvd = pry.recv(rsgl);
+      if (!rcvd)
+        break;
+      kv::kv_packet<kv::kv_completion> resp;
+      rsgl.head->read(&resp);
+      ensure(resp.payload.key == reqs.front());
+      assert(!times.empty());
+      hdr_record_value(hist, (rte_get_timer_cycles() - times.front()) /
+                                 get_ticks_us());
+      times.pop_front();
+      reqs.pop_front();
     }
-    auto *tx = kv.start();
-    if (!tx)
+  };
+
+  auto now = rte_get_timer_cycles();
+  times.push_back(next);
+  while (times.front() < end_time) {
+    cif.poll();
+    rx_fn(kv);
+    if (rte_get_timer_cycles() < times.empty())
       continue;
     int64_t key = dist(rng);
-    kv::create_kv_request(reinterpret_cast<uint8_t *>(&req), tx->id, key);
-    tx->key = key;
-    kv.send(&req, sizeof(req));
-    ++t;
+    auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
+    kv::create_kv_request(m->data<uint8_t>(), 0, key);
+    reqs.push_back(key);
+    sgl ssgl;
+    ssgl.add_segment_safe(mbuf_take_owner_ship(m));
+    auto sent = 0u;
+    while (sent < sizeof(kv::kv_packet<kv::kv_request>)) {
+      auto retval = kv.send(ssgl);
+      if (retval == -EAGAIN) {
+        cif.poll();
+        rx_fn(kv);
+      } else {
+        sent += retval;
+      }
+    }
+    next = next + exp(rng) * rte_get_timer_hz();
+    times.push_back(next);
   }
-  while (c < dur) {
+
+  while (!times.empty()) {
     cif.poll();
-    rcvd = kv.recv(&resp, sizeof(resp));
-    if (rcvd <= 0)
-      continue;
-    assert(resp.payload.key == kv[resp.id].key);
-    kv.complete(resp.id);
-    ++c;
+    rx_fn(kv);
   }
-  kv.con->close();
-  kv.acknowledge_all();
-  kv.flush();
-  auto stats = kv.con->get_transport_stats();
+
+  auto stats = kv.con->get_stats();
+  kv.close();
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   auto end = rte_get_timer_cycles();
   std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
@@ -198,11 +188,11 @@ static void run(lcore_function_t *f, void *args) {
   auto nthreads = rte_lcore_count();
   unsigned i = 0;
   uint16_t lcore_id;
-  std::vector<std::shared_ptr<msg_fragment_allocator>> allocators;
+  std::vector<std::shared_ptr<dpdk_allocator>> allocators;
   allocators.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
-    allocators.emplace_back(std::make_shared<msg_fragment_allocator>(
-        ("mpool" + std::to_string(i)).c_str(), 16383));
+    allocators.emplace_back(
+        dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095));
     ++i;
   }
   auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);
@@ -220,10 +210,7 @@ static void run(lcore_function_t *f, void *args) {
         con_config{conf.sip, conf.sports[i]}, rte_lcore_count());
     ++i;
   }
-  if (!conf.large)
-    run(lcore_fn, &adapter);
-  else
-    run(lcore_large, &adapter);
+  run(lcore_fn, &adapter);
   ifc->stop();
   std::cout << "avg: " << lat.load() / rte_lcore_count() << std::endl;
   return 0;

@@ -1,10 +1,11 @@
 #include "connection.h"
 #include "debug.h"
-#include "msg_fragment.h"
 #include "server.h"
+#include "transport/transport.h"
 
 #include <cassert>
 #include <cstdint>
+#include <generic/rte_cycles.h>
 #include <netinet/in.h>
 #include <random>
 
@@ -12,9 +13,9 @@ static std::mt19937 rng;
 static std::uniform_int_distribution<uint16_t> dist{0, UINT16_MAX};
 
 connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
-                                                const uint32_t sip,
-                                                const uint32_t dip,
-                                                const uint16_t target) {
+                                                 const uint32_t sip,
+                                                 const uint32_t dip,
+                                                 const uint16_t target) {
   uint16_t rx_flow_sport, rx_flow_dport;
   transport_config cfg;
   cfg.ip = dip;
@@ -24,7 +25,6 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
   FASTT_LOG_DEBUG("Opened new connection to %d %d\n", ft.sip, ntohs(ft.sport));
   cfg.transport_ports.sport = dist(rng);
   cfg.transport_ports.dport = dist(rng);
-
   // find transport level queue pair
   dev.nic_arch->find_port_pair(cfg.ip, sip, rx_flow_sport, rx_flow_dport,
                                target, cores);
@@ -32,8 +32,7 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
                   ntohs(cfg.transport_ports.dport),
                   ntohs(cfg.transport_ports.sport));
   auto [it, inserted] = flows.emplace(
-      ft, std::make_unique<connection>(allocator.get(), &pkt_if, cfg, sport,
-                                       dport, this, is_client));
+      ft, std::make_unique<connection>(&pkt_if, &sb, cfg, sport, dport));
   if (!inserted)
     return nullptr;
   it->second->open_connection(rx_flow_sport, rx_flow_dport);
@@ -41,21 +40,6 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
   ++open_connections;
   flush();
   return it->second.get();
-}
-
-void connection::process_pkt(rte_mbuf *pkt) {
-  transport_impl->process_pkt((static_cast<msg_fragment *>(pkt)));
-}
-
-void connection::acknowledge_all(uint64_t now) {
-  transport_impl->acknowledge(now);
-}
-
-void connection::accept() { transport_impl->accept_connection(); }
-
-void connection::open_connection(uint16_t rx_flow_sport,
-                                 uint16_t rx_flow_dport) {
-  transport_impl->open_connection(rx_flow_sport, rx_flow_dport);
 }
 
 void connection_manager::run(concurrency::scheduler &scheduler) {
@@ -68,8 +52,11 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
     scheduler.schedule(service_handler(scheduler, *con).handle);
   });
   flush();
-  for (auto &con : active)
+  for (auto &con : ready)
+    con.acknowledge();
+  for (auto &con : ready)
     concurrency::make_progress(con);
+  ready.clear();
   scheduler.run();
-  acknowledge_all_and_reap();
+  check_timeouts();
 }

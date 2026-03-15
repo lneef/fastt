@@ -1,104 +1,34 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <generic/rte_cycles.h>
 #include <memory>
 #include <netinet/in.h>
+#include <sys/types.h>
 #include <type_traits>
 #include <utility>
 
 #include "debug.h"
 #include "dev.h"
-#include "msg_fragment.h"
+#include "dpdk/allocator.h"
 #include "packet_if.h"
+#include "slab_allocator.h"
+#include "task/task.h"
 #include "transport/protocol.h"
 #include "transport/transport.h"
 #include "util.h"
-#include "task/task.h"
 
 class iface;
 class server_iface;
 class client_iface;
 class connection_manager;
 
+using connection = transport<>;
+
 struct statistics {
   std::vector<transport_statistics> ts;
   uint64_t total_rx_polled = 0, no_rx = 0;
-};
-
-class connection {
-  static constexpr uint16_t kMaxSlotsPerConnection = 128;
-
-public:
-  connection(msg_fragment_allocator *allocator, packet_if *pkt_if,
-             const transport_config &cfg, uint16_t sport, uint16_t dport,
-             connection_manager *manager, bool is_client)
-      : allocator(allocator), transport_impl(std::make_unique<transport<>>(
-                                  allocator, pkt_if, cfg, sport, dport)),
-        manager(manager), is_client(is_client) {}
-  void process_pkt(rte_mbuf *pkt);
-  void acknowledge_all(uint64_t now);
-  void accept();
-  void open_connection(uint16_t rx_flow_sport, uint16_t rx_flow_dport);
-
-  void check_timeout(uint64_t now) { transport_impl->check_timeout(now); }
-
-  ssize_t send(msg_hdr &hdr) { return transport_impl->send(hdr); }
-
-  ssize_t recv(void *buf, size_t size, size_t &remaining) {
-    return transport_impl->recv(buf, size, remaining);
-  }
-
-  transport_statistics get_transport_stats() const {
-    return transport_impl->get_stats();
-  }
-
-  void transport_ctrl() { transport_impl->check_ctrl(); }
-
-  bool up() const { return transport_impl->up(); }
-
-  bool disconnecting() const {
-    return transport_impl->get_state() == connection_state::DISCONNECTING;
-  }
-
-  bool down() const { return transport_impl->disconnected(); }
-
-  bool can_send() { return transport_impl->can_send(); }
-
-  bool can_recv() { return transport_impl->can_recv(); }
-
-  connection_manager *get_manager() { return manager; }
-
-  flow_tuple get_flow_tuple() const { return transport_impl->get_flow_tuple(); }
-
-  void close() { transport_impl->close_connection(); }
-
-  void accept_close() { 
-      assert(link.is_linked());
-      transport_impl->acknowledge(); 
-      link.unlink();
-  }
-
-  void wait_all_acked(){
-      while(true){  
-        check_timeout(rte_get_timer_cycles());
-        if(transport_impl->all_acked())
-            break;
-      }
-
-  }
-
-private:
-  friend class connection_manager;
-  msg_fragment_allocator *allocator;
-  std::unique_ptr<transport<>> transport_impl;
-  connection_manager *manager;
-  bool is_client;
-
-public:
-  std::optional<concurrency::coro_handle> coro;
-  list_hook link;
 };
 
 class connection_manager {
@@ -106,60 +36,51 @@ class connection_manager {
 public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
-                     uint32_t sip, std::shared_ptr<msg_fragment_allocator> allocator,
+                     uint32_t sip,
+                     std::shared_ptr<dpdk_allocator> allocator,
                      P *parent, uint16_t cores)
-      : allocator(allocator), dev(port, txq, rxq), scheduler(&dev),
-        pkt_if(&scheduler, sip, port), active(), cores(cores), is_client(is_client) {
+      : dev(port, txq, rxq), 
+        pkt_if(&dev, allocator, &sb, sip, port), active(), cores(cores),
+        is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
     else
       server_parent = parent;
   }
 
-  void handle_pkt(msg_fragment *pkt, flow_tuple &ft) {
-
+  void handle_pkt(mbuf *pkt, flow_tuple &ft) {
     FASTT_LOG_DEBUG("Got pkt via UDP ports: %s \n", ft.print().c_str());
-    auto *header = rte_pktmbuf_mtod(pkt, protocol::ft_header *);
-    if (unlikely(header->type == protocol::FT_SYN))
-      register_request(pkt, ft);
-    else {
+    auto *header = pkt->data<protocol::ft_header>();
+    if (unlikely(header->type == protocol::FT_SYN)) {
+      FASTT_LOG_DEBUG("Registering new request");
+      connection_requests.emplace_back(pkt, ft);
+    } else {
       protocol::extract_ports(ft, pkt);
       FASTT_LOG_DEBUG("Got packet via %s\n", ft.print().c_str());
       auto it = flows.find(ft);
-      if (likely(it != flows.end()))
+      if (likely(it != flows.end())){
         it->second->process_pkt(pkt);
-      else {
-        dump_pkt(pkt, pkt->len());
-        rte_pktmbuf_free(pkt);
+        if(!is_client && !it->second->ready.is_linked())
+            ready.push_back(*it->second);
+      }else {
+        mbuf_free(pkt);
       }
-    }
-   }
-
-  void check_timeouts() {
-    auto now = rte_get_timer_cycles();
-    for (auto &con : active) {
-      con.transport_ctrl();
-      con.check_timeout(now);
     }
   }
 
-  void acknowledge_all_and_reap() {
-    auto now = rte_get_timer_cycles();
-    for (auto it = active.begin(), end = active.end(); it != end;) {
-      auto &con = *it;
-      ++it;
-      con.acknowledge_all(now);
-      if (con.down())
-        con.link.unlink();
+  void check_timeouts() {
+    for (auto &con : active) {
+      auto now = rte_get_timer_cycles();
+      con.check_timeout(now);
+      con.perform_recovery();
     }
   }
 
   void acknowledge() {
-    auto now = rte_get_timer_cycles();
     for (auto &con : active) {
-      if (con.disconnecting())
+      if (con.get_state() == connection_state::DISCONNECTING)
         continue;
-      con.acknowledge_all(now);
+      con.acknowledge();
     }
   }
 
@@ -169,77 +90,50 @@ public:
 
   connection *open_connection(uint16_t sport, uint16_t dport,
                               const uint32_t sip, const uint32_t dip,
-                              const uint16_t target); 
-
-  template <typename F> void poll(F &&handler) {
-    fetch_from_qpair();
-    accept_connections([](connection*){});
-    flush();
-    for (auto it = active.begin(), end = active.end(); it != end;){
-        auto &con = *it;
-        ++it;
-        handler(con);
-    }
-    acknowledge();
-    check_timeouts();
-  }
+                              const uint16_t target);
 
   void poll_client() {
     fetch_from_qpair();
-    acknowledge_all_and_reap();
+    for (auto it = active.begin(), end = active.end(); it != end;) {
+      auto &timpl = *it;
+      ++it;
+      timpl.perform_recovery();
+      timpl.acknowledge();
+      if (timpl.get_state() == connection_state::DISCONNECTED)
+        timpl.link.unlink();
+    }
     check_timeouts();
     flush();
   }
 
-  void run(concurrency::scheduler &scheduler); 
+  void run(concurrency::scheduler &scheduler);
 
   void fetch_from_qpair() {
-    std::array<flow_tuple, kdefaultBurstSize> fts;
-    uint16_t valid = 0, i = 0;
-    assert(vec.i == 0);
-    dev.rx_burst(vec);
-    for (uint16_t i = 0; i < vec.i; ++i) {
-      auto *pkt = pkt_if.consume_pkt(vec.pkts[i]);
-      if (!pkt)
-        continue;
-      vec.pkts[valid++] = pkt;
+    std::array<flow_tuple, packet_if::kDefaultInBurstSize> fts;
+    packet_vector<mbuf*, packet_if::kDefaultInBurstSize> mbufs;
+    pkt_if.fetch_from_qpair(fts, mbufs);
+    uint16_t i = 0;
+    for (auto* pkt : mbufs) {
+      auto &ft = fts[i++];
+      handle_pkt(pkt, ft);
     }
-    vec.i = valid;
-    assert(i == 0);
-    for (auto *msg : vec)
-      pkt_if.strip_header(msg, fts[i++]);
-    i = 0;
-    for(; i < vec.i; ++i){
-        auto *msg = vec.pkts[i];
-        auto &ft = fts[i];
-        handle_pkt(msg, ft);
-    }
-    vec.clear();
-    assert(vec.i == 0);
   }
 
-  void register_request(msg_fragment *pkt, flow_tuple &ft) {
-    FASTT_LOG_DEBUG("Registering new request");
-    connection_requests.emplace_back(pkt, ft);
-  }
-
-  template<typename F>
-  void accept_connections(F&& cb) {
+  template <typename F> void accept_connections(F &&cb) {
     while (!connection_requests.empty()) {
       auto [pkt, ft] = connection_requests.front();
       connection_requests.pop_front();
       auto [con, inserted] = add_connection(ft, pkt);
       con->process_pkt(pkt);
       if (inserted) {
-        con->accept();
+        con->accept_connection();
         FASTT_LOG_DEBUG("Added new connection from %u %d\n", ft.sip, ft.sport);
         cb(con);
       }
     }
   }
 
-  std::pair<connection *, bool> add_connection(flow_tuple &tuple,
-                                               msg_fragment *pkt) {
+  std::pair<connection *, bool> add_connection(flow_tuple &tuple, mbuf *pkt) {
     transport_config cfg;
     cfg.ip = tuple.sip;
     cfg.transport_ports.dport = tuple.sport;
@@ -250,18 +144,16 @@ public:
     FASTT_LOG_DEBUG("New Connection %s \n", tuple.print().c_str());
     // swap ports since we need the rx port as src
     auto [it, inserted] = flows.emplace(
-        tuple,
-        std::make_unique<connection>(allocator.get(), &pkt_if, cfg, tuple.dport,
-                                     tuple.sport, this, is_client));
+        tuple, std::make_unique<connection>(&pkt_if, &sb, cfg, tuple.dport,
+                                            tuple.sport));
     if (inserted) {
       active.push_front(*it->second);
       ++open_connections;
-    } else if (it->second->down()) {
+    } else if (it->second->get_state() == connection_state::DISCONNECTED) {
       // if the connection has been closed, replace it
       it->second.reset();
-      it->second = std::make_unique<connection>(allocator.get(), &pkt_if, cfg,
-                                                tuple.dport, tuple.sport, this,
-                                                is_client);
+      it->second = std::make_unique<connection>(&pkt_if, &sb, cfg, tuple.dport,
+                                                tuple.sport);
       active.push_front(*it->second);
       inserted = true;
     }
@@ -271,11 +163,9 @@ public:
   statistics get_stats() {
     std::vector<transport_statistics> stats(open_connections);
     uint32_t i = 0;
-    for (auto &con : active)
-      stats[i++] = con.transport_impl->get_stats();
+    for (auto &timpl : active)
+      stats[i++] = timpl.get_stats();
     statistics sts;
-    sts.no_rx = dev.no_rx;
-    sts.total_rx_polled = dev.total_rx;
     sts.ts = std::move(stats);
     return sts;
   }
@@ -286,22 +176,26 @@ public:
     flows.erase(ft);
   }
 
-  void flush() { scheduler.flush(); }
+  slab_allocator* get_allocator(){
+      return &sb;
+  }
+
+  void flush() { pkt_if.flush_out_buffer(); }
 
   ~connection_manager() {}
 
 private:
-  std::shared_ptr<msg_fragment_allocator> allocator;
-  std::deque<std::pair<msg_fragment *, flow_tuple>> connection_requests;
-  flow_table<flow_tuple, std::unique_ptr<connection>> flows;
+  std::deque<std::pair<mbuf *, flow_tuple>> connection_requests;
   qpair dev;
-  packet_scheduler scheduler;
+  slab_allocator sb;
   packet_if pkt_if;
   intrusive_list_t<connection> active;
+  intrusive_list_t<connection> ready;
   uint16_t cores;
   bool is_client;
   uint32_t open_connections = 0;
-  packet_vector<kdefaultBurstSize> vec;
+
+  flow_table<flow_tuple, std::unique_ptr<connection>> flows;
   union {
     client_iface *client_parent;
     server_iface *server_parent;

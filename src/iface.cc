@@ -1,6 +1,6 @@
 #include "debug.h"
+#include "dpdk/allocator.h"
 #include "iface.h"
-#include "msg_fragment.h"
 #include "util.h"
 #include <cstdint>
 #include <memory>
@@ -23,36 +23,38 @@ int fastt::init() {
   FASTT_LOG_DEBUG("init fasst\n");
   rte_timer_subsystem_init();
   init_timing();
-  return msg_fragment::init();
+  return 0;
 }
 
-static inline int setup_reta(uint16_t port, uint32_t nrx, uint32_t reta_size){
-    auto groups = reta_size / RTE_ETH_RETA_GROUP_SIZE;
-    std::vector<rte_eth_rss_reta_entry64> reta(groups);
+static inline int setup_reta(uint16_t port, uint32_t nrx, uint32_t reta_size) {
+  auto groups = reta_size / RTE_ETH_RETA_GROUP_SIZE;
+  std::vector<rte_eth_rss_reta_entry64> reta(groups);
 
-    for(auto i = 0u; i < reta_size; ++i)
-        reta[i / RTE_ETH_RETA_GROUP_SIZE].mask = UINT64_MAX;
+  for (auto i = 0u; i < reta_size; ++i)
+    reta[i / RTE_ETH_RETA_GROUP_SIZE].mask = UINT64_MAX;
 
-    for(auto i = 0u; i < reta_size; ++i){
-        uint32_t reta_id = i / RTE_ETH_RETA_GROUP_SIZE;
-        uint32_t reta_pos = i % RTE_ETH_RETA_GROUP_SIZE;
-        uint32_t rss_qid = i % nrx;
-        reta[reta_id].reta[reta_pos] = static_cast<uint16_t>(rss_qid);
-    }
+  for (auto i = 0u; i < reta_size; ++i) {
+    uint32_t reta_id = i / RTE_ETH_RETA_GROUP_SIZE;
+    uint32_t reta_pos = i % RTE_ETH_RETA_GROUP_SIZE;
+    uint32_t rss_qid = i % nrx;
+    reta[reta_id].reta[reta_pos] = static_cast<uint16_t>(rss_qid);
+  }
 
-    int ret = rte_eth_dev_rss_reta_update(port, reta.data(), reta_size);
-    if(ret)
-        return -1;
-    return 0;
+  int ret = rte_eth_dev_rss_reta_update(port, reta.data(), reta_size);
+  if (ret)
+    return -1;
+  return 0;
 }
 
-std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
-                                           uint16_t nrx, std::vector<std::shared_ptr<msg_fragment_allocator>>& pools) {
+std::unique_ptr<iface>
+iface::configure_port(uint16_t port_id, uint16_t ntx, uint16_t nrx,
+                      std::vector<std::shared_ptr<dpdk_allocator>> &pools) {
+  static constexpr uint16_t kDefaultQueueSize = 1024;  
   uint16_t nb_rxd, nb_txd;
   int retval;
   std::unique_ptr<iface> ifc(new iface()); /*c++11*/
   ifc->port = port_id;
-  struct rte_eth_dev_info dev_info;
+  struct rte_eth_dev_info dev_info{};
   struct rte_eth_rxconf rxconf{};
   struct rte_eth_txconf txconf{};
   if (!rte_eth_dev_is_valid_port(ifc->port))
@@ -61,8 +63,8 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
   retval = rte_eth_dev_info_get(ifc->port, &dev_info);
   if (retval != 0)
     return nullptr;
-  nb_rxd = dev_info.rx_desc_lim.nb_max;
-  nb_txd = dev_info.tx_desc_lim.nb_max;
+  nb_rxd = kDefaultQueueSize;
+  nb_txd = kDefaultQueueSize;
 
   if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
     port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
@@ -75,24 +77,16 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
     port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_UDP_CKSUM;
   if (dev_info.rx_offload_capa & RTE_ETH_RX_OFFLOAD_IPV4_CKSUM)
     port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_IPV4_CKSUM;
-  if (dev_info.rx_offload_capa & RTE_ETH_RX_OFFLOAD_RSS_HASH) {
+
+  bool rss = false;
+  if (nrx > 1) {
     auto &rssconf = port_conf.rx_adv_conf.rss_conf;
     port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
     port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
     rssconf.algorithm = RTE_ETH_HASH_FUNCTION_DEFAULT;
-    rssconf.rss_key = nullptr;
-    rssconf.rss_hf =
-        RTE_ETH_RSS_NONFRAG_IPV4_UDP & dev_info.flow_type_rss_offloads;
-  }
-  bool rss = false;
-  if(nrx > 0){
-    auto& rssconf = port_conf.rx_adv_conf.rss_conf;  
-          port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
-    rssconf.algorithm = RTE_ETH_HASH_FUNCTION_DEFAULT;
     rssconf.rss_key = RSS_DEFAULT_KEY;
     rssconf.rss_key_len = RSS_KEY_LEN;
-    rssconf.rss_hf =
-        RTE_ETH_RSS_NONFRAG_IPV4_UDP & dev_info.flow_type_rss_offloads;
+    rssconf.rss_hf = dev_info.flow_type_rss_offloads;
     rss = true;
   }
   retval = rte_eth_dev_configure(ifc->port, nrx, ntx, &port_conf);
@@ -106,6 +100,7 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
   txconf.offloads = port_conf.txmode.offloads;
   rxconf = dev_info.default_rxconf;
   rxconf.offloads = port_conf.rxmode.offloads;
+  rxconf.rx_free_thresh = 0;
   uint16_t lcore_id = 0;
   uint16_t setup_tx = 0;
   uint16_t setup_rx = 0;
@@ -125,10 +120,10 @@ std::unique_ptr<iface> iface::configure_port(uint16_t port_id, uint16_t ntx,
   retval = rte_eth_dev_start(ifc->port);
   if (retval < 0)
     return nullptr;
-  if(rss)
-      retval = setup_reta(ifc->port, nrx, dev_info.reta_size);
-  if(retval)
-      return nullptr;
+  if (rss)
+    retval = setup_reta(ifc->port, nrx, dev_info.reta_size);
+  if (retval)
+    return nullptr;
   return ifc;
 }
 
