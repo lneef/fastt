@@ -3,6 +3,7 @@
 #include "connection.h"
 #include "dpdk/allocator.h"
 #include "slab_allocator.h"
+#include "task/task.h"
 #include "util.h"
 
 #include <boost/unordered/unordered_flat_map.hpp>
@@ -26,6 +27,10 @@ public:
     return res.second;
   }
 
+  concurrency::scheduler& get_scheduler(){
+      return scheduler;
+  }
+
   void run() { manager.run(scheduler); }
 
   slab_allocator *get_alloc() { return manager.get_allocator(); }
@@ -34,7 +39,7 @@ public:
 
 private:
   bu::unordered_flat_map<uint16_t, std::function<concurrency::task(
-                                       concurrency::scheduler &, connection &)>>
+                                       server_iface &, connection &)>>
       services;
   concurrency::scheduler scheduler;
   con_config scon_config;

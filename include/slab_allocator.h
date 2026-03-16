@@ -84,7 +84,6 @@ struct slab {
   obj_header *freelist;
   uint32_t inuse;
   uint32_t padding;
-  intptr_t iova;
 
   static void list_remove(slab *s) {
     s->prev->next = s->next;
@@ -168,7 +167,7 @@ public:
     auto *obj = reinterpret_cast<obj_header*>(base + off);
     obj->next = nullptr;
     c.partial.list_push(s);
-        assert(!cache.partial.empty());
+    assert(!cache.partial.empty());
   }
 
   void free_single_mbuf(mbuf *obj) {

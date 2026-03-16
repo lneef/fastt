@@ -3,6 +3,7 @@
 #include "iface.h"
 #include "kv_protocol.h"
 #include "server.h"
+#include "slab_allocator.h"
 #include "task/async.h"
 #include "task/task.h"
 #include <arpa/inet.h>
@@ -95,25 +96,25 @@ int lcore_server_fun(void *arg) {
   auto myid = rte_lcore_index(rte_lcore_id());
   auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
   auto *server = adapters[myid].iface.get();
-  auto *slab = server->get_alloc();
   server->register_service(
       2,
-      [&](concurrency::scheduler &schdlr,
+      [](server_iface& iface,
           connection &con) -> concurrency::task {
         sgl ssgl;
         sgl rsgl;
+        auto &slab = *iface.get_alloc();
         while (true) {
-          auto sz = co_await recv(schdlr, con, rsgl);
+          auto sz = co_await recv(iface.get_scheduler(), con, rsgl);
           if (sz == 0) {
             co_return;
           }
           assert(sz == sizeof(kv::kv_packet<kv::kv_request>));
-          auto pkt_ptr = slab->alloc_default_safe(
+          auto pkt_ptr = slab.alloc_default_safe(
               sizeof(kv::kv_packet<kv::kv_completion>));
           serve(pkt_ptr->data<kv::kv_packet<kv::kv_completion>>(),
                 rsgl.head->data<kv::kv_packet<kv::kv_request>>());
           ssgl.add_segment_safe(std::move(pkt_ptr));
-          auto sent = co_await send(schdlr, con, std::move(ssgl));
+          auto sent = co_await send(iface.get_scheduler(), con, std::move(ssgl));
           if (sent == 0) {
             co_return;
           }

@@ -50,7 +50,8 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
            server_parent->services.end());
     auto service_handler =
         server_parent->services[ntohs(con->get_flow_tuple().sport)];
-    scheduler.schedule(service_handler(scheduler, *con).handle);
+    assert(!is_client);    
+    scheduler.schedule(service_handler(*server_parent, *con).handle);
   });
 
   for (size_t i = 0u, end = ack_outstanding.size(); i < end; ++i) {
