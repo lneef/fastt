@@ -15,7 +15,6 @@
 struct rack {
   static constexpr uint64_t kMinRTT = 30;
   static bool send_after(uint64_t t1, seq_t seq1, uint64_t t2, seq_t seq2) {
-    printf("%u %u\n", seq1.v, seq2.v);
     if (t1 > t2)
       return true;
     else if (t1 == t2 && seq1 > seq2)
@@ -102,7 +101,6 @@ public:
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
-      printf("%u\n", entry.seq.v);
       if (!rack::send_after(rck.xmit_ts, rck.end_seq, entry.xmit_ts, entry.seq))
         break;
       if (now >= entry.xmit_ts + rck.rtt) {
