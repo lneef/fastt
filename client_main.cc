@@ -112,7 +112,7 @@ static int lcore_fn(void *arg) {
   std::exponential_distribution<double> exp(adapter->rate);
   auto start_time = rte_get_timer_cycles() + 10 * rte_get_timer_hz();
   auto ticks_per_sec = rte_get_timer_hz();
-  auto end_time = start_time + adapter->duration;
+  auto end_time = start_time + adapter->duration * rte_get_timer_hz();
   auto next = start_time + ticks_per_sec * exp(rng);
   hdr_histogram *hist;
   hdr_init(1, 500'000, 3, &hist);
