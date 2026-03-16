@@ -226,18 +226,28 @@ public:
     least_unacked_pkt = seq + 1;
   }
 
-  void acknowledge_sack(protocol::ft_sack_payload *payload, uint64_t ts) {
+  void acknowledge_sack(protocol::ft_sack_payload *payload, seq_t cumulative_ack, uint64_t ts) {
     assert(payload->bit_map_len > 0);
     assert(payload->bit_map_len <= unacked.size());
     assert(unacked.front().seq == least_unacked_pkt);
     FASTT_LOG_DEBUG("Received SACK of length %u\n", payload->bit_map_len);
     auto it = unacked.begin();
+    auto i = 0u;
+
+    //might happen in case of reordering
+    auto cumulative_ack_in_pkt = cumulative_ack;
+    auto last_acked = least_unacked_pkt - 1;
+    while(cumulative_ack < last_acked){
+        ++i;
+        ++cumulative_ack;
+    }
     uint64_t sack_rtt = ~0ull;
-    for (auto i = 0u; i < payload->bit_map_len; ++i) {
+    for (; i < payload->bit_map_len; ++i) {
       auto ind = get_bit_indices_64(i);
       auto val = payload->bit_map[ind.first] & (1ull << ind.second);
       auto &desc = *it;
       ++it;
+      assert(cumulative_ack_in_pkt + i + 1 == desc.seq);
       if (!val)
         continue;
       if (!desc.sacked) {
@@ -251,7 +261,8 @@ public:
         desc.sacked = true;
         assert(desc.link.is_linked());
         desc.link.unlink();
-        --inflight_pkts;
+        if(!desc.queued)
+            --inflight_pkts;
       }
     }
 

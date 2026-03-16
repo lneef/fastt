@@ -49,7 +49,7 @@ TEST_F(TransportInputTest, SackMarksCorrectEntries) {
     sack.bit_map[0] = (1ull << 1)  | (1ull << 3);
     sack.bit_map_len = 4;
     ti->acknowledge(seq_t{0} , rte_get_timer_cycles());
-    ti->acknowledge_sack(&sack, rte_get_timer_cycles());
+    ti->acknowledge_sack(&sack, {0}, rte_get_timer_cycles());
 
     auto now = rte_get_timer_cycles();
     while(rte_get_timer_cycles() < now + get_ticks_us())
@@ -91,7 +91,7 @@ TEST_F(TransportInputTest, RetransmissionTransmitsCorrectPacket) {
     protocol::ft_sack_payload sack{};
     sack.bit_map[0] = (1ull << 1);
     sack.bit_map_len = 3;
-    ti->acknowledge_sack(&sack, rte_get_timer_cycles());
+    ti->acknowledge_sack(&sack,{0} ,rte_get_timer_cycles());
 
     // Wait past RTT so detect_loss triggers
     auto now = rte_get_timer_cycles();
@@ -162,7 +162,7 @@ TEST_F(TransportInputTest, CumulativeAckReturnsCrdAfterSack) {
     protocol::ft_sack_payload sack{};
     sack.bit_map[0] = (1ull << 1);
     sack.bit_map_len = 3;
-    ti->acknowledge_sack(&sack, rte_get_timer_cycles());
+    ti->acknowledge_sack(&sack, {0}, rte_get_timer_cycles());
     EXPECT_EQ(ti->get_current_wnd(), 125u);
 
     // Cumulative ACK through seq 3 covers seq 1 (not sacked, crd=1),
@@ -229,7 +229,7 @@ TEST_F(TransportInputTest, SackSeqWrapAround) {
     protocol::ft_sack_payload sack{};
     sack.bit_map[0] = (1ull << 1) | (1ull << 3);
     sack.bit_map_len = 5;
-    ti->acknowledge_sack(&sack, rte_get_timer_cycles());
+    ti->acknowledge_sack(&sack, seq_t{UINT32_MAX - 2}, rte_get_timer_cycles());
     // SACK does not return credits
     EXPECT_EQ(ti->get_current_wnd(), 123u);
 
@@ -272,7 +272,7 @@ TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
     protocol::ft_sack_payload sack{};
     sack.bit_map[0] = (1ull << 1) | (1ull << 3) | (1ull << 5);
     sack.bit_map_len = 7;
-    ti->acknowledge_sack(&sack, rte_get_timer_cycles());
+    ti->acknowledge_sack(&sack, {0}, rte_get_timer_cycles());
     auto now = rte_get_timer_cycles();
     while(rte_get_timer_cycles() < now + 10 * get_ticks_us())
         ;
@@ -289,7 +289,7 @@ TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
     sack2.bit_map[0] = (1ull << 1) | (1ull << 3) | (1ull << 6);
     sack2.bit_map_len = 7;
 
-    ti->acknowledge_sack(&sack2, rte_get_timer_cycles());
+    ti->acknowledge_sack(&sack2, {0}, rte_get_timer_cycles());
     now = rte_get_timer_cycles();
     while(rte_get_timer_cycles() < now + 200 * get_ticks_us())
         ;
