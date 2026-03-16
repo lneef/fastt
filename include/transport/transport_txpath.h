@@ -70,7 +70,7 @@ class transport_txpath {
 public:
   struct statistics {
     seq_t acked;
-    uint64_t retransmitted, rtt;
+    uint64_t retransmitted, rtt, sent;
     statistics() : acked(0), retransmitted(0) {}
   };
   transport_txpath(swift &cc, seq_t seq = {0})
@@ -170,6 +170,7 @@ public:
     ctor(pkt, seq);
     pkt->xmit = false;
     ++inflight_pkts;
+    ++xmitted;
     unacked.emplace_back(mbuf_take_owner_ship(pkt), now, seq++, 0, false);
     xmit_list.push_back(unacked.back());
   }
@@ -184,6 +185,7 @@ public:
     ctor(pkt, seq);
     pkt->xmit = false;
     ++inflight_pkts;
+    ++xmitted;
     unacked.emplace_back(std::move(pkt), now, seq++, 1, false);
     xmit_list.push_back(unacked.back());
     return true;
@@ -283,6 +285,7 @@ public:
   statistics get_stats() {
     statistics out = stats;
     out.rtt /= get_ticks_us();
+    out.sent = xmitted;
     return out;
   }
 
@@ -302,6 +305,7 @@ private:
   seq_t least_unacked_pkt;
 
   uint64_t rtt = 0;
+  uint64_t xmitted = 0;
   const uint64_t default_rto = get_ticks_ms() * 10;
   uint64_t rto = default_rto;
   uint64_t timeout;

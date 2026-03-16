@@ -348,7 +348,7 @@ public:
 
   transport_statistics get_stats() {
     auto rt_stats = ttx.get_stats();
-    return {rt_stats.retransmitted, rt_stats.acked, stats.sent,
+    return {rt_stats.retransmitted, rt_stats.acked, rt_stats.sent,
             stats.retransmissions, rt_stats.rtt};
   }
 
