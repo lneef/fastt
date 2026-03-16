@@ -53,8 +53,8 @@ public:
     auto *udp =
         rte_pktmbuf_mtod_offset(msg, rte_udp_hdr *, protocol::defs::kudpOffset);
 #ifdef TEST_REORDERING
-    udp->src_port = sport + reo_off & should_reo; 
-    should_reo ^= ~0u;
+    udp->src_port = sport + (reo_off * should_reo); 
+    should_reo ^= 1;
 #else
     udp->src_port = sport;
 #endif
@@ -232,5 +232,7 @@ private:
   packet_vector<rte_mbuf *, kDefaultInBurstSize> vec;
   uint32_t sip;
   uint16_t reo_off;
+#ifdef TEST_REORDERING
   uint16_t should_reo = 0;
+#endif
 };
