@@ -38,7 +38,6 @@ struct packet_drop_sim {
 class packet_if {
   static constexpr uint16_t kdefaultTTL = 64;
   static constexpr uint16_t kDefaultOutBurstSize = 32;
-
 public:
   static constexpr uint16_t kDefaultInBurstSize = 64;
   packet_if(qpair *qp, std::shared_ptr<dpdk_allocator> pool, slab_allocator *sb,
@@ -46,13 +45,19 @@ public:
       : arp_table(), pool(pool), sb(sb), qp(qp), sip(sip) {
     rte_eth_macaddr_get(port, &smac);
     sim.set_rate(0.0);
+    reo_off = sim.dist(sim.rng) & (UINT16_MAX - 1);
   }
 
   rte_udp_hdr *udp_header(rte_mbuf *msg, uint16_t sport, uint16_t dport,
                           uint16_t data_len) {
     auto *udp =
         rte_pktmbuf_mtod_offset(msg, rte_udp_hdr *, protocol::defs::kudpOffset);
+#ifdef TEST_REORDERING
+    udp->src_port = sport + reo_off & should_reo; 
+    should_reo ^= ~0u;
+#else
     udp->src_port = sport;
+#endif
     udp->dst_port = dport;
     udp->dgram_cksum = 0;
     udp->dgram_len = rte_cpu_to_be_16(data_len + sizeof(rte_udp_hdr));
@@ -226,4 +231,6 @@ private:
   qpair *qp;
   packet_vector<rte_mbuf *, kDefaultInBurstSize> vec;
   uint32_t sip;
+  uint16_t reo_off;
+  uint16_t should_reo = 0;
 };
