@@ -230,6 +230,7 @@ public:
     assert(payload->bit_map_len > 0);
     assert(payload->bit_map_len <= unacked.size());
     assert(unacked.front().seq == least_unacked_pkt);
+    FASTT_LOG_DEBUG("Received SACK of length %u\n", payload->bit_map_len);
     auto it = unacked.begin();
     uint64_t sack_rtt = ~0ull;
     for (auto i = 0u; i < payload->bit_map_len; ++i) {
