@@ -55,18 +55,19 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
 
   for (size_t i = 0u, end = ack_outstanding.size(); i < end; ++i) {
     auto &con = ack_outstanding.front();
+    ack_outstanding.pop_front();
     if (con.acknowledge())
       ack_outstanding.push_back(con);
-    ack_outstanding.pop_front();
   }
 
   flush();
-  for (auto &con : ready) {
+  while (!ready.empty()) {
+    auto& con = ready.front();  
     con.perform_recovery();
     concurrency::make_progress(con);
+    ready.pop_front();
   }
 
-  ready.clear();
   scheduler.run();
   check_timeouts();
 }

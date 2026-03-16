@@ -131,7 +131,6 @@ static int lcore_fn(void *arg) {
         }else
             sent += retval;
     }
-    kv.send(ssgl);
     assert(sent == sizeof(kv::kv_packet<kv::kv_request>));
     ++t;
   }

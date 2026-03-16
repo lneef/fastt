@@ -81,7 +81,6 @@ iface::configure_port(uint16_t port_id, uint16_t ntx, uint16_t nrx,
   bool rss = false;
   if (nrx > 1) {
     auto &rssconf = port_conf.rx_adv_conf.rss_conf;
-    port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
     port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
     rssconf.algorithm = RTE_ETH_HASH_FUNCTION_DEFAULT;
     rssconf.rss_key = RSS_DEFAULT_KEY;
