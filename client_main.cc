@@ -141,7 +141,7 @@ static int lcore_fn(void *arg) {
   while (times.front() < end_time) {
     cif.poll();
     rx_fn(kv);
-    if (rte_get_timer_cycles() < times.empty())
+    if (rte_get_timer_cycles() < times.front())
       continue;
     int64_t key = dist(rng);
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
@@ -170,6 +170,9 @@ static int lcore_fn(void *arg) {
 
   auto stats = kv.con->get_stats();
   kv.close();
+  FILE *f = fopen("latency.hgrm", "w");
+  hdr_percentiles_print(hist, f, 5, 1.0, CLASSIC);
+  fclose(f);
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   auto end = rte_get_timer_cycles();
   std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
