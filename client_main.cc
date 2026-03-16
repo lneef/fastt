@@ -112,18 +112,19 @@ static int lcore_fn(void *arg) {
   std::exponential_distribution<double> exp(adapter->rate);
   auto start_time = rte_get_timer_cycles() + 10 * rte_get_timer_hz();
   auto ticks_per_sec = rte_get_timer_hz();
-  auto end_time = start_time + adapter->duration * rte_get_timer_hz();
+  auto end_time = start_time + adapter->duration;
   auto next = start_time + ticks_per_sec * exp(rng);
   hdr_histogram *hist;
   hdr_init(1, 500'000, 3, &hist);
 
   std::deque<uint64_t> times;
   std::deque<int64_t> reqs;
+  uint64_t inflight = 0;
   auto rx_fn = [&](kv_proxy &pry) {
     for (;;) {
       sgl rsgl;
       auto rcvd = pry.recv(rsgl);
-      if (!rcvd)
+      if (rcvd <= 0)
         break;
       kv::kv_packet<kv::kv_completion> resp;
       rsgl.head->read(&resp);
@@ -133,9 +134,10 @@ static int lcore_fn(void *arg) {
                                  get_ticks_us());
       times.pop_front();
       reqs.pop_front();
+      --inflight;
     }
   };
-
+ 
   auto now = rte_get_timer_cycles();
   times.push_back(next);
   while (times.front() < end_time) {
@@ -159,11 +161,12 @@ static int lcore_fn(void *arg) {
         sent += retval;
       }
     }
+    ++inflight;
     next = next + exp(rng) * rte_get_timer_hz();
     times.push_back(next);
   }
 
-  while (!times.empty()) {
+  while (inflight > 0) {
     cif.poll();
     rx_fn(kv);
   }
@@ -204,6 +207,8 @@ static void run(lcore_function_t *f, void *args) {
 
   lcore_adapter adapter(nthreads, {conf.dip, conf.dport});
   adapter.dmac = conf.dmac;
+  adapter.duration = conf.duration;
+  adapter.rate = conf.rate;
   i = 0;
   RTE_LCORE_FOREACH(lcore_id) {
     auto [port, txq, rxq] = ifc->get_slice(i);

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <bitset>
+#include <cassert>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -111,6 +112,7 @@ struct transport_rxpath {
       acb.rcv_high = seq;
       max_rx_in_window = seq;
     }
+    assert(max_rx_in_window - next_seq + 1 <= kMaxBitMapSize);
     wnd.set(index(seq));
     reassemble(seq, mbuf_take_owner_ship(pkt), acb);
     assert(acb.rcv_high == max_rx_in_window);
