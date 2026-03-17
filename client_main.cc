@@ -258,6 +258,7 @@ static int lcore_open_fn(void *arg) {
   hdr_percentiles_print(hist, f, 5, 1.0, CLASSIC);
   fclose(f);
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
+  std::cerr << hdr_value_at_percentile(hist, 99.0) << std::endl;
   auto end = rte_get_timer_cycles();
   std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
   return 0;
