@@ -292,6 +292,7 @@ static void run(lcore_function_t *f, void *args) {
   adapter.dmac = conf.dmac;
   adapter.duration = conf.duration;
   adapter.rate = conf.rate;
+  std::cout << adapter.duration << ", " << adapter.rate << std::endl;
   i = 0;
   RTE_LCORE_FOREACH(lcore_id) {
     auto [port, txq, rxq] = ifc->get_slice(i);
