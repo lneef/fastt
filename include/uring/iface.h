@@ -22,7 +22,7 @@
 #include <vector>
 
 namespace uring {
-static constexpr int kMaxClientFd = 128;
+static constexpr int kMaxClientFd = 256;
 static constexpr int kMaxClientFdTag = 2 * kMaxClientFd + 1;
 static constexpr int kSetSockTag = kMaxClientFd + 1;
 static constexpr int kGetSockTCPInfoTag = kSetSockTag + 2;

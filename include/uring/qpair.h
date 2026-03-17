@@ -11,7 +11,7 @@
 
 namespace uring {
 static constexpr int kQueueDepth = 256;
-static constexpr int kNumBuffer = kQueueDepth * 4;
+static constexpr int kNumBuffer = kQueueDepth * 8;
 static constexpr int kBufShift = 8;
 static constexpr unsigned kCQEntries = kQueueDepth * 4;
 

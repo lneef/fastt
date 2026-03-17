@@ -249,6 +249,65 @@ TEST_F(TransportInputTest, SackSeqWrapAround) {
     EXPECT_EQ(ti->get_current_wnd(), 128u);
 }
 
+TEST_F(TransportInputTest, StaleSackCumulativeAckCoversFuturePackets) {
+    // Send 10 packets (seq 0..9)
+    auto now = rte_get_timer_cycles();
+    for (int i = 0; i < 10; ++i) {
+        auto *msg = make_pkt();
+        bool ok = ti->record_pkt(mbuf_take_owner_ship(msg), [](mbuf_ptr&, seq_t) {}, now);
+        ASSERT_TRUE(ok);
+    }
+    EXPECT_EQ(ti->size(), 10u);
+    EXPECT_EQ(ti->get_seq(), seq_t{10});
+
+    {
+        auto now = rte_get_timer_cycles();
+        while (rte_get_timer_cycles() < now + 100 * get_ticks_us())
+            ;
+    }
+
+    // Cumulative ACK for seq 5 → least_unacked_pkt becomes 6, unacked = [6..9]
+    ti->acknowledge(seq_t{5}, rte_get_timer_cycles());
+    EXPECT_EQ(ti->size(), 4u);
+    EXPECT_EQ(ti->get_current_wnd(), 124u);
+
+    // Stale ACK for seq 3 arrives (reordered) — no-op since least_unacked is 6
+    ti->acknowledge(seq_t{3}, rte_get_timer_cycles());
+    EXPECT_EQ(ti->size(), 4u);
+    EXPECT_EQ(ti->get_current_wnd(), 124u);
+
+    // SACK arrives with stale cumulative_ack = 3 (seq - 2), but bitmap covers
+    // through seq 9 (seq + 4). Bitmap bits:
+    //   bit 0: seq 4 (already acked, skipped)
+    //   bit 1: seq 5 (already acked, skipped)
+    //   bit 2: seq 6 — not sacked
+    //   bit 3: seq 7 — sacked
+    //   bit 4: seq 8 — not sacked
+    //   bit 5: seq 9 — sacked
+    protocol::ft_sack_payload sack{};
+    sack.bit_map[0] = (1ull << 3) | (1ull << 5);
+    sack.bit_map_len = 6;
+    ti->acknowledge_sack(&sack, seq_t{3}, rte_get_timer_cycles());
+
+    // SACK does not return credits
+    EXPECT_EQ(ti->get_current_wnd(), 124u);
+
+    now = rte_get_timer_cycles();
+    while (rte_get_timer_cycles() < now + 10 * get_ticks_us())
+        ;
+    ti->detect_loss(rte_get_timer_cycles());
+
+    // seq 6 and seq 8 are unsacked → should be retransmitted
+    std::vector<mbuf*> retransmitted;
+    ti->advance_recovery([&](mbuf* m) { retransmitted.push_back(m); return true; }, rte_get_timer_cycles());
+    EXPECT_EQ(retransmitted.size(), 2u);
+
+    // Cumulative ACK through seq 9 clears everything
+    ti->acknowledge(seq_t{9}, rte_get_timer_cycles());
+    EXPECT_EQ(ti->size(), 0u);
+    EXPECT_EQ(ti->get_current_wnd(), 128u);
+}
+
 TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {
     // Record 8 packets (seq 0..7)
     for (int i = 0; i < 8; ++i) {

@@ -59,7 +59,6 @@ public:
     if (ttx.check_timeout(now)) {
       ttx.rto_retransmit(now);
       perform_recovery();
-      ttx.rearm(now);
     }
   }
 
@@ -120,10 +119,8 @@ public:
                       hdr->seq.v, hdr->ack.v, hdr->ackframe, hdr->crd);
       if (!check_pkt(msg, hdr->seq))
         return false;
-      if (hdr->ackframe) {
+      if (hdr->ackframe) 
         ttx.acknowledge(hdr->ack, ts);
-        ttx.detect_loss(ts);
-      }
       if (hdr->crd)
         ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
@@ -136,8 +133,8 @@ public:
         auto *sack_payload =
             msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));
         ttx.acknowledge_sack(sack_payload, hdr->ack, ts);
+        ttx.detect_loss(ts);
       }
-      ttx.detect_loss(ts);
       if (cstate == connection_state::DISCONNECTING && ttx.all_acked())
         cstate = connection_state::DISCONNECTED;
       assert(hdr->crd == 0);
@@ -158,7 +155,7 @@ public:
       break;
     }
     case protocol::pkt_type::FT_SYN_ACK: {
-      FASTT_LOG_DEBUG("Got CLR_TO_SD seq=%u ack=%u wnd=%u\n", hdr->seq.v,
+      FASTT_LOG_DEBUG("Got FT_SYN_ACK seq=%u ack=%u wnd=%u\n", hdr->seq.v,
                       hdr->ack.v, hdr->crd);
       if (!check_pkt(msg, hdr->seq))
         return false;
@@ -173,10 +170,8 @@ public:
       FASTT_LOG_DEBUG("Got WND_RET seq=%u wnd=%u\n", hdr->seq.v, hdr->crd);
       if (!check_pkt(msg, hdr->seq))
         return false;
-      if (hdr->ackframe) {
+      if (hdr->ackframe) 
         ttx.acknowledge(hdr->ack, ts);
-        ttx.detect_loss(ts);
-      }
       ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
       break;
