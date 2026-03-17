@@ -222,10 +222,11 @@ static int lcore_open_fn(void *arg) {
   auto now = rte_get_timer_cycles();
   times.push_back(next);
   while (times.front() < end_time) {
-    cif.poll();
-    rx_fn(kv);
-    if (rte_get_timer_cycles() < times.front())
+    if (rte_get_timer_cycles() < times.front()) {
+      cif.poll();
+      rx_fn(kv);
       continue;
+    }
     int64_t key = dist(rng);
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
     kv::create_kv_request(m->data<uint8_t>(), 0, key);
