@@ -1,9 +1,8 @@
 #pragma once
 #include <cstdint>
 #include <new>
-static constexpr uint16_t payload_offset = 0;
-
-namespace kv {
+namespace kv{
+static constexpr uint16_t payload_offset = 0;  
 enum class packet_t : uint8_t {
   SINGLE = 0,
   BATCH = 1,
@@ -40,15 +39,8 @@ struct [[gnu::packed]] kv_scan {
 struct [[gnu::packed]] kv_completion {
   response_t reponse;
   int64_t key;
-  int64_t val;
-};
-
-struct [[gnu::packed]] kv_scan_completion {
-  uint64_t cnt;
-  struct {
-    int64_t key;
-    int64_t val;
-  } data[];
+  uint64_t data_len;
+  char data[];
 };
 
 template <typename T> struct [[gnu::packed]] kv_packet : public kv_packet_base {

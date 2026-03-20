@@ -39,11 +39,10 @@ class kv_proxy {
 public:
   kv_proxy(client_iface *ifc) : ifc(ifc), slots(128) {}
 
-  int connect(const con_config &target, uint16_t rtid,
-              rte_ether_addr &dmac) {
+  int connect(const con_config &target, uint16_t rtid, rte_ether_addr &dmac) {
     con = ifc->open(target, rtid, dmac);
-    if(!con)
-        return -1;
+    if (!con)
+      return -1;
     return 0;
   }
 
@@ -60,19 +59,13 @@ public:
 
   void complete(uint16_t id) { slots.put(id); }
 
-  ssize_t recv(sgl& rsgl) {
-    return con->recv(rsgl);
-  }
+  ssize_t recv(sgl &rsgl) { return con->recv(rsgl); }
 
-  ssize_t send(sgl &ssgl) {
-    return con->send_sgl(ssgl);
-  }
+  ssize_t send(sgl &ssgl) { return con->send_sgl(ssgl); }
 
   void acknowledge_all() { con->acknowledge(); }
 
-  void close() {
-      ifc->close(*con);
-  }
+  void close() { ifc->close(*con); }
 
   void flush() { ifc->flush(); }
 

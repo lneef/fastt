@@ -104,6 +104,7 @@ public:
 
   void rto_retransmit(uint64_t ts) {
     uint64_t lost = 0;
+    // we dont renege
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
@@ -126,11 +127,7 @@ public:
         rck.high_data = seq;
         cc.on_retransmission_timeout(lost, rtt, ts);
     }
-
-    if(!xmit_list.empty())
-        rearm(xmit_list.front().xmit_ts);
-
-    assert(timeout >= ts || xmit_list.empty());
+    rearm(ts);
   }
 
   void detect_loss(uint64_t now) {
@@ -159,10 +156,6 @@ public:
       cc.on_fast_recovery(now, rtt);
     }
 
-    if(lost && !xmit_list.empty())
-        rearm(xmit_list.front().xmit_ts);
-
-    assert(timeout >= now || xmit_list.empty());
   }
 
   unsigned get_current_wnd() const { return budget; }
@@ -246,7 +239,6 @@ public:
     if (retransmission_queue.empty())
       return;
     auto sz = retransmission_queue.size();
-    auto empty = xmit_list.empty();
     while (sz-- > 0) {
       auto &desc = retransmission_queue.front();
       assert(desc.queued);
@@ -267,9 +259,9 @@ public:
       ++inflight_pkts;
       xmit_list.push_back(desc);
     }
-    if(empty && !xmit_list.empty())
+
+    if(rck.in_rto_recovery && sz == 0)
         rearm(now);
-    assert(timeout >= now || xmit_list.empty());
   }
 
   void acknowledge(seq_t seq, uint64_t ts) {
@@ -277,8 +269,7 @@ public:
       return;
     stats.acked = seq;
     cleanup_acked_pkts(seq, ts);
-    if(!xmit_list.empty())
-        rearm(xmit_list.front().xmit_ts);
+    rearm(ts);
     least_unacked_pkt = seq + 1;
     if ((rck.in_fast_recovery || rck.in_rto_recovery) && seq > rck.high_data){
       rck.in_fast_recovery = false;

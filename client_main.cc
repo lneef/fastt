@@ -1,3 +1,4 @@
+#include "bench.h"
 #include "client.h"
 #include "connection.h"
 #include "dpdk/allocator.h"
@@ -109,7 +110,7 @@ static constexpr auto dur = 1e6;
 static int lcore_closed_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
+  std::uniform_int_distribution<int64_t> dist(0, 1024 * 1024);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
@@ -143,7 +144,7 @@ static int lcore_closed_fn(void *arg) {
     int64_t key = dist(rng);
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
     kv::create_kv_request(m->data<uint8_t>(), tx->id, key);
-    tx->key = key;
+    tx->key = 1;
     sgl ssgl;
     ssgl.add_segment_safe(mbuf_take_owner_ship(m));
     auto sent = 0u;
@@ -182,7 +183,7 @@ static int lcore_closed_fn(void *arg) {
 static int lcore_open_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
+  std::uniform_int_distribution<int64_t> dist(0, 1024 * 1024);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
@@ -198,8 +199,7 @@ static int lcore_open_fn(void *arg) {
   hdr_histogram *hist;
   hdr_init(1, 500'000, 3, &hist);
 
-  std::deque<uint64_t> times;
-  std::deque<int64_t> reqs;
+  std::deque<bench::req_desc_t> reqs;
   uint64_t inflight = 0;
   auto rx_fn = [&](kv_proxy &pry) {
     for (;;) {
@@ -209,28 +209,26 @@ static int lcore_open_fn(void *arg) {
         break;
       kv::kv_packet<kv::kv_completion> resp;
       rsgl.head->read(&resp);
-      ensure(resp.payload.key == reqs.front());
-      assert(!times.empty());
-      hdr_record_value(hist, (rte_get_timer_cycles() - times.front()) /
+      auto [t, k] = reqs.front();
+      ensure(resp.payload.key == k);
+      hdr_record_value(hist, (rte_get_timer_cycles() - t) /
                                  get_ticks_us());
-      times.pop_front();
       reqs.pop_front();
       --inflight;
     }
   };
 
   auto now = rte_get_timer_cycles();
-  times.push_back(next);
-  while (times.front() < end_time) {
-    if (rte_get_timer_cycles() < times.front()) {
+  while (next < end_time) {
+    if (rte_get_timer_cycles() < next) {
       cif.poll();
       rx_fn(kv);
       continue;
     }
     int64_t key = dist(rng);
+    reqs.emplace_back(next, key);
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
     kv::create_kv_request(m->data<uint8_t>(), 0, key);
-    reqs.push_back(key);
     sgl ssgl;
     ssgl.add_segment_safe(mbuf_take_owner_ship(m));
     auto sent = 0u;
@@ -244,8 +242,7 @@ static int lcore_open_fn(void *arg) {
       }
     }
     ++inflight;
-    next = next + exp(rng) * rte_get_timer_hz();
-    times.push_back(next);
+    next += exp(rng) * rte_get_timer_hz();
   }
 
   while (inflight > 0) {
