@@ -35,14 +35,10 @@ struct sgl{
 
     void add_segment_safe(mbuf_ptr &&ptr){
         if(!head){
-            segs = ptr->nb_segs;
-            size = ptr->data_len;
             head = std::move(ptr);
-            tail = head->last_seg();
+            tail = head->last_seg(size, segs);
         }else{
-            segs += ptr->nb_segs;
-            size += ptr->data_len;
-            auto *last = ptr->last_seg();
+            auto *last = ptr->last_seg(size, segs);
             tail->next = ptr.release();
             tail = last;
             assert(tail != nullptr);

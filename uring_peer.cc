@@ -29,23 +29,12 @@
 #include "bench.h"
 #include "uring/cpu.h"
 #include "uring/iface.h"
-#include "uring/tcp.h"
 #include <tlx/container/btree_map.hpp>
 
 static std::random_device dev;
 static std::mt19937 rng(dev());
-static std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize - 16);
-
+static std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
 static bench::storage store;
-
-struct slot_storage {
-  std::deque<unsigned> free_slots;
-  std::vector<int64_t> elems;
-  slot_storage(unsigned n) : elems(n) {
-    for (unsigned i = 0; i < n; ++i)
-      free_slots.push_back(i);
-  }
-};
 
 unsigned seen = 0;
 
@@ -69,8 +58,7 @@ static size_t handle_request(kv::kv_packet<kv::kv_request> *req,
     if (!completion)
       return 0;
     completion->payload.reponse = kv::response_t::SUCCESS;
-    // std::memcpy(completion->payload.data, it->second.data(),
-    std::memset(completion->payload.data, 0, it->second.size());
+    std::memcpy(completion->payload.data, it->second.data(), it->second.size());
     completion->payload.data_len = it->second.size();
   }
   completion->id = req->id;
@@ -87,8 +75,11 @@ static bool request_single(uring::slot &slt, int64_t &key) {
   auto *req = slt.tx_buffer.reserve(sizeof(kv::kv_packet<kv::kv_request>));
   if (!req)
     return false;
-  key = k++;
+  std::memset(req, 0, sizeof(kv::kv_packet<kv::kv_request>));
+  key = dist(rng);
   kv::create_kv_request(req, 0, key);
+  assert(reinterpret_cast<kv::kv_packet<kv::kv_request> *>(req)->payload.op ==
+         kv::request_t::GET);
   return true;
 }
 
@@ -116,8 +107,7 @@ static void parse_request(uring::slot &slt) {
 }
 
 template <typename F>
-static unsigned parse_completion(uring::client_iface &iface, uring::slot &slt,
-                                 F &&cb) {
+static unsigned parse_completion(uring::slot &slt, F &&cb) {
   using packet_t = kv::kv_packet<kv::kv_completion>;
   unsigned i = 0;
   unsigned c = 0;
@@ -133,13 +123,7 @@ static unsigned parse_completion(uring::client_iface &iface, uring::slot &slt,
       i -= sizeof(packet_t);
       break;
     }
-    assert(resp.payload.data_len == 1024 || resp.payload.data_len == 0);
-    if (!is_all_zero(data + i, resp.payload.data_len)) {
-      struct tcp_info info;
-      uring::tcp::get_tcp_stats(iface.fd, &info);
-      uring::tcp::print_tcp_info(stdout, &info);
-      assert(0);
-    }
+
     i += resp.payload.data_len;
     cb(&resp);
     ++c;
@@ -165,14 +149,8 @@ static bool submit_send(uring::iface_base &iface, uring::slot &slt, int fd) {
 
 static void handle_recv(uring::iface_base &iface, uring::slot &slt,
                         unsigned idx, size_t size) {
+  slt.incoming.emplace_back(idx, size);
   iface.drain_incoming(slt);
-  if (!slt.incoming.empty() || !slt.rbuffer.enough_space(size)) {
-    slt.incoming.emplace_back(idx, size);
-    return;
-  }
-  auto *buf = iface.ctx->get_buffer(idx);
-  slt.rbuffer.cpy(buf, size);
-  uring::recycle_buffer(iface.ctx.get(), idx);
 }
 
 template <typename F>
@@ -198,7 +176,7 @@ static uint64_t process_completions(uring::client_iface &iface, F &&cb) {
   }
   io_uring_cq_advance(&iface.ctx->ring, cnt);
   iface.drain_incoming(iface.slt);
-  c += parse_completion(iface, iface.slt, cb);
+  c += parse_completion(iface.slt, cb);
   submit_send(iface, iface.slt, iface.fd);
   return c;
 }
@@ -210,7 +188,7 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
   struct io_uring_cqe *cqe;
   iface.setup(0);
   iface.uring_connect(&addr);
-  iface.uring_submit_and_get_events();
+  iface.uring_submit_and_wait();
   io_uring_peek_cqe(&iface.ctx->ring, &cqe);
   if (cqe->res < 0) {
     fprintf(stderr, "Failed to connect: %s\n", strerror(-cqe->res));
@@ -300,7 +278,7 @@ static int server_fun(uint16_t id, unsigned sz, int port_arg, in_addr_t addr) {
 
     for (auto &slt : iface.active) {
       iface.drain_incoming(slt);
-      parse_request(slt); 
+      parse_request(slt);
       submit_send(iface, slt, iface.clients[slt.idx]);
     }
   }

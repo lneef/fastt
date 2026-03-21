@@ -310,3 +310,24 @@ TEST_F(TransportOutputTest, MultiSegmentReassemblyReordered) {
     EXPECT_EQ(to->out.front().segs, 3);
     EXPECT_FALSE(to->has_holes());
 }
+
+TEST_F(TransportOutputTest, MultiSegment) {
+    auto *seg1 = make_frag({0}, true, false);
+    auto next = slab->alloc_default(slab->kMaxDataLen);
+    auto last = slab->alloc_default(slab->kMaxDataLen);
+    seg1->next = next;
+    next->next = last;
+
+    auto seg2 = make_frag({1}, false, true);
+    auto seg2last = slab->alloc_default(slab->kMaxDataLen);
+    seg2->next = seg2last;
+    
+    to->insert({0}, seg1, acb);
+    to->insert({1}, seg2, acb);
+
+    EXPECT_EQ(to->out.size(), 1u);
+    sgl msg;
+    auto rd = to->read(msg);
+    EXPECT_EQ(rd, slab->kMaxDataLen * 3 + 2);
+    EXPECT_EQ(msg.segs, 5);
+}

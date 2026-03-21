@@ -128,6 +128,7 @@ struct slot {
     assert(!tx_inflight);
     tx_inflight = true;
     io_uring_prep_send(sqe, fd, buf, len, 0);
+    sqe->ioprio |= IORING_RECVSEND_POLL_FIRST;
     io_uring_sqe_set_data64(sqe, tag_send(idx));
   }
 };
@@ -184,7 +185,7 @@ struct iface_base {
       return fd;
     }
     napi.prefer_busy_poll = true;
-    napi.busy_poll_to = 1;
+    napi.busy_poll_to = 10;
     io_uring_register_napi(&ctx->ring, &napi);
     return 0;
   }
@@ -321,7 +322,6 @@ struct server_iface : iface_base {
   int process_cqe_send(struct io_uring_cqe *cqe) {
     if (cqe->res < 0) {
       fprintf(stderr, "bad send %s\n", strerror(-cqe->res));
-      assert(0);
       return cqe->res;
     }
     auto idx = untag(cqe->user_data);

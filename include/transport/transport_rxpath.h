@@ -126,11 +126,9 @@ struct transport_rxpath {
       mbuf_free(pkt);
       return;
     }
-    reassembly.segs += pkt->nb_segs;
     bool end = hdr->eom;
     pkt->adj(sizeof(protocol::ft_header));
-    reassembly.size += pkt->data_len;
-    mbuf::merge(reassembly.first, reassembly.last, pkt);
+    mbuf::merge(reassembly.first, reassembly.last, pkt, reassembly.size, reassembly.segs);
     if (end) {
       out.emplace_back(reassembly.first, reassembly.size, reassembly.segs);
       reassembly.reset();

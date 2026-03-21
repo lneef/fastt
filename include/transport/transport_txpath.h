@@ -297,7 +297,6 @@ public:
       auto &desc = *it;
       ++it;
       assert(cumulative_ack_in_pkt + i + 1 == desc.seq);
-      printf("%u\n", desc.seq.v);
       if (!val)
         continue;
       if (!desc.sacked) {
