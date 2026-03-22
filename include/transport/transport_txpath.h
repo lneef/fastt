@@ -160,7 +160,7 @@ public:
   unsigned get_current_wnd() const { return budget; }
 
   bool can_transmit() {
-    return budget > 0 && (cc.space(inflight_pkts) > 0 || cc.rate_limited());
+    return budget > 0 && (cc.space(inflight_pkts) > 0);
   }
 
   bool check_timeout(uint64_t now) {
@@ -258,9 +258,6 @@ public:
       ++inflight_pkts;
       xmit_list.push_back(desc);
     }
-
-    if(rck.in_rto_recovery && sz == 0)
-        rearm(now);
   }
 
   void acknowledge(seq_t seq, uint64_t ts) {

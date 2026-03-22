@@ -228,9 +228,8 @@ static int lcore_open_fn(void *arg) {
       if (retval == -EAGAIN) {
         cif.poll();
         rx_fn(kv);
-      } else {
+      } else 
         sent += retval;
-      }
     }
     ++inflight;
     next += exp(rng) * rte_get_timer_hz();
