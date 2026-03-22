@@ -198,10 +198,10 @@ static int lcore_open_fn(void *arg) {
       auto rcvd = pry.recv(rsgl);
       if (rcvd <= 0)
         break;
-      kv::kv_packet<kv::kv_completion> resp;
-      rsgl.head->read(&resp);
+      auto *resp = 
+      rsgl.head->data<kv::kv_packet<kv::kv_completion>>();
       auto [t, k] = reqs.front();
-      ensure(resp.payload.key == k);
+      ensure(resp->payload.key == k);
       hdr_record_value(hist, (rte_get_timer_cycles() - t) /
                                  get_ticks_us());
       reqs.pop_front();
@@ -280,7 +280,6 @@ static void run(lcore_function_t *f, void *args) {
   adapter.dmac = conf.dmac;
   adapter.duration = conf.duration;
   adapter.rate = conf.rate;
-  std::cout << adapter.duration << ", " << adapter.rate << std::endl;
   i = 0;
   RTE_LCORE_FOREACH(lcore_id) {
     auto [port, txq, rxq] = ifc->get_slice(i);
