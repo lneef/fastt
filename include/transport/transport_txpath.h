@@ -136,7 +136,6 @@ public:
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
-      printf("%u\n", rck.end_seq.v);
       if (!rack::send_after(rck.xmit_ts, rck.end_seq, entry.xmit_ts, entry.seq))
         break;
       if (now >= entry.xmit_ts + rck.rtt + rck.reo_wnd) {
