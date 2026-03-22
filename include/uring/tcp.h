@@ -26,7 +26,6 @@ inline void print_tcp_info(FILE *stream, struct tcp_info *lk_tcp_info) {
   fprintf(stream, "Sacked: %u\n", lk_tcp_info->tcpi_sacked);
   fprintf(stream, "RX Ssthresh: %u\n", lk_tcp_info->tcpi_rcv_ssthresh);
   fprintf(stream, "RX RTT (us): %u\n", lk_tcp_info->tcpi_rcv_rtt);
-  fprintf(stream, "RX: %lu\n", lk_tcp_info->tcpi_bytes_received);
 }
 
 inline int disable_nagle(int fd) {
