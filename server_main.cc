@@ -22,6 +22,7 @@
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
 #include <signal.h>
+#include <sys/types.h>
 #include <utility>
 
 #include <tlx/container/btree_map.hpp>
@@ -109,12 +110,12 @@ int lcore_server_fun(void *arg) {
               slab.alloc_default_safe(sizeof(kv::kv_packet<kv::kv_completion>));
           serve(ssgl, slab, rsgl.head->data<kv::kv_packet<kv::kv_request>>());
           ssgl.add_segment_safe(std::move(pkt_ptr));
+          ssize_t to_send = ssgl.size;
           auto sent =
               co_await send(iface.get_scheduler(), con, std::move(ssgl));
-          if (sent == 0) {
+          if (sent == 0) 
             co_return;
-          }
-          assert(sent == sizeof(kv::kv_packet<kv::kv_completion>));
+          assert(sent == to_send);
         }
       });
 
