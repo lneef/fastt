@@ -140,12 +140,12 @@ public:
       cc.on_retransmission_timeout(lost, rtt, ts);
     }
 
-    prepare_transmission(non_acked, ts);
+    prepare_retransmission(non_acked, ts);
     cb(non_acked.packet.get());
     rearm(ts, 2);
   }
 
-  void prepare_transmission(sender_entry& desc, uint64_t now){
+  void prepare_retransmission(sender_entry& desc, uint64_t now){
       ++stats.retransmitted;
       desc.xmit_ts = now;
       desc.retransmitted = true;
@@ -267,7 +267,7 @@ public:
       assert(desc.queued);
       if (!cc.space(inflight_pkts))
         break;
-      prepare_transmission(desc, now);
+      prepare_retransmission(desc, now);
       f(desc.packet.get());
     }
   }
@@ -283,7 +283,6 @@ public:
       rck.in_fast_recovery = false;
       rck.in_rto_recovery = false;
     }
-    assert(timeout >= ts || xmit_list.empty());
   }
 
   void acknowledge_sack(protocol::ft_sack_payload *payload,
