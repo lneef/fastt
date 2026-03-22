@@ -228,14 +228,14 @@ public:
     strip_udp(msg, ft);
     auto pkt_len = msg->pkt_len;
     mbuf *head = nullptr;
+    auto off = protocol::defs::kftOffset;
     if (likely(pkt_len <= sb->kMaxDataLen)) {
       // fast path for small packets  
       head = sb->alloc_default(pkt_len);
-      rte_memcpy(head->data<void>(), rte_pktmbuf_mtod(msg, void *),
+      rte_memcpy(head->data<void>(), rte_pktmbuf_mtod_offset(msg, void *, off),
                  msg->pkt_len);
     } else {
       mbuf **last = &head;
-      size_t off = 0;
       while (pkt_len > 0) {
         auto alloc_size = std::min<uint32_t>(pkt_len, sb->kMaxDataLen);
         auto *elem = sb->alloc_default(alloc_size);
