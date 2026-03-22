@@ -77,7 +77,7 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
       conf.sip = inet_addr(optarg);
       break;
     case 1:
-      len = inet_addr(optarg);
+      len = atoi(optarg);
       break;
     }
   }
@@ -128,6 +128,7 @@ int lcore_server_fun(void *arg) {
 
 int run(netconfig &conf) {
   bench::prepare(store, len);
+
   if (fastt::init())
     return -1;
 

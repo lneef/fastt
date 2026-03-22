@@ -224,8 +224,9 @@ struct client_iface : iface_base {
   client_iface() : iface_base(), slt() {}
 
   int uring_connect(struct sockaddr_in *addr) {
-    auto *seq = io_uring_get_sqe(&ctx->ring);
-    io_uring_prep_connect(seq, fd,
+    auto *sqe = io_uring_get_sqe(&ctx->ring);
+    assert(sqe);
+    io_uring_prep_connect(sqe, fd,
                           reinterpret_cast<const struct sockaddr *>(addr),
                           sizeof(*addr));
     return 0;
@@ -387,6 +388,7 @@ struct server_iface : iface_base {
   }
 
   int handle_accept(struct io_uring_cqe *cqe) {
+      printf("new req\n");
     if (cqe->res > 0) {
       auto idx = free_slots.front();
       free_slots.pop_front();
