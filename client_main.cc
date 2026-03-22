@@ -160,15 +160,7 @@ static int lcore_closed_fn(void *arg) {
   }
   while (c < dur) {
     cif.poll();
-    sgl rsgl;
-    auto rcvd = kv.recv(rsgl);
-    if (rcvd < 0)
-      continue;
-    kv::kv_packet<kv::kv_completion> resp;
-    rsgl.head->read(&resp);
-    assert(resp.payload.key == kv[resp.id].key);
-    kv.complete(resp.id);
-    ++c;
+    rx_fn();
   }
 
   auto stats = kv.con->get_stats();
