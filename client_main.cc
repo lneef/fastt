@@ -143,7 +143,7 @@ static int lcore_closed_fn(void *arg) {
     int64_t key = dist(rng);
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
     kv::create_kv_request(m->data<uint8_t>(), tx->id, key);
-    tx->key = 1;
+    tx->key = key;
     sgl ssgl;
     ssgl.add_segment_safe(mbuf_take_owner_ship(m));
     auto sent = 0u;
