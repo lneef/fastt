@@ -126,10 +126,9 @@ static int lcore_closed_fn(void *arg) {
       auto rcvd = kv.recv(rsgl);
       if (rcvd <= 0)
         break;
-      kv::kv_packet<kv::kv_completion> resp;
-      rsgl.head->read(&resp);
-      assert(resp.payload.key == kv[resp.id].key);
-      kv.complete(resp.id);
+      auto *resp = rsgl.head->data<kv::kv_packet<kv::kv_completion>>();
+      assert(resp->payload.key == kv[resp->id].key);
+      kv.complete(resp->id);
       ++c;
     }
   };
