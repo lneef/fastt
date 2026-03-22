@@ -10,6 +10,7 @@ using req_desc_t = std::pair<uint64_t, int64_t>;
 using storage = tlx::btree_map<int64_t, std::string>;
 
 static constexpr size_t kStoreSize = 1024 * 1024;
+static constexpr size_t kMaxBurstLimit = 32;
 
 
 inline std::string random_string(std::size_t length) {

@@ -65,7 +65,7 @@ struct rack {
   uint64_t dup_ack_cnt = 0;
   bool reordering_seen = false;
 
-  seq_t high_data;
+  seq_t high_data, recovery_pnt;
   bool in_fast_recovery = false, in_rto_recovery = false;
 };
 
@@ -102,14 +102,26 @@ public:
       : cc(cc), seq(seq), least_unacked_pkt(seq), rtt(), timeout(),
         rck(seq - 1) {}
 
-  void rto_retransmit(uint64_t ts) {
+  template<typename F>
+  void rto_retransmit(uint64_t ts, F&& cb) {
     uint64_t lost = 0;
+    if(unacked.empty())
+        return;
+
     // we dont renege
+    auto &non_acked = unacked.front();
+    assert(non_acked.seq == least_unacked_pkt);
+    assert(!non_acked.sacked);
+    if(non_acked.link.is_linked())
+        non_acked.link.unlink();
+    if(!non_acked.queued)
+        --inflight_pkts;
+    ++lost;
+
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
-      if (entry.seq == least_unacked_pkt ||
-          ts - entry.xmit_ts >= rck.rtt + rck.reo_wnd) {
+      if (ts - entry.xmit_ts >= rck.rtt + rck.reo_wnd) {
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
         assert(entry.link.is_linked());
         entry.link.unlink();
@@ -121,13 +133,28 @@ public:
       }
     }
 
-    if(lost && !rck.in_rto_recovery){
-        rck.in_rto_recovery = true;
-        rck.in_fast_recovery = false;
-        rck.high_data = seq;
-        cc.on_retransmission_timeout(lost, rtt, ts);
+    if (!rck.in_rto_recovery) {
+      rck.in_rto_recovery = true;
+      rck.in_fast_recovery = false;
+      rck.high_data = seq;
+      cc.on_retransmission_timeout(lost, rtt, ts);
     }
-    rearm(ts);
+
+    prepare_transmission(non_acked, ts);
+    cb(non_acked.packet.get());
+    rearm(ts, 2);
+  }
+
+  void prepare_transmission(sender_entry& desc, uint64_t now){
+      ++stats.retransmitted;
+      desc.xmit_ts = now;
+      desc.retransmitted = true;
+      desc.packet->xmit = false;
+      desc.queued = false;
+      if(desc.link.is_linked())
+        desc.link.unlink();
+      ++inflight_pkts;
+      xmit_list.push_back(desc);
   }
 
   void detect_loss(uint64_t now) {
@@ -154,14 +181,11 @@ public:
       rck.high_data = seq;
       cc.on_fast_recovery(now, rtt);
     }
-
   }
 
   unsigned get_current_wnd() const { return budget; }
 
-  bool can_transmit() {
-    return budget > 0 && (cc.space(inflight_pkts) > 0);
-  }
+  bool can_transmit() { return budget > 0 && (cc.space(inflight_pkts) > 0); }
 
   bool check_timeout(uint64_t now) {
     if (now > timeout)
@@ -169,7 +193,7 @@ public:
     return false;
   }
 
-  void rearm(uint64_t ts) { timeout = ts + rto; }
+  void rearm(uint64_t ts, uint64_t bkoff = 1) { timeout = ts + bkoff * rto; }
 
   void cleanup_acked_pkts(seq_t seq, uint64_t ts) {
     uint64_t cumulative_rtt = ~0ull;
@@ -243,20 +267,8 @@ public:
       assert(desc.queued);
       if (!cc.space(inflight_pkts))
         break;
-      if (!f(desc.packet.get()))
-        break;
-
-      ++stats.retransmitted;
-      // inc reference count
-      // in total we have n + 1 where n is the number of transmissions
-      // entry->msg n reduction because of cleanup
-      desc.xmit_ts = now;
-      desc.retransmitted = true;
-      desc.packet->xmit = false;
-      desc.queued = false;
-      desc.link.unlink();
-      ++inflight_pkts;
-      xmit_list.push_back(desc);
+      prepare_transmission(desc, now);
+      f(desc.packet.get());
     }
   }
 
@@ -267,11 +279,10 @@ public:
     cleanup_acked_pkts(seq, ts);
     rearm(ts);
     least_unacked_pkt = seq + 1;
-    if ((rck.in_fast_recovery || rck.in_rto_recovery) && seq > rck.high_data){
+    if ((rck.in_fast_recovery || rck.in_rto_recovery) && seq > rck.high_data) {
       rck.in_fast_recovery = false;
       rck.in_rto_recovery = false;
     }
-
     assert(timeout >= ts || xmit_list.empty());
   }
 

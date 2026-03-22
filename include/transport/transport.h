@@ -14,11 +14,11 @@
 
 #include "sgl.h"
 #include "slab_allocator.h"
+#include "transport/congestion_control.h"
 #include "transport/seq.h"
 #include "transport_rxpath.h"
-#include "transport/congestion_control.h"
-#include "transport_txpath.h"
 #include "transport_stats.h"
+#include "transport_txpath.h"
 #include "util.h"
 
 enum class connection_state {
@@ -30,8 +30,10 @@ enum class connection_state {
 
 class connection_manager;
 
-template <typename P = packet_if, typename M = connection_manager> class transport {
+template <typename P = packet_if, typename M = connection_manager>
+class transport {
   friend M;
+
 public:
   static constexpr uint16_t kMaxPayload = 1500 - protocol::defs::kHeaderMTUlen;
   struct {
@@ -39,16 +41,17 @@ public:
     uint64_t retransmissions = 0;
   } stats;
 
-  transport(P *pkt_sink, slab_allocator *sb, M* manager, transport_config cfg,
+  transport(P *pkt_sink, slab_allocator *sb, M *manager, transport_config cfg,
             uint16_t sport, uint16_t dport)
-      : cc(get_ticks_us() * 100), trx(), builder(sport, dport), cfg(cfg), ttx(cc), sb(sb), acb(), manager(manager),
-        pkt_if(pkt_sink) {}
+      : cc(get_ticks_us() * 100), trx(), builder(sport, dport), cfg(cfg),
+        ttx(cc), sb(sb), acb(), manager(manager), pkt_if(pkt_sink) {}
 
   void perform_recovery() {
-    ttx.advance_recovery([&](mbuf *pkt) -> bool {
-      pkt_if->consume_pkt_mbuf(pkt, cfg);
-      return true;
-    }, manager->get_current_timer_cycles());
+    ttx.advance_recovery(
+        [&](mbuf *pkt) {
+          pkt_if->consume_pkt_mbuf(pkt, cfg);
+        },
+        manager->get_current_timer_cycles());
   }
 
   void check_timeout(uint64_t now) {
@@ -57,7 +60,11 @@ public:
     if (ttx.all_acked())
       return;
     if (ttx.check_timeout(now)) {
-      ttx.rto_retransmit(now);
+      ttx.rto_retransmit(now, [&](mbuf *pkt){
+        pkt_if->consume_pkt_mbuf(pkt, cfg);
+      });
+
+      //retransmit more if we have space
       perform_recovery();
     }
   }
@@ -119,7 +126,7 @@ public:
                       hdr->seq.v, hdr->ack.v, hdr->ackframe, hdr->crd);
       if (!check_pkt(msg, hdr->seq))
         return false;
-      if (hdr->ackframe) 
+      if (hdr->ackframe)
         ttx.acknowledge(hdr->ack, ts);
       if (hdr->crd)
         ttx.update_budget(hdr->crd);
@@ -170,7 +177,7 @@ public:
       FASTT_LOG_DEBUG("Got WND_RET seq=%u wnd=%u\n", hdr->seq.v, hdr->crd);
       if (!check_pkt(msg, hdr->seq))
         return false;
-      if (hdr->ackframe) 
+      if (hdr->ackframe)
         ttx.acknowledge(hdr->ack, ts);
       ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
@@ -203,7 +210,7 @@ public:
   }
 
   void close_connection() {
-    // just send for now  
+    // just send for now
     // we wait till everything is acked anyway because of RPC pattern
     auto now = manager->get_current_timer_cycles();
     auto *pkt = sb->alloc_default(sizeof(protocol::ft_header));
@@ -274,17 +281,11 @@ public:
 
   connection_state get_state() const { return cstate; }
 
-  bool can_recv() {
-    return trx.has_buffered_mbufs_frags();
-  }
+  bool can_recv() { return trx.has_buffered_mbufs_frags(); }
 
-  bool can_send() {
-    return (ttx.get_current_wnd() > 0);
-  }
+  bool can_send() { return (ttx.get_current_wnd() > 0); }
 
-  hdr_histogram* get_hist(){
-      return cc.hist; 
-  }
+  hdr_histogram *get_hist() { return cc.hist; }
 
   ssize_t send_single_seg(sgl &msgl) {
     if (!ttx.can_transmit())
@@ -364,9 +365,10 @@ private:
   transport_txpath ttx;
   slab_allocator *sb;
   ack_cb acb;
-  M* manager;
+  M *manager;
   P *pkt_if;
   connection_state cstate = connection_state::ESTABLISHING;
+
 public:
   std::optional<concurrency::coro_handle> coro;
   list_hook link;
