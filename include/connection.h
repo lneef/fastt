@@ -93,8 +93,8 @@ public:
                               const uint16_t target);
 
   void poll_client() {
-    fetch_from_qpair();
     update_current_timer_cycles();
+    fetch_from_qpair();
     for (size_t i = 0u, end = ack_outstanding.size(); i < end; ++i) {
       auto &con = ack_outstanding.front();
       ack_outstanding.pop_front();
