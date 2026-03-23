@@ -1,266 +1,253 @@
 #include <arpa/inet.h>
-#include <bit>
 #include <bits/getopt_core.h>
-#include <cerrno>
-#include <chrono>
+#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <kv_protocol.h>
 #include <liburing.h>
 #include <liburing/io_uring.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
+#include <poll.h>
+#include <pthread.h>
 #include <random>
-#include <ranges>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
 #include <utility>
 
-#include "uring/iface.h"
-#include "uring/tcp.h"
-#include <tlx/container/btree_map.hpp>
+#include <hdr/hdr_histogram.h>
 
-static constexpr uint32_t kDefaultTXN = 1e6;
-static constexpr uint16_t kDefaultSQBatch = 8;
+#include "bench.h"
+#include "uring/cpu.h"
+#include "uring/iface.h"
+#include <tlx/container/btree_map.hpp>
 
 static std::random_device dev;
 static std::mt19937 rng(dev());
-static std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
-static constexpr uint32_t kStoreSize = 1024 * 1024;
-static tlx::btree_map<int64_t, int64_t> store;
-
-static void prepare() {
-  uint32_t size = kStoreSize;
-  for (auto [k, v] :
-       std::ranges::views::iota(0u, size) | std::views::transform([&](int) {
-         return std::make_pair(dist(rng), dist(rng));
-       })) {
-    store[k] = v;
-  }
-  assert(store.size() == kStoreSize);
-}
-
-struct slot_storage {
-  std::deque<unsigned> free_slots;
-  std::vector<int64_t> elems;
-  slot_storage(unsigned n) : elems(n) {
-    for (unsigned i = 0; i < n; ++i)
-      free_slots.push_back(i);
-  }
-};
+static std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
+static bench::storage store;
 
 unsigned seen = 0;
-static int handle_request(kv::kv_packet<kv::kv_request> *req,
-                          kv::kv_packet<kv::kv_completion> *completion) {
-  auto key = req->payload.key;
-  auto it = store.find(key);
+
+static size_t handle_request(kv::kv_packet<kv::kv_request> *req,
+                             uring::slot &slt) {
+  kv::kv_packet<kv::kv_completion> *completion;
+  auto it = store.find(req->payload.key);
+
+  size_t resp_size = sizeof(*completion);
+  if (it == store.end()) {
+    completion = reinterpret_cast<kv::kv_packet<kv::kv_completion> *>(
+        slt.tx_buffer.reserve(resp_size));
+    if (!completion)
+      return 0;
+    completion->payload.reponse = kv::response_t::FAILURE;
+    completion->payload.data_len = 0;
+  } else {
+    resp_size += it->second.size();
+    completion = reinterpret_cast<kv::kv_packet<kv::kv_completion> *>(
+        slt.tx_buffer.reserve(resp_size));
+    if (!completion)
+      return 0;
+    completion->payload.reponse = kv::response_t::SUCCESS;
+    std::memcpy(completion->payload.data, it->second.data(), it->second.size());
+    completion->payload.data_len = it->second.size();
+  }
   completion->id = req->id;
   completion->pt = req->pt;
   completion->payload.key = req->payload.key;
-  if (it == store.end()) {
-    completion->payload.reponse = kv::response_t::FAILURE;
-    completion->payload.val = 0;
-  } else {
-    completion->payload.reponse = kv::response_t::SUCCESS;
-    completion->payload.val = it->second;
-  }
+  assert(req->pt == kv::packet_t::SINGLE);
+  assert(req->payload.op == kv::request_t::GET);
   ++seen;
-  return 0;
+  return resp_size;
 }
 
-static uint64_t request_batch(uring::client_iface *st, slot_storage &slt_strge,
-                              uint64_t t, uint8_t bs) {
-  for (auto i = 0u; i < std::min<unsigned>(bs, kDefaultTXN - t); ++i) {
-    if (!slt_strge.free_slots.size())
-      break;
-    uint8_t *buf = static_cast<uint8_t *>(st->pool.alloc());
-    if (!buf)
-      break;
-    auto *sqe = st->ctx->get_sqe();
-    if (!sqe) {
-      st->pool.free(buf);
-      break;
-    }
-    auto slt_id = slt_strge.free_slots.front();
-    slt_strge.free_slots.pop_front();
-    int64_t key = dist(rng);
-    slt_strge.elems[slt_id] = key;
-    kv::create_kv_request(buf, slt_id, key);
-    ++t;
-    st->prepare_send(buf, sizeof(kv::kv_packet<kv::kv_request>),
-                     std::bit_cast<uint64_t>(buf), st->fd, sqe);
-  }
-  return t;
+int64_t k = 0;
+static bool request_single(uring::slot &slt, int64_t &key) {
+  auto *req = slt.tx_buffer.reserve(sizeof(kv::kv_packet<kv::kv_request>));
+  if (!req)
+    return false;
+  std::memset(req, 0, sizeof(kv::kv_packet<kv::kv_request>));
+  key = dist(rng);
+  kv::create_kv_request(req, 0, key);
+  assert(reinterpret_cast<kv::kv_packet<kv::kv_request> *>(req)->payload.op ==
+         kv::request_t::GET);
+  return true;
 }
 
-static void copy_to_buffer(uring::iface_base &iface, uring::slot &slt){
-  while (!slt.incoming.empty()) {
-    auto [bidx, blen] = slt.incoming.front();
-    if (!slt.rbuffer.enough_space(blen))
-      break;
-    auto *buf = iface.ctx->get_buffer(bidx);
-    slt.rbuffer.cpy(buf, blen);
-    uring::recycle_buffer(iface.ctx.get(), bidx);
-    slt.incoming.pop_front();
-  }
+bool is_all_zero(const unsigned char *data, size_t size) {
+  return std::all_of(data, data + size, [](unsigned char b) { return b == 0; });
 }
 
-
-unsigned prsd = 0;
-static void parse_request(uring::server_iface &iface,
-                                            uring::slot &slt) {
+static void parse_request(uring::slot &slt) {
   using kv_request_t = kv::kv_packet<kv::kv_request>;
-  using kv_response_t = kv::kv_packet<kv::kv_completion>;
   unsigned i = 0;
-  struct io_uring_sqe *sqe = nullptr;
-  unsigned char *sbuf = nullptr;
-  unsigned resp_off = 0;
-  copy_to_buffer(iface, slt);
-
+  unsigned resp_size = 0;
   auto size = slt.rbuffer.off;
   auto *data = slt.rbuffer.data();
   for (; i < size;) {
     auto *req = reinterpret_cast<kv_request_t *>(data + i);
     if (size - i < sizeof(kv_request_t))
       break;
-
-    if (!sbuf) {
-      sbuf = static_cast<uint8_t *>(iface.pool.alloc());
-      if (!sbuf) {
-        goto end;
-      }
-    }
-
-    if (!sqe) {
-      sqe = iface.ctx->get_sqe();
-      if (!sqe) {
-        iface.pool.free(sbuf);
-        goto end;
-      }
-    }
-
-    handle_request(req, new (sbuf + resp_off) kv_response_t);
-    resp_off += sizeof(kv_response_t);
-    if (iface.pool.kElemSize - resp_off < sizeof(kv_response_t)) {
-      iface.prepare_send(sbuf, resp_off, std::bit_cast<uint64_t>(sbuf),
-                         iface.clients[slt.idx], sqe);
-      resp_off = 0;
-      sbuf = nullptr;
-      sqe = nullptr;
-    }
+    resp_size = handle_request(req, slt);
+    if (!resp_size)
+      break;
     i += sizeof(kv_request_t);
   }
-end:
-  if (sqe)
-    iface.prepare_send(sbuf, resp_off, std::bit_cast<uint64_t>(sbuf),
-                       iface.clients[slt.idx], sqe);
-  prsd += i;
   std::memmove(data, data + i, size - i);
   slt.rbuffer.reset(size - i);
-  copy_to_buffer(iface, slt);
 }
 
-static unsigned 
-parse_completion(uring::client_iface& iface, uring::slot& slt, slot_storage &slt_strge) {
+template <typename F>
+static unsigned parse_completion(uring::slot &slt, F &&cb) {
   using packet_t = kv::kv_packet<kv::kv_completion>;
   unsigned i = 0;
   unsigned c = 0;
-  copy_to_buffer(iface, slt);
-  auto data = slt.rbuffer.data();
+  volatile auto data = slt.rbuffer.data();
   auto size = slt.rbuffer.off;
+  packet_t resp;
   for (; i < size;) {
     if (size - i < sizeof(packet_t))
       break;
-
-    auto *resp = reinterpret_cast<packet_t *>(data + i);
-    slt_strge.free_slots.push_back(resp->id);
-    assert(resp->payload.key == slt_strge.elems[resp->id]);
-    ++c;
+    std::memcpy(&resp, data + i, sizeof(packet_t));
     i += sizeof(packet_t);
+    if (size - i < resp.payload.data_len) {
+      i -= sizeof(packet_t);
+      break;
+    }
+
+    i += resp.payload.data_len;
+    cb(&resp);
+    ++c;
   }
-  prsd += i;
   std::memmove(data, data + i, size - i);
   slt.rbuffer.reset(size - i);
-  copy_to_buffer(iface, slt);
   return c;
 }
 
-static uint64_t process_completions(uring::client_iface *st,
-                                    slot_storage &slt_strge) {
+static bool submit_send(uring::iface_base &iface, uring::slot &slt, int fd) {
+  if (slt.tx_inflight)
+    return false;
+  if (slt.tx_buffer.size() == 0)
+    return false;
+  auto *sqe = iface.ctx->get_sqe();
+  if (!sqe)
+    return false;
+  slt.prepare_send(slt.tx_buffer.front(), slt.tx_buffer.size(), slt.idx, fd,
+                   sqe);
+  assert(slt.tx_inflight);
+  return true;
+}
+
+static void handle_recv(uring::iface_base &iface, uring::slot &slt,
+                        unsigned idx, size_t size) {
+  slt.incoming.emplace_back(idx, size);
+  iface.drain_incoming(slt);
+}
+
+template <typename F>
+static uint64_t process_completions(uring::client_iface &iface, F &&cb) {
   unsigned head = 0;
   unsigned c = 0;
   unsigned cnt = 0;
   int ret;
   struct io_uring_cqe *cqe;
-  ret = st->uring_submit_and_wait(&cqe);
-  if (ret == -ETIME)
-    return 0;
+  ret = iface.uring_submit_and_get_events();
   if (ret < 0) {
     fprintf(stderr, "submission failed %s\n", strerror(-ret));
     return ret;
   }
-  uring::drain_rx_renew(st);
-  io_uring_for_each_cqe(&st->ctx->ring, head, cqe) {
-    st->handle_cqe(cqe, [&](unsigned idx, size_t size, unsigned sidx) {
-      (void)sidx;
-      st->slt.incoming.emplace_front(idx, size);
-      auto nc = parse_completion(*st, st->slt, slt_strge);
-
-      c += nc;
-      return 0;
-    });
+  uring::drain_rx_renew(&iface);
+  io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
+    iface.handle_cqe(
+        cqe, [&](unsigned idx, size_t size, [[maybe_unused]] unsigned sidx) {
+          handle_recv(iface, iface.slt, idx, size);
+        return 0;
+        });
     ++cnt;
   }
-  io_uring_cq_advance(&st->ctx->ring, cnt);
+  io_uring_cq_advance(&iface.ctx->ring, cnt);
+  iface.drain_incoming(iface.slt);
+  c += parse_completion(iface.slt, cb);
+  submit_send(iface, iface.slt, iface.fd);
   return c;
 }
 
-static int client_fun(struct sockaddr_in addr) {
-  static constexpr uint16_t kNumSlots = 128;
+static int client_fun_open(uint16_t id, struct sockaddr_in addr,
+                           uint64_t duration, double rate) {
+  size_t burst_length = 0;  
+  set_thread_affinity(pthread_self(), id);
   uring::client_iface iface{};
   struct io_uring_cqe *cqe;
   iface.setup(0);
-  uint64_t t = 0, c = 0;
   iface.uring_connect(&addr);
   iface.uring_submit_and_wait();
   io_uring_peek_cqe(&iface.ctx->ring, &cqe);
-  io_uring_cq_advance(&iface.ctx->ring, 1);
   if (cqe->res < 0) {
-    fprintf(stderr, "Failed to connect: %d\n", cqe->res);
+    fprintf(stderr, "Failed to connect: %s\n", strerror(-cqe->res));
     return cqe->res;
   }
-  slot_storage slt_strge(kNumSlots);
-  iface.prepare_recv();
-  auto start = std::chrono::steady_clock::now();
-  while (kDefaultTXN > t) {
-    c += process_completions(&iface, slt_strge);
-    t = request_batch(&iface, slt_strge, t, kDefaultSQBatch);
-  }
 
-  while (c < kDefaultTXN) {
-    c += process_completions(&iface, slt_strge);
+  io_uring_cq_advance(&iface.ctx->ring, 1);
+  iface.prepare_recv();
+
+  std::exponential_distribution<> exp(rate);
+  auto start_time = rdtsc_precise() + 1 * get_tsc_freq();
+  uint64_t ticks_per_sec = get_tsc_freq();
+  duration *= ticks_per_sec;
+  auto ticks_per_us = ticks_per_sec / (1e6);
+  auto end_time = start_time + duration;
+  uint64_t next = start_time + ticks_per_sec * exp(rng);
+  hdr_histogram *hist;
+  std::deque<bench::req_desc_t> reqs;
+  uint64_t inflight = 0;
+  hdr_init(1, 500'000, 3, &hist);
+  auto rx_cb = [&](kv::kv_packet<kv::kv_completion> *resp) {
+    auto [t, k] = reqs.front();
+    assert(resp->payload.key == k);
+    --inflight;
+    hdr_record_value(hist, (rdtsc() - t) / ticks_per_us);
+    reqs.pop_front();
+  };
+
+  while (next < end_time) {
+    if (rdtsc() < next || burst_length == bench::kMaxBurstLimit) {
+      process_completions(iface, rx_cb);
+      burst_length = 0;
+      continue;
+    }
+
+    int64_t key;
+    while (!request_single(iface.slt, key))
+      process_completions(iface, rx_cb);
+    ++inflight;
+    ++burst_length;
+    reqs.emplace_back(next, key);
+    next += ticks_per_sec * exp(rng);
   }
-  struct tcp_info info;
-  uring::tcp::get_tcp_stats(iface.fd, &info);
-  uring::tcp::print_tcp_info(stdout, &info);
-  auto end = std::chrono::steady_clock::now();
-  printf("%f\n",
-         std::chrono::duration<double, std::micro>(end - start).count());
+  while (inflight > 0)
+    process_completions(iface, rx_cb);
+
+  FILE *f = fopen("latency.uring.hgrm", "w");
+  hdr_percentiles_print(hist, f, 5, 1.0, CLASSIC);
+  fclose(f);
   return 0;
 }
 
-static int server_fun(int port_arg, in_addr_t addr) {
+static int server_fun(uint16_t id, unsigned sz, int port_arg, in_addr_t addr) {
+  set_thread_affinity(pthread_self(), id);
   int ret;
-  prepare();
+  bench::prepare(store, sz);
   struct io_uring_cqe *cqe;
-  uring::server_iface iface{};
+  uring::server_iface iface;
   iface.setup(port_arg);
   unsigned head = 0;
   ret = iface.prepare_listen(addr);
@@ -274,10 +261,9 @@ static int server_fun(int port_arg, in_addr_t addr) {
     fprintf(stderr, "Prepare accept failed: %s\n", strerror(-ret));
     return ret;
   }
-  unsigned rx = 0;
   while (true) {
-    ret = iface.uring_submit_and_wait(&cqe);
-    if (ret < 0 && ret != -ETIME) {
+    ret = iface.uring_submit_and_wait();
+    if (ret < 0) {
       fprintf(stderr, "submission failed %s\n", strerror(-ret));
       return ret;
     }
@@ -285,18 +271,19 @@ static int server_fun(int port_arg, in_addr_t addr) {
     unsigned cnt = 0;
     io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
       iface.handle_cqe(cqe, [&](unsigned idx, size_t size, unsigned sidx) {
-            auto &slt = iface.connection_state(sidx);
-            slt.incoming.emplace_back(idx, size);
-            rx += size;
-            parse_request(iface, slt);
-            return 0;
-          });
+        auto &slt = iface.slot_at(sidx);
+        handle_recv(iface, slt, idx, size);
+        return 0;
+      });
       ++cnt;
     }
     io_uring_cq_advance(&iface.ctx->ring, cnt);
 
-    for (auto &slt : iface.active) 
-        parse_request(iface, slt);
+    for (auto &slt : iface.active) {
+      iface.drain_incoming(slt);
+      parse_request(slt);
+      submit_send(iface, slt, iface.clients[slt.idx]);
+    }
   }
   return 0;
 }
@@ -306,10 +293,13 @@ int main(int argc, char *argv[]) {
   int opt, nt = 1;
   bool is_client = false;
   bool did_init_addr = false;
+  uint64_t duration = 5;
+  double rate = 100000;
+  size_t sz = 8;
   struct in_addr ip_addr;
   std::vector<std::thread> threads;
 
-  while ((opt = getopt(argc, argv, "p:ca:t:")) != -1) {
+  while ((opt = getopt(argc, argv, "p:ca:t:d:r:os:P")) != -1) {
     switch (opt) {
     case 'p':
       port_arg = std::atoi(optarg);
@@ -324,6 +314,17 @@ int main(int argc, char *argv[]) {
     case 't':
       nt = std::atoi(optarg);
       break;
+    case 'd':
+      duration = std::atol(optarg);
+      break;
+    case 'r':
+      rate = std::stod(optarg);
+      break;
+
+    case 's':
+      sz = std::atol(optarg);
+      break;
+
     default:
       fprintf(stderr,
               "Usage: %s [-p port] "
@@ -336,12 +337,15 @@ int main(int argc, char *argv[]) {
   uint16_t pidx = 0;
   for (uint16_t i = 0; i < nt; ++i) {
     if (is_client) {
-      threads.emplace_back(client_fun, sockaddr_in{.sin_family = AF_INET,
-                                                   .sin_port = htons(port_arg),
-                                                   .sin_addr = {ip_addr},
-                                                   .sin_zero = {}});
+      threads.emplace_back(client_fun_open, i,
+                           sockaddr_in{.sin_family = AF_INET,
+                                       .sin_port = htons(port_arg),
+                                       .sin_addr = {ip_addr},
+                                       .sin_zero = {}},
+                           duration, rate);
+
     } else {
-      threads.emplace_back(server_fun, port_arg + pidx++,
+      threads.emplace_back(server_fun, i, sz, port_arg + pidx++,
                            did_init_addr ? ip_addr.s_addr : INADDR_ANY);
     }
   }

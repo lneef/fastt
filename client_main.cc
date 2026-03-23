@@ -1,3 +1,4 @@
+#include "bench.h"
 #include "client.h"
 #include "connection.h"
 #include "dpdk/allocator.h"
@@ -9,7 +10,6 @@
 #include "util.h"
 #include <arpa/inet.h>
 #include <atomic>
-#include <bits/getopt_core.h>
 #include <cassert>
 #include <cerrno>
 #include <charconv>
@@ -37,6 +37,7 @@ struct netconfig {
   uint16_t dport;
   uint64_t duration;
   double rate;
+  bool open = false;
   std::vector<uint16_t> sports;
 };
 
@@ -57,10 +58,15 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 
   netconfig conf;
   static const struct option long_options[] = {
-      {"dip", required_argument, 0, 0},   {"sip", required_argument, 0, 0},
-      {"dmac", required_argument, 0, 0},  {"sport", required_argument, 0, 0},
-      {"dport", required_argument, 0, 0}, {"duration", required_argument, 0, 0},
-      {"rate", required_argument, 0, 0},  {0, 0, 0, 0}};
+      {"dip", required_argument, 0, 0},
+      {"sip", required_argument, 0, 0},
+      {"dmac", required_argument, 0, 0},
+      {"sport", required_argument, 0, 0},
+      {"dport", required_argument, 0, 0},
+      {"duration", required_argument, 0, 0},
+      {"rate", required_argument, 0, 0},
+      {"open", no_argument, 0, 0},
+      {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
     switch (option_index) {
@@ -91,6 +97,8 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
     case 6:
       conf.rate = std::stod(optarg);
       break;
+    case 7:
+      conf.open = true;
     default:
       break;
     }
@@ -98,10 +106,75 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
   return conf;
 }
 
-static int lcore_fn(void *arg) {
+static constexpr auto dur = 1e6;
+static int lcore_closed_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
+  std::uniform_int_distribution<int64_t> dist(0, 1024 * 1024);
+  auto *adapter = static_cast<lcore_adapter *>(arg);
+  auto me = rte_lcore_index(rte_lcore_id());
+  auto &cif = *adapter->cifs[me];
+  kv_proxy kv(&cif);
+  kv.connect(adapter->cfg, rte_lcore_id(), adapter->dmac);
+  auto *sb = cif.manager.get_allocator();
+  uint64_t t = 0;
+  uint64_t c = 0;
+
+  auto rx_fn = [&] {
+    for (;;) {
+      sgl rsgl;
+      auto rcvd = kv.recv(rsgl);
+      if (rcvd <= 0)
+        break;
+      auto *resp = rsgl.head->data<kv::kv_packet<kv::kv_completion>>();
+      assert(resp->payload.key == kv[resp->id].key);
+      kv.complete(resp->id);
+      ++c;
+    }
+  };
+
+  auto now = rte_get_timer_cycles();
+  while (t < dur) {
+    cif.poll();
+    rx_fn();
+    auto *tx = kv.start();
+    if (!tx)
+      continue;
+    int64_t key = dist(rng);
+    auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
+    kv::create_kv_request(m->data<uint8_t>(), tx->id, key);
+    tx->key = key;
+    sgl ssgl;
+    ssgl.add_segment_safe(mbuf_take_owner_ship(m));
+    auto sent = 0u;
+    while (sent < sizeof(kv::kv_packet<kv::kv_request>)) {
+      auto retval = kv.send(ssgl);
+      if (retval == -EAGAIN) {
+        cif.poll();
+        rx_fn();
+      } else
+        sent += retval;
+    }
+    assert(sent == sizeof(kv::kv_packet<kv::kv_request>));
+    ++t;
+  }
+  while (c < dur) {
+    cif.poll();
+    rx_fn();
+  }
+
+  auto stats = kv.con->get_stats();
+  kv.close();
+  std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
+  auto end = rte_get_timer_cycles();
+  std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
+  return 0;
+}
+
+static int lcore_open_fn(void *arg) {
+  std::random_device dev;
+  std::mt19937 rng(dev());
+  std::uniform_int_distribution<int64_t> dist(0, 1024 * 1024);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
@@ -117,36 +190,36 @@ static int lcore_fn(void *arg) {
   hdr_histogram *hist;
   hdr_init(1, 500'000, 3, &hist);
 
-  std::deque<uint64_t> times;
-  std::deque<int64_t> reqs;
+  std::deque<bench::req_desc_t> reqs;
+  uint64_t inflight = 0;
   auto rx_fn = [&](kv_proxy &pry) {
     for (;;) {
       sgl rsgl;
       auto rcvd = pry.recv(rsgl);
-      if (!rcvd)
+      if (rcvd <= 0)
         break;
-      kv::kv_packet<kv::kv_completion> resp;
-      rsgl.head->read(&resp);
-      ensure(resp.payload.key == reqs.front());
-      assert(!times.empty());
-      hdr_record_value(hist, (rte_get_timer_cycles() - times.front()) /
+      auto *resp = 
+      rsgl.head->data<kv::kv_packet<kv::kv_completion>>();
+      auto [t, k] = reqs.front();
+      ensure(resp->payload.key == k);
+      hdr_record_value(hist, (rte_get_timer_cycles() - t) /
                                  get_ticks_us());
-      times.pop_front();
       reqs.pop_front();
+      --inflight;
     }
   };
 
   auto now = rte_get_timer_cycles();
-  times.push_back(next);
-  while (times.front() < end_time) {
-    cif.poll();
-    rx_fn(kv);
-    if (rte_get_timer_cycles() < times.empty())
+  while (next < end_time) {
+    if (rte_get_timer_cycles() < next) {
+      cif.poll();
+      rx_fn(kv);
       continue;
+    }
     int64_t key = dist(rng);
+    reqs.emplace_back(next, key);
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
     kv::create_kv_request(m->data<uint8_t>(), 0, key);
-    reqs.push_back(key);
     sgl ssgl;
     ssgl.add_segment_safe(mbuf_take_owner_ship(m));
     auto sent = 0u;
@@ -155,22 +228,25 @@ static int lcore_fn(void *arg) {
       if (retval == -EAGAIN) {
         cif.poll();
         rx_fn(kv);
-      } else {
+      } else 
         sent += retval;
-      }
     }
-    next = next + exp(rng) * rte_get_timer_hz();
-    times.push_back(next);
+    ++inflight;
+    next += exp(rng) * rte_get_timer_hz();
   }
 
-  while (!times.empty()) {
+  while (inflight > 0) {
     cif.poll();
     rx_fn(kv);
   }
 
   auto stats = kv.con->get_stats();
   kv.close();
+  FILE *f = fopen("latency.hgrm", "w");
+  hdr_percentiles_print(hist, f, 5, 1.0, CLASSIC);
+  fclose(f);
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
+  std::cerr << hdr_value_at_percentile(hist, 99.0) << std::endl;
   auto end = rte_get_timer_cycles();
   std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
   return 0;
@@ -201,6 +277,8 @@ static void run(lcore_function_t *f, void *args) {
 
   lcore_adapter adapter(nthreads, {conf.dip, conf.dport});
   adapter.dmac = conf.dmac;
+  adapter.duration = conf.duration;
+  adapter.rate = conf.rate;
   i = 0;
   RTE_LCORE_FOREACH(lcore_id) {
     auto [port, txq, rxq] = ifc->get_slice(i);
@@ -210,7 +288,10 @@ static void run(lcore_function_t *f, void *args) {
         con_config{conf.sip, conf.sports[i]}, rte_lcore_count());
     ++i;
   }
-  run(lcore_fn, &adapter);
+  if (conf.open)
+    run(lcore_open_fn, &adapter);
+  else
+    run(lcore_closed_fn, &adapter);
   ifc->stop();
   std::cout << "avg: " << lat.load() / rte_lcore_count() << std::endl;
   return 0;

@@ -10,10 +10,13 @@
 #include "slab_allocator.h"
 #include "transport/congestion_control.h"
 #include "transport/seq.h"
+#include "transport/transport_rxpath.h"
 #include "util.h"
 
 struct rack {
   static constexpr uint64_t kMinRTT = 30;
+  static constexpr uint64_t kDefaultReoMult = 1;
+  static constexpr uint16_t kDupThresh = 3;
   static bool send_after(uint64_t t1, seq_t seq1, uint64_t t2, seq_t seq2) {
     if (t1 > t2)
       return true;
@@ -36,10 +39,34 @@ struct rack {
     }
   }
 
+  void detect_reordering(seq_t seq, bool retransmitted) {
+    if (seq > fack)
+      fack = seq;
+    else if (seq < fack && !retransmitted)
+      reordering_seen = true;
+  }
+
+  void update_reo_wnd(bool in_recovery, uint64_t segs_sacked, uint64_t srtt) {
+    if (!reordering_seen) {
+      if (in_recovery)
+        reo_wnd = 0;
+      else if (segs_sacked >= kDupThresh)
+        reo_wnd = 0;
+      return;
+    }
+    reo_wnd = std::min(kDefaultReoMult * min_rtt / 4, srtt);
+  }
+
+  rack(seq_t end_seq) : end_seq(end_seq), fack(end_seq) {}
+
   uint64_t min_rtt{kMinRTT * get_ticks_us()}, rtt = 0;
-  uint64_t xmit_ts = 0;
-  seq_t end_seq{~0u};
+  uint64_t xmit_ts = 0, reo_wnd = 0;
+  seq_t end_seq, fack;
   uint64_t dup_ack_cnt = 0;
+  bool reordering_seen = false;
+
+  seq_t high_data, recovery_pnt;
+  bool in_fast_recovery = false, in_rto_recovery = false;
 };
 
 struct sender_entry {
@@ -68,55 +95,97 @@ class transport_txpath {
 public:
   struct statistics {
     seq_t acked;
-    uint64_t retransmitted, rtt;
+    uint64_t retransmitted, rtt, sent;
     statistics() : acked(0), retransmitted(0) {}
   };
-  transport_txpath(swift &cc) : cc(cc), rtt(), timeout() {}
+  transport_txpath(swift &cc, seq_t seq = {0})
+      : cc(cc), seq(seq), least_unacked_pkt(seq), rtt(), timeout(),
+        rck(seq - 1) {}
 
-  void rto_retransmit(uint64_t ts) {
+  template<typename F>
+  void rto_retransmit(uint64_t ts, F&& cb) {
     uint64_t lost = 0;
+    if(unacked.empty())
+        return;
+
+    // we dont renege
+    auto &non_acked = unacked.front();
+    assert(non_acked.seq == least_unacked_pkt);
+    assert(!non_acked.sacked);
+    if(non_acked.link.is_linked())
+        non_acked.link.unlink();
+    if(!non_acked.queued)
+        --inflight_pkts;
+    ++lost;
+
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
-      if (entry.seq == least_unacked_pkt || ts - entry.xmit_ts >= rck.rtt) {
+      if (ts - entry.xmit_ts >= rck.rtt + rck.reo_wnd) {
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
         assert(entry.link.is_linked());
-        inflight -= entry.packet->data_len;
         entry.link.unlink();
+        assert(inflight_pkts > 0);
+        --inflight_pkts;
         entry.queued = true;
         retransmission_queue.push_back(entry);
         ++lost;
       }
     }
-    cc.on_retransmission_timeout(lost, rtt, ts);
+
+    if (!rck.in_rto_recovery) {
+      rck.in_rto_recovery = true;
+      rck.in_fast_recovery = false;
+      rck.high_data = seq;
+      cc.on_retransmission_timeout(lost, rtt, ts);
+    }
+
+    prepare_retransmission(non_acked, ts);
+    cb(non_acked.packet.get());
+    rearm(ts, 2);
+  }
+
+  void prepare_retransmission(sender_entry& desc, uint64_t now){
+      ++stats.retransmitted;
+      desc.xmit_ts = now;
+      desc.retransmitted = true;
+      desc.packet->xmit = false;
+      desc.queued = false;
+      if(desc.link.is_linked())
+        desc.link.unlink();
+      ++inflight_pkts;
+      xmit_list.push_back(desc);
   }
 
   void detect_loss(uint64_t now) {
     uint64_t lost = 0;
+    rck.update_reo_wnd(!retransmission_queue.empty(), segs_sacked, rtt);
     for (auto it = xmit_list.begin(), end = xmit_list.end(); it != end;) {
       auto &entry = *it;
       ++it;
-
       if (!rack::send_after(rck.xmit_ts, rck.end_seq, entry.xmit_ts, entry.seq))
         break;
-      if (now >= entry.xmit_ts + rck.rtt) {
+      if (now >= entry.xmit_ts + rck.rtt + rck.reo_wnd) {
         FASTT_LOG_DEBUG("Detected loss %u\n", entry.seq.v);
         assert(entry.link.is_linked());
         entry.link.unlink();
-        inflight -= entry.packet->data_len;
+        assert(inflight_pkts > 0);
+        --inflight_pkts;
         entry.queued = true;
         retransmission_queue.push_back(entry);
         ++lost;
       }
     }
-    if (lost)
+    if (lost && !rck.in_fast_recovery && !rck.in_rto_recovery) {
+      rck.in_fast_recovery = true;
+      rck.high_data = seq;
       cc.on_fast_recovery(now, rtt);
+    }
   }
 
   unsigned get_current_wnd() const { return budget; }
-  bool can_transmit(size_t requested) {
-    return budget > 0 && cc.space(inflight, requested);
-  }
+
+  bool can_transmit() { return budget > 0 && (cc.space(inflight_pkts) > 0); }
 
   bool check_timeout(uint64_t now) {
     if (now > timeout)
@@ -124,7 +193,7 @@ public:
     return false;
   }
 
-  void rearm(uint64_t now) { timeout = now + rto; }
+  void rearm(uint64_t ts, uint64_t bkoff = 1) { timeout = ts + bkoff * rto; }
 
   void cleanup_acked_pkts(seq_t seq, uint64_t ts) {
     uint64_t cumulative_rtt = ~0ull;
@@ -139,22 +208,24 @@ public:
           cumulative_rtt = std::min<uint64_t>(ack_rtt, cumulative_rtt);
         }
         assert(desc.link.is_linked());
+        rck.detect_reordering(desc.seq, desc.retransmitted);
       }
-      if(!desc.sacked && !desc.queued){
-          assert(inflight >= desc.packet->data_len);
-          inflight -= desc.packet->data_len;
+      if (!desc.sacked && !desc.queued) {
+        assert(inflight_pkts > 0);
+        --inflight_pkts;
       }
+      if (desc.sacked)
+        --segs_sacked;
       budget += desc.crd;
-      acked += desc.packet->data_len;
-
+      ++acked;
       unacked.pop_front();
     }
-
     if (cumulative_rtt != ~0ull) {
       update_srtt(cumulative_rtt);
       rck.rtt = cumulative_rtt;
     }
 
+    assert(budget <= transport_rxpath::kMaxGrantSize);
     cc.on_ack(acked, ts, rtt, rck.rtt);
   }
 
@@ -164,7 +235,8 @@ public:
       rearm(now);
     ctor(pkt, seq);
     pkt->xmit = false;
-    inflight += pkt->data_len;
+    ++inflight_pkts;
+    ++xmitted;
     unacked.emplace_back(mbuf_take_owner_ship(pkt), now, seq++, 0, false);
     xmit_list.push_back(unacked.back());
   }
@@ -178,40 +250,26 @@ public:
     --budget;
     ctor(pkt, seq);
     pkt->xmit = false;
-    inflight += pkt->data_len;
+    ++inflight_pkts;
+    ++xmitted;
     unacked.emplace_back(std::move(pkt), now, seq++, 1, false);
     xmit_list.push_back(unacked.back());
+    assert(timeout >= now);
     return true;
   }
 
-  template <typename F> void advance_recovery(F &&f) {
+  template <typename F> void advance_recovery(F &&f, uint64_t now) {
     if (retransmission_queue.empty())
       return;
     auto sz = retransmission_queue.size();
-    auto now = rte_get_timer_cycles();
     while (sz-- > 0) {
       auto &desc = retransmission_queue.front();
       assert(desc.queued);
-      if (!cc.space(inflight, desc.packet->data_len))
+      if (!cc.space(inflight_pkts))
         break;
-      if (!f(desc.packet.get()))
-        break;
-      prepare_retransmit(&desc, now);
+      prepare_retransmission(desc, now);
+      f(desc.packet.get());
     }
-  }
-
-  void prepare_retransmit(sender_entry *entry, uint64_t ts) {
-    ++stats.retransmitted;
-    // inc reference count
-    // in total we have n + 1 where n is the number of transmissions
-    // entry->msg n reduction because of cleanup
-    entry->xmit_ts = ts;
-    entry->retransmitted = true;
-    entry->packet->xmit = false;
-    entry->queued = false;
-    entry->link.unlink();
-    inflight += entry->packet->data_len;
-    xmit_list.push_back(*entry);
   }
 
   void acknowledge(seq_t seq, uint64_t ts) {
@@ -219,24 +277,36 @@ public:
       return;
     stats.acked = seq;
     cleanup_acked_pkts(seq, ts);
-    timeout = ts + rto;
+    rearm(ts);
     least_unacked_pkt = seq + 1;
+    if ((rck.in_fast_recovery || rck.in_rto_recovery) && seq > rck.high_data) {
+      rck.in_fast_recovery = false;
+      rck.in_rto_recovery = false;
+    }
   }
 
-  void acknowledge_sack(protocol::ft_sack_payload *payload, uint64_t ts) {
+  void acknowledge_sack(protocol::ft_sack_payload *payload,
+                        seq_t cumulative_ack, uint64_t ts) {
     assert(payload->bit_map_len > 0);
-    assert(payload->bit_map_len <= unacked.size());
     assert(unacked.front().seq == least_unacked_pkt);
+    FASTT_LOG_DEBUG("Received SACK of length %u\n", payload->bit_map_len);
     auto it = unacked.begin();
+    // might happen in case of reordering
+    auto cumulative_ack_in_pkt = cumulative_ack;
+    auto last_acked = least_unacked_pkt - 1;
+    assert(cumulative_ack <= last_acked);
+    auto i = last_acked - cumulative_ack;
     uint64_t sack_rtt = ~0ull;
-    for (auto i = 0u; i < payload->bit_map_len; ++i) {
+    for (; i < payload->bit_map_len; ++i) {
       auto ind = get_bit_indices_64(i);
       auto val = payload->bit_map[ind.first] & (1ull << ind.second);
       auto &desc = *it;
       ++it;
+      assert(cumulative_ack_in_pkt + i + 1 == desc.seq);
       if (!val)
         continue;
       if (!desc.sacked) {
+        ++segs_sacked;
         assert(ts >= desc.xmit_ts);
         auto ack_rtt = ts - desc.xmit_ts;
         if (rck.valid_rtt(ts, desc.xmit_ts, desc.retransmitted)) {
@@ -247,7 +317,9 @@ public:
         desc.sacked = true;
         assert(desc.link.is_linked());
         desc.link.unlink();
-        inflight -= desc.packet->data_len;
+        if (!desc.queued)
+          --inflight_pkts;
+        rck.detect_reordering(desc.seq, desc.retransmitted);
       }
     }
 
@@ -258,16 +330,18 @@ public:
   }
 
   auto size() { return unacked.size(); }
+
   void update_srtt(uint64_t est) {
     if (rtt == 0)
       rtt = est;
     else
       rtt = filter::exp_filter(rtt, est);
-    rto = std::max(rtt, default_rto);
+    rto = std::max(2 * rtt, default_rto);
     stats.rtt = rtt;
   }
 
   seq_t get_seq() const { return seq; }
+
   uint64_t get_srtt() const { return rtt; }
 
   bool all_acked() const { return least_unacked_pkt == seq; }
@@ -280,6 +354,7 @@ public:
   statistics get_stats() {
     statistics out = stats;
     out.rtt /= get_ticks_us();
+    out.sent = xmitted;
     return out;
   }
 
@@ -288,17 +363,19 @@ private:
   statistics stats;
 
   swift &cc;
-  uint64_t inflight = 0;
+  uint64_t inflight_pkts = 0;
 
   std::deque<sender_entry> unacked;
   intrusive_list_t<sender_entry> retransmission_queue;
   intrusive_list_t<sender_entry> xmit_list;
 
   uint32_t budget = 0;
-  seq_t seq{0};
-  seq_t least_unacked_pkt{0};
+  seq_t seq;
+  seq_t least_unacked_pkt;
 
   uint64_t rtt = 0;
+  uint64_t xmitted = 0;
+  uint64_t segs_sacked = 0;
   const uint64_t default_rto = get_ticks_ms() * 10;
   uint64_t rto = default_rto;
   uint64_t timeout;

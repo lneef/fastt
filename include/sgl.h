@@ -35,14 +35,10 @@ struct sgl{
 
     void add_segment_safe(mbuf_ptr &&ptr){
         if(!head){
-            segs = ptr->nb_segs;
-            size = ptr->data_len;
             head = std::move(ptr);
-            tail = head->last_seg();
+            tail = head->last_seg(size, segs);
         }else{
-            segs += ptr->nb_segs;
-            size += ptr->data_len;
-            auto *last = ptr->last_seg();
+            auto *last = ptr->last_seg(size, segs);
             tail->next = ptr.release();
             tail = last;
             assert(tail != nullptr);
@@ -61,6 +57,32 @@ struct sgl{
 
     bool empty() const{
         return head == nullptr;
+    }
+
+    void write(const void *buf, size_t buf_len, size_t off = 0){
+        auto *src = static_cast<const uint8_t *>(buf);
+        auto *seg = head.get();
+        while(off >= seg->data_len){
+            off -= seg->data_len;
+            seg = seg->next;
+        }
+        size_t buf_off = 0;
+        while(seg && buf_off < buf_len){
+            auto len = seg->data_len - off;
+            len = std::min(len, buf_len - buf_off);
+            std::memcpy(seg->data<uint8_t>() + off, src + buf_off, len);
+            buf_off += len;
+            off = 0;
+            seg = seg->next;
+        }
+    }
+
+    void alloc_message(slab_allocator &slab, size_t len){
+        while(len > 0){
+            auto chunk = static_cast<uint16_t>(std::min(len, (size_t)slab_allocator::kMaxDataLen));
+            add_segment_safe(slab.alloc_default_safe(chunk));
+            len -= chunk;
+        }
     }
 
 };

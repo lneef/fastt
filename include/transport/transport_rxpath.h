@@ -4,10 +4,10 @@
 #include "sgl.h"
 #include "slab_allocator.h"
 #include "transport/seq.h"
-#include "util.h"
 
 #include <algorithm>
 #include <bitset>
+#include <cassert>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -18,9 +18,9 @@
 
 struct ack_cb {
   static constexpr size_t kSACKCnt = 3;
-  seq_t rcv_una{~0u};
-  seq_t rcv_acked{~0u};
-  seq_t rcv_high{~0u};
+  seq_t rcv_una;
+  seq_t rcv_acked;
+  seq_t rcv_high;
   uint16_t pending_dup_acks = 0;
 
   void mark_as_acked(seq_t seq) {
@@ -37,6 +37,8 @@ struct ack_cb {
   bool has_unacked_pkts() const {
     return rcv_una > rcv_acked || pending_dup_acks > 0;
   }
+
+  ack_cb(seq_t seq = {~0u}): rcv_una(seq), rcv_acked(seq), rcv_high(seq) {}
 
   void add_dump_ack() {
     // we send at most kSACKCnt
@@ -90,7 +92,7 @@ struct transport_rxpath {
   static constexpr unsigned kLowThreshold = 128;
   static constexpr unsigned kMaxGrantSize = 128;
   static constexpr unsigned kMaxBitMapSize = 2 * kMaxGrantSize;
-  transport_rxpath() : max_rx_in_window(~0), next_seq() {}
+  transport_rxpath(seq_t max_rx_in_window = {~0u}, seq_t next_seq = {0}) : max_rx_in_window(max_rx_in_window), next_seq(next_seq) {}
 
   seq_t get_last_rcvd_in_seq() const { return seq_t{next_seq - 1}; }
 
@@ -110,6 +112,7 @@ struct transport_rxpath {
       acb.rcv_high = seq;
       max_rx_in_window = seq;
     }
+    assert(max_rx_in_window - next_seq + 1 <= kMaxBitMapSize);
     wnd.set(index(seq));
     reassemble(seq, mbuf_take_owner_ship(pkt), acb);
     assert(acb.rcv_high == max_rx_in_window);
@@ -123,12 +126,9 @@ struct transport_rxpath {
       mbuf_free(pkt);
       return;
     }
-    reassembly.segs += pkt->nb_segs;
-    reassembly.used_budget += pkt->nb_segs;
     bool end = hdr->eom;
     pkt->adj(sizeof(protocol::ft_header));
-    reassembly.size += pkt->data_len;
-    mbuf::merge(reassembly.first, reassembly.last, pkt);
+    mbuf::merge(reassembly.first, reassembly.last, pkt, reassembly.size, reassembly.segs);
     if (end) {
       out.emplace_back(reassembly.first, reassembly.size, reassembly.segs);
       reassembly.reset();
@@ -217,7 +217,6 @@ struct transport_rxpath {
     mbuf *first = nullptr, *last = nullptr;
     uint64_t size = 0;
     uint32_t segs = 0;
-    uint32_t used_budget = 0;
     void reset() {
       first = last = nullptr;
       segs = 0;

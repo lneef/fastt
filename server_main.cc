@@ -1,18 +1,20 @@
+#include "bench.h"
 #include "connection.h"
 #include "dpdk/allocator.h"
 #include "iface.h"
 #include "kv_protocol.h"
 #include "server.h"
+#include "sgl.h"
+#include "slab_allocator.h"
 #include "task/async.h"
 #include "task/task.h"
 #include <arpa/inet.h>
 #include <atomic>
+#include <bits/getopt_core.h>
 #include <cstdint>
 #include <cstring>
 #include <getopt.h>
 #include <memory>
-#include <random>
-#include <ranges>
 #include <rte_ether.h>
 #include <rte_lcore.h>
 #include <rte_log.h>
@@ -20,14 +22,13 @@
 #include <rte_mbuf_core.h>
 #include <rte_mempool.h>
 #include <signal.h>
+#include <sys/types.h>
 #include <utility>
 
 #include <tlx/container/btree_map.hpp>
 
 struct netconfig {
-  rte_ether_addr dmac;
-  uint32_t sip, dip;
-  uint16_t sport, dport;
+  uint32_t sip;
 };
 
 struct lcore_server_adapter {
@@ -35,49 +36,48 @@ struct lcore_server_adapter {
   std::shared_ptr<dpdk_allocator> allocator;
 };
 
-static std::random_device dev;
-static std::mt19937 rng(dev());
-static std::uniform_int_distribution<int64_t> dist(INT64_MIN, INT64_MAX);
-static constexpr uint32_t kStoreSize = 1024 * 1024;
-static tlx::btree_map<int64_t, int64_t> store;
+static bench::storage store;
+static unsigned len = 8;
 
-static void prepare() {
-  uint32_t size = kStoreSize;
-  for (auto [k, v] :
-       std::ranges::views::iota(0u, size) | std::views::transform([&](int) {
-         return std::make_pair(dist(rng), dist(rng));
-       })) {
-    store[k] = v;
-  }
-}
-
-static void serve(kv::kv_packet<kv::kv_completion> *completion,
+static void serve(sgl &resp, slab_allocator &alloc,
                   kv::kv_packet<kv::kv_request> *packet) {
+  kv::kv_packet<kv::kv_completion> *completion;
   auto key = packet->payload.key;
   auto it = store.find(key);
-
+  if (it == store.end()) {
+    auto seg = alloc.alloc_default_safe(sizeof(*completion));
+    resp.add_segment_safe(std::move(seg));
+    completion = resp.head->data<kv::kv_packet<kv::kv_completion>>();
+    completion->payload.reponse = kv::response_t::FAILURE;
+    completion->payload.data_len = 0;
+  } else {
+    auto seg =
+        alloc.alloc_default_safe(sizeof(*completion) + it->second.size());
+    resp.alloc_message(alloc, sizeof(*completion) + it->second.size());
+    completion = resp.head->data<kv::kv_packet<kv::kv_completion>>();
+    completion->payload.reponse = kv::response_t::SUCCESS;
+    resp.write(it->second.data(), it->second.size(), sizeof(*completion));
+    completion->payload.data_len = it->second.size();
+  }
   completion->id = packet->id;
   completion->pt = packet->pt;
   completion->payload.key = packet->payload.key;
-  if (it == store.end()) {
-    completion->payload.reponse = kv::response_t::FAILURE;
-    completion->payload.val = 0;
-  } else {
-    completion->payload.reponse = kv::response_t::SUCCESS;
-    completion->payload.val = it->second;
-  }
 }
 
 static netconfig parse_cmdline(int argc, char *argv[]) {
   int opt, option_index;
-  netconfig conf;
+  netconfig conf{};
   static const struct option long_options[] = {{"sip", required_argument, 0, 0},
+                                               {"len", required_argument, 0, 0},
                                                {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
     switch (option_index) {
     case 0:
       conf.sip = inet_addr(optarg);
+      break;
+    case 1:
+      len = atoi(optarg);
       break;
     }
   }
@@ -95,29 +95,27 @@ int lcore_server_fun(void *arg) {
   auto myid = rte_lcore_index(rte_lcore_id());
   auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
   auto *server = adapters[myid].iface.get();
-  auto *slab = server->get_alloc();
   server->register_service(
-      2,
-      [&](concurrency::scheduler &schdlr,
-          connection &con) -> concurrency::task {
+      2, [](server_iface &iface, connection &con) -> concurrency::task {
         sgl ssgl;
         sgl rsgl;
+        auto &slab = *iface.get_alloc();
         while (true) {
-          auto sz = co_await recv(schdlr, con, rsgl);
+          auto sz = co_await recv(iface.get_scheduler(), con, rsgl);
           if (sz == 0) {
             co_return;
           }
           assert(sz == sizeof(kv::kv_packet<kv::kv_request>));
-          auto pkt_ptr = slab->alloc_default_safe(
-              sizeof(kv::kv_packet<kv::kv_completion>));
-          serve(pkt_ptr->data<kv::kv_packet<kv::kv_completion>>(),
-                rsgl.head->data<kv::kv_packet<kv::kv_request>>());
+          auto pkt_ptr =
+              slab.alloc_default_safe(sizeof(kv::kv_packet<kv::kv_completion>));
+          serve(ssgl, slab, rsgl.head->data<kv::kv_packet<kv::kv_request>>());
           ssgl.add_segment_safe(std::move(pkt_ptr));
-          auto sent = co_await send(schdlr, con, std::move(ssgl));
-          if (sent == 0) {
+          ssize_t to_send = ssgl.size;
+          auto sent =
+              co_await send(iface.get_scheduler(), con, std::move(ssgl));
+          if (sent == 0) 
             co_return;
-          }
-          assert(sent == sizeof(kv::kv_packet<kv::kv_completion>));
+          assert(sent == to_send);
         }
       });
 
@@ -129,7 +127,8 @@ int lcore_server_fun(void *arg) {
 }
 
 int run(netconfig &conf) {
-  prepare();
+  bench::prepare(store, len);
+
   if (fastt::init())
     return -1;
 
@@ -139,8 +138,8 @@ int run(netconfig &conf) {
   std::vector<std::shared_ptr<dpdk_allocator>> allocators;
   allocators.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
-     allocators.emplace_back(dpdk_allocator::create(
-        ("mpool" + std::to_string(i)).c_str(), 4095)); 
+    allocators.emplace_back(
+        dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095));
     ++i;
   }
   auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);
@@ -154,8 +153,7 @@ int run(netconfig &conf) {
     auto [port, txq, rxq] = ifc->get_slice(i);
     adapter.allocator = std::move(allocators[i]);
     adapter.iface = std::make_unique<server_iface>(
-        port, txq, rxq, con_config{conf.sip, conf.sport}, adapter.allocator,
-        rte_lcore_count());
+        port, txq, rxq, conf.sip, adapter.allocator, rte_lcore_count());
     ++i;
   }
 

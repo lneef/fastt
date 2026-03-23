@@ -44,7 +44,6 @@ struct task {
 };
 
 template <typename C> void make_progress(C &con) {
-  con.perform_recovery();
   if (con.coro == std::nullopt)
     return;
   auto &prms = con.coro->promise();

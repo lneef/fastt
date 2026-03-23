@@ -3,7 +3,7 @@
 #include "connection.h"
 #include "dpdk/allocator.h"
 #include "slab_allocator.h"
-#include "util.h"
+#include "task/task.h"
 
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <cstdint>
@@ -13,10 +13,9 @@
 class server_iface {
 public:
   server_iface(uint16_t port, uint16_t txq, uint16_t rxq,
-               const con_config &scon_config,
+               uint32_t sip,
                std::shared_ptr<dpdk_allocator> pool, uint16_t cores)
-      : scon_config(scon_config),
-        manager(false, port, txq, rxq, scon_config.ip, pool, this, cores) {}
+      : manager(false, port, txq, rxq, sip, pool, this, cores) {}
 
   void complete() { manager.flush(); };
 
@@ -24,6 +23,10 @@ public:
   bool register_service(uint16_t port, F &&service_handler) {
     auto res = services.emplace(port, std::forward<F>(service_handler));
     return res.second;
+  }
+
+  concurrency::scheduler& get_scheduler(){
+      return scheduler;
   }
 
   void run() { manager.run(scheduler); }
@@ -34,10 +37,9 @@ public:
 
 private:
   bu::unordered_flat_map<uint16_t, std::function<concurrency::task(
-                                       concurrency::scheduler &, connection &)>>
+                                       server_iface &, connection &)>>
       services;
   concurrency::scheduler scheduler;
-  con_config scon_config;
   connection_manager manager;
   friend class connection_manager;
 };

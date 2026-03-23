@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstdio>
 #include <cstring>
 #include <liburing.h>
@@ -10,16 +11,15 @@
 #include <span>
 
 namespace uring {
-static constexpr int kQueueDepth = 256;
+static constexpr int kQueueDepth = 512;
 static constexpr int kNumBuffer = kQueueDepth * 4;
-static constexpr int kBufShift = 8;
-static constexpr unsigned kCQEntries = kQueueDepth * 4;
+static constexpr int kBufSize = 2048 + 64;
+static constexpr unsigned kCQEntries = kQueueDepth * 8;
 
 struct qpair {
   io_uring ring{};
   io_uring_buf_ring *buf_ring = nullptr;
   unsigned char *buffer_base = nullptr;
-  int buf_shift = kBufShift;
   size_t buf_ring_size = 0;
 
   static std::unique_ptr<qpair> create() {  
@@ -33,10 +33,10 @@ struct qpair {
     return qp;
   }
 
-  size_t buffer_size() const { return 1U << buf_shift; }
+  size_t buffer_size() const { return kBufSize; }
 
   unsigned char *get_buffer(int idx) {
-    return buffer_base + (idx << buf_shift);
+    return buffer_base + (idx * kBufSize);
   }
 
   io_uring_sqe *get_sqe() {
@@ -102,9 +102,10 @@ private:
       return ret;
     }
 
-    for (int i = 0; i < kNumBuffer; i++)
+    for (int i = 0; i < kNumBuffer; i++){
       io_uring_buf_ring_add(buf_ring, get_buffer(i), buffer_size(), i,
                             io_uring_buf_ring_mask(kNumBuffer), i);
+    }
     io_uring_buf_ring_advance(buf_ring, kNumBuffer);
     return 0;
   }
