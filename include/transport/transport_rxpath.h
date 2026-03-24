@@ -90,7 +90,7 @@ struct transport_rxpath {
         : head(mbuf_take_owner_ship(head)), size(size), segs(segs), crds(crds) {}
   };
   // reserve some headroom
-  static constexpr unsigned kMaxGrantSize = 128;
+  static constexpr unsigned kMaxGrantSize = 256;
   static constexpr unsigned kMaxBitMapSize = 2 * kMaxGrantSize;
   transport_rxpath(seq_t max_rx_in_window = {~0u}, seq_t next_seq = {0})
       : max_rx_in_window(max_rx_in_window), next_seq(next_seq) {}

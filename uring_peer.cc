@@ -176,7 +176,6 @@ static uint64_t process_completions(uring::client_iface &iface, F &&cb) {
 
 static int client_fun_open(uint16_t id, struct sockaddr_in addr,
                            uint64_t duration, double rate) {
-  size_t burst_length = 0;  
   std::random_device dev;
   std::mt19937 rng(dev());
   std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
@@ -215,9 +214,8 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
   };
 
   while (next < end_time) {
-    if (rdtsc() < next || burst_length == bench::kMaxBurstLimit) {
+    if (rdtsc() < next) {
       process_completions(iface, rx_cb);
-      burst_length = 0;
       continue;
     }
 
@@ -225,7 +223,6 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
     while (!request_single(iface.slt, key, rng, dist))
       process_completions(iface, rx_cb);
     ++inflight;
-    ++burst_length;
     reqs.emplace_back(next, key);
     next += ticks_per_sec * exp(rng);
   }
