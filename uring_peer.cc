@@ -30,13 +30,8 @@
 #include "uring/cpu.h"
 #include "uring/iface.h"
 #include <tlx/container/btree_map.hpp>
-
-static std::random_device dev;
-static std::mt19937 rng(dev());
-static std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
 static bench::storage store;
 
-unsigned seen = 0;
 
 static size_t handle_request(kv::kv_packet<kv::kv_request> *req,
                              uring::slot &slt) {
@@ -66,12 +61,10 @@ static size_t handle_request(kv::kv_packet<kv::kv_request> *req,
   completion->payload.key = req->payload.key;
   assert(req->pt == kv::packet_t::SINGLE);
   assert(req->payload.op == kv::request_t::GET);
-  ++seen;
   return resp_size;
 }
 
-int64_t k = 0;
-static bool request_single(uring::slot &slt, int64_t &key) {
+static bool request_single(uring::slot &slt, int64_t &key, std::mt19937& rng, std::uniform_int_distribution<int64_t>& dist) {
   auto *req = slt.tx_buffer.reserve(sizeof(kv::kv_packet<kv::kv_request>));
   if (!req)
     return false;
@@ -184,6 +177,9 @@ static uint64_t process_completions(uring::client_iface &iface, F &&cb) {
 static int client_fun_open(uint16_t id, struct sockaddr_in addr,
                            uint64_t duration, double rate) {
   size_t burst_length = 0;  
+  std::random_device dev;
+  std::mt19937 rng(dev());
+  std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
   set_thread_affinity(pthread_self(), id);
   uring::client_iface iface{};
   struct io_uring_cqe *cqe;
@@ -226,7 +222,7 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
     }
 
     int64_t key;
-    while (!request_single(iface.slt, key))
+    while (!request_single(iface.slt, key, rng, dist))
       process_completions(iface, rx_cb);
     ++inflight;
     ++burst_length;
