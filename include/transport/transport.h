@@ -307,7 +307,7 @@ public:
       protocol::msg_frame_desc desc{
           .seq = seq,
           .ack = ack_seq,
-          .crd = 0,
+          .crd = trx.prepare_return_stalled_crds(),
           .eom = msgl.empty(),
           .ack_frame = acb.has_unacked_pkts() && !trx.has_holes(),
           .sack = false,

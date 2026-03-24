@@ -83,10 +83,11 @@ struct transport_rxpath {
   struct message {
     mbuf_ptr head;
     uint64_t size : 48;
-    uint16_t segs : 16;
+    uint64_t segs : 16;
+    uint16_t crds = 0;
 
-    message(mbuf *head, uint64_t size, uint16_t segs)
-        : head(mbuf_take_owner_ship(head)), size(size), segs(segs) {}
+    message(mbuf *head, uint64_t size, uint16_t segs, uint16_t crds)
+        : head(mbuf_take_owner_ship(head)), size(size), segs(segs), crds(crds) {}
   };
   // reserve some headroom
   static constexpr unsigned kMaxGrantSize = 128;
@@ -133,9 +134,10 @@ struct transport_rxpath {
                 reassembly.segs);
     crds.crds_stalled += reassembly.segs - csegs;
     if (end) {
-      out.emplace_back(reassembly.first, reassembly.size, reassembly.segs);
+      out.emplace_back(reassembly.first, reassembly.size, reassembly.segs, crds.crds_stalled);
       reassembly.reset();
       reassembly.size = 0;
+      crds.crds_stalled = 0;
     }
   }
 
@@ -200,7 +202,7 @@ struct transport_rxpath {
   ssize_t read(sgl &msgl) {
     if (out.empty()) {
       // probably we are stalled
-      crds.crds_returned = crds.crds_stalled;
+      crds.crds_returned += crds.crds_stalled;
       crds.crds_stalled = 0;
       return -EAGAIN;
     }
@@ -208,7 +210,7 @@ struct transport_rxpath {
     msgl.head = std::move(buffered.head);
     msgl.size = buffered.size;
     msgl.segs = buffered.segs;
-    crds.crds_returned += buffered.segs;
+    crds.crds_returned += buffered.crds;
     out.pop_front();
     return msgl.size;
   }
@@ -216,13 +218,13 @@ struct transport_rxpath {
   unsigned get_available_wnd() const { return kMaxGrantSize; }
 
   bool return_stalled_crds() const {
-    return crds.crds_stalled >= kMaxGrantSize / 2;
+    return crds.crds_returned >= kMaxGrantSize / 2;
   }
 
   uint16_t prepare_return_stalled_crds() {
-    auto stalled = crds.crds_stalled;
-    crds.crds_stalled = 0;
-    return stalled;
+    auto crds_returned = crds.crds_returned;
+    crds.crds_returned = 0;
+    return crds_returned;
   }
 
   ~transport_rxpath() {
