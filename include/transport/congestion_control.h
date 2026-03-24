@@ -27,11 +27,10 @@ static __inline constexpr float fast_inv_sqrt(float val) {
 struct swift {
   static constexpr float mss = 1;
   static constexpr float initial_len = 8;
-  static constexpr float ai = 1.5;
+  static constexpr float ai = 3;
   static constexpr float beta = 0.8;
   static constexpr float max_md = 0.5;
   static constexpr uint64_t reset_threshold = 16;
-  static constexpr uint64_t w1 = 1, w2 = 3, shift = 2;
   uint64_t delay = 0;
   uint64_t retransmit_cnt, last_decrease;
   float base_target_delay, cwnd_size;
@@ -50,7 +49,7 @@ struct swift {
       delay = delay_measured;
     else
       delay =
-          filter::exp_filter<uint64_t, w1, w2, shift>(delay, delay_measured);
+          filter::exp_filter<uint64_t>(delay, delay_measured);
 
     // Skip hop delay
     auto target_delay =

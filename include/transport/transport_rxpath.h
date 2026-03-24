@@ -134,6 +134,7 @@ struct transport_rxpath {
                 reassembly.segs);
     crds.crds_stalled += reassembly.segs - csegs;
     if (end) {
+      assert(crds.crds_stalled <= reassembly.segs);  
       out.emplace_back(reassembly.first, reassembly.size, reassembly.segs, crds.crds_stalled);
       reassembly.reset();
       reassembly.size = 0;

@@ -43,7 +43,7 @@ public:
 
   transport(P *pkt_sink, slab_allocator *sb, M *manager, transport_config cfg,
             uint16_t sport, uint16_t dport)
-      : cc(get_ticks_us() * 40), trx(), builder(sport, dport), cfg(cfg),
+      : cc(get_ticks_us() * 100), trx(), builder(sport, dport), cfg(cfg),
         ttx(cc), sb(sb), acb(), manager(manager), pkt_if(pkt_sink) {}
 
   void perform_recovery() {
