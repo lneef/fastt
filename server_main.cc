@@ -50,9 +50,7 @@ static void serve(sgl &resp, slab_allocator &alloc,
     completion = resp.head->data<kv::kv_packet<kv::kv_completion>>();
     completion->payload.reponse = kv::response_t::FAILURE;
     completion->payload.data_len = 0;
-  } else {
-    auto seg =
-        alloc.alloc_default_safe(sizeof(*completion) + it->second.size());
+  } else { 
     resp.alloc_message(alloc, sizeof(*completion) + it->second.size());
     completion = resp.head->data<kv::kv_packet<kv::kv_completion>>();
     completion->payload.reponse = kv::response_t::SUCCESS;
@@ -106,10 +104,7 @@ int lcore_server_fun(void *arg) {
             co_return;
           }
           assert(sz == sizeof(kv::kv_packet<kv::kv_request>));
-          auto pkt_ptr =
-              slab.alloc_default_safe(sizeof(kv::kv_packet<kv::kv_completion>));
           serve(ssgl, slab, rsgl.head->data<kv::kv_packet<kv::kv_request>>());
-          ssgl.add_segment_safe(std::move(pkt_ptr));
           ssize_t to_send = ssgl.size;
           auto sent =
               co_await send(iface.get_scheduler(), con, std::move(ssgl));

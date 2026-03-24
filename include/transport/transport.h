@@ -47,26 +47,37 @@ public:
         ttx(cc), sb(sb), acb(), manager(manager), pkt_if(pkt_sink) {}
 
   void perform_recovery() {
-    ttx.advance_recovery(
-        [&](mbuf *pkt) {
-          pkt_if->consume_pkt_mbuf(pkt, cfg);
-        },
-        manager->get_current_timer_cycles());
+    ttx.advance_recovery([&](mbuf *pkt) { pkt_if->consume_pkt_mbuf(pkt, cfg); },
+                         manager->get_current_timer_cycles());
   }
 
   void check_timeout(uint64_t now) {
     if (cstate == connection_state::DISCONNECTED)
       return;
+    if (cstate == connection_state::ESTABLISHED && trx.return_stalled_crds())
+      return_crds(now);
     if (ttx.all_acked())
       return;
     if (ttx.check_timeout(now)) {
-      ttx.rto_retransmit(now, [&](mbuf *pkt){
-        pkt_if->consume_pkt_mbuf(pkt, cfg);
-      });
+      ttx.rto_retransmit(
+          now, [&](mbuf *pkt) { pkt_if->consume_pkt_mbuf(pkt, cfg); });
 
-      //retransmit more if we have space
+      // retransmit more if we have space
       perform_recovery();
     }
+  }
+
+  void return_crds(uint64_t now) {
+    auto *pkt = sb->alloc_default(sizeof(protocol::ft_header));
+    auto crd = trx.prepare_return_stalled_crds();
+    auto ackframe = false;
+    ttx.record_ctrl_pkt(
+        pkt,
+        [&](mbuf *msg, seq_t seq) {
+          builder.prepare_ctrl_pkt(msg, seq, {0}, crd, ackframe);
+        },
+        now);
+    pkt_if->consume_pkt_mbuf(pkt, cfg);
   }
 
   unsigned acknowledge() {
@@ -284,8 +295,6 @@ public:
   bool can_recv() { return trx.has_buffered_mbufs_frags(); }
 
   bool can_send() { return (ttx.get_current_wnd() > 0); }
-
-  hdr_histogram *get_hist() { return cc.hist; }
 
   ssize_t send_single_seg(sgl &msgl) {
     if (!ttx.can_transmit())

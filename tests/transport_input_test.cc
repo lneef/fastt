@@ -138,11 +138,11 @@ TEST_F(TransportInputTest, CumulativeAckReturnsCrd) {
 
     // Cumulative ACK through seq 3 returns crds for seq 0,1,2 (3 data) + seq 3 (ctrl, crd=0)
     ti->acknowledge(seq_t{3}, rte_get_timer_cycles());
+    ti->update_budget(3);
     EXPECT_EQ(ti->get_current_wnd(), 126u);
-
     // Cumulative ACK through seq 5 returns remaining 2 data credits
     ti->acknowledge(seq_t{5}, rte_get_timer_cycles());
-    EXPECT_EQ(ti->get_current_wnd(), 128u);
+    EXPECT_EQ(ti->get_current_wnd(), 126u);
 }
 
 TEST_F(TransportInputTest, CumulativeAckReturnsCrdAfterSack) {
@@ -156,6 +156,7 @@ TEST_F(TransportInputTest, CumulativeAckReturnsCrdAfterSack) {
 
     // ACK seq 0 cumulatively — returns 1 crd
     ti->acknowledge(seq_t{0}, rte_get_timer_cycles());
+    ti->update_budget(1);
     EXPECT_EQ(ti->get_current_wnd(), 125u);
 
     // SACK seq 2 (bit index 1 in unacked [1,2,3]) — no crd return from SACK
@@ -163,12 +164,13 @@ TEST_F(TransportInputTest, CumulativeAckReturnsCrdAfterSack) {
     sack.bit_map[0] = (1ull << 1);
     sack.bit_map_len = 3;
     ti->acknowledge_sack(&sack, {0}, rte_get_timer_cycles());
-    EXPECT_EQ(ti->get_current_wnd(), 125u);
+    ti->update_budget(1);
+    EXPECT_EQ(ti->get_current_wnd(), 126u);
 
     // Cumulative ACK through seq 3 covers seq 1 (not sacked, crd=1),
     // seq 2 (sacked, crd=1), seq 3 (not sacked, crd=1) — all 3 crds returned
     ti->acknowledge(seq_t{3}, rte_get_timer_cycles());
-    EXPECT_EQ(ti->get_current_wnd(), 128u);
+    EXPECT_EQ(ti->get_current_wnd(), 126u);
 }
 
 TEST_F(TransportInputTest, CumulativeAckSeqWrapAround) {
@@ -190,12 +192,12 @@ TEST_F(TransportInputTest, CumulativeAckSeqWrapAround) {
     // Cumulative ACK through seq MAX (wraps across boundary), covers 3 packets
     ti->acknowledge(seq_t{UINT32_MAX}, rte_get_timer_cycles());
     EXPECT_EQ(ti->size(), 3u);
-    EXPECT_EQ(ti->get_current_wnd(), 125u);
+    EXPECT_EQ(ti->get_current_wnd(), 122u);
 
     // Cumulative ACK through seq 2 (post-wrap), covers remaining 3 packets
     ti->acknowledge(seq_t{2}, rte_get_timer_cycles());
     EXPECT_EQ(ti->size(), 0u);
-    EXPECT_EQ(ti->get_current_wnd(), 128u);
+    EXPECT_EQ(ti->get_current_wnd(), 122u);
 }
 
 TEST_F(TransportInputTest, SackSeqWrapAround) {
@@ -223,7 +225,7 @@ TEST_F(TransportInputTest, SackSeqWrapAround) {
     // Cumulative ACK seq MAX-2, leaving unacked: MAX-1, MAX, 0, 1, 2
     ti->acknowledge(seq_t{UINT32_MAX - 2}, rte_get_timer_cycles());
     EXPECT_EQ(ti->size(), 5u);
-    EXPECT_EQ(ti->get_current_wnd(), 123u);
+    EXPECT_EQ(ti->get_current_wnd(), 122u);
 
     // SACK bits 1 and 3 in unacked [MAX-1, MAX, 0, 1, 2] → marks MAX and 1
     protocol::ft_sack_payload sack{};
@@ -231,7 +233,7 @@ TEST_F(TransportInputTest, SackSeqWrapAround) {
     sack.bit_map_len = 5;
     ti->acknowledge_sack(&sack, seq_t{UINT32_MAX - 2}, rte_get_timer_cycles());
     // SACK does not return credits
-    EXPECT_EQ(ti->get_current_wnd(), 123u);
+    EXPECT_EQ(ti->get_current_wnd(), 122u);
 
      now = rte_get_timer_cycles();
     while (rte_get_timer_cycles() < now + 10 * get_ticks_us())
@@ -246,7 +248,7 @@ TEST_F(TransportInputTest, SackSeqWrapAround) {
     // Cumulative ACK through seq 2 covers everything, returns all remaining credits
     ti->acknowledge(seq_t{2}, rte_get_timer_cycles());
     EXPECT_EQ(ti->size(), 0u);
-    EXPECT_EQ(ti->get_current_wnd(), 128u);
+    EXPECT_EQ(ti->get_current_wnd(), 122u);
 }
 
 TEST_F(TransportInputTest, StaleSackCumulativeAckCoversFuturePackets) {
@@ -269,12 +271,12 @@ TEST_F(TransportInputTest, StaleSackCumulativeAckCoversFuturePackets) {
     // Cumulative ACK for seq 5 → least_unacked_pkt becomes 6, unacked = [6..9]
     ti->acknowledge(seq_t{5}, rte_get_timer_cycles());
     EXPECT_EQ(ti->size(), 4u);
-    EXPECT_EQ(ti->get_current_wnd(), 124u);
+    EXPECT_EQ(ti->get_current_wnd(), 118u);
 
     // Stale ACK for seq 3 arrives (reordered) — no-op since least_unacked is 6
     ti->acknowledge(seq_t{3}, rte_get_timer_cycles());
     EXPECT_EQ(ti->size(), 4u);
-    EXPECT_EQ(ti->get_current_wnd(), 124u);
+    EXPECT_EQ(ti->get_current_wnd(), 118u);
 
     // SACK arrives with stale cumulative_ack = 3 (seq - 2), but bitmap covers
     // through seq 9 (seq + 4). Bitmap bits:
@@ -290,7 +292,7 @@ TEST_F(TransportInputTest, StaleSackCumulativeAckCoversFuturePackets) {
     ti->acknowledge_sack(&sack, seq_t{3}, rte_get_timer_cycles());
 
     // SACK does not return credits
-    EXPECT_EQ(ti->get_current_wnd(), 124u);
+    EXPECT_EQ(ti->get_current_wnd(), 118u);
 
     now = rte_get_timer_cycles();
     while (rte_get_timer_cycles() < now + 10 * get_ticks_us())
@@ -305,7 +307,7 @@ TEST_F(TransportInputTest, StaleSackCumulativeAckCoversFuturePackets) {
     // Cumulative ACK through seq 9 clears everything
     ti->acknowledge(seq_t{9}, rte_get_timer_cycles());
     EXPECT_EQ(ti->size(), 0u);
-    EXPECT_EQ(ti->get_current_wnd(), 128u);
+    EXPECT_EQ(ti->get_current_wnd(), 118u);
 }
 
 TEST_F(TransportInputTest, UnsackedPacketsRetransmittedCorrectly) {

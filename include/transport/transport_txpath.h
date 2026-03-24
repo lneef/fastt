@@ -74,13 +74,11 @@ struct sender_entry {
   mbuf_ptr packet;
   uint64_t xmit_ts = 0;
   seq_t seq;
-  uint16_t crd = 0;
   bool sacked : 4;
   bool retransmitted : 2;
   bool queued : 2;
-  sender_entry(mbuf_ptr &&packet, uint64_t now, seq_t seq, uint16_t crd,
-               bool retransmitted)
-      : packet(std::move(packet)), xmit_ts(now), seq(seq), crd(crd),
+  sender_entry(mbuf_ptr &&packet, uint64_t now, seq_t seq, bool retransmitted)
+      : packet(std::move(packet)), xmit_ts(now), seq(seq), 
         sacked(false), retransmitted(retransmitted), queued(false) {}
 
   sender_entry(const sender_entry &) = delete;
@@ -216,7 +214,6 @@ public:
       }
       if (desc.sacked)
         --segs_sacked;
-      budget += desc.crd;
       ++acked;
       unacked.pop_front();
     }
@@ -237,7 +234,7 @@ public:
     pkt->xmit = false;
     ++inflight_pkts;
     ++xmitted;
-    unacked.emplace_back(mbuf_take_owner_ship(pkt), now, seq++, 0, false);
+    unacked.emplace_back(mbuf_take_owner_ship(pkt), now, seq++, false);
     xmit_list.push_back(unacked.back());
   }
 
@@ -252,7 +249,7 @@ public:
     pkt->xmit = false;
     ++inflight_pkts;
     ++xmitted;
-    unacked.emplace_back(std::move(pkt), now, seq++, 1, false);
+    unacked.emplace_back(std::move(pkt), now, seq++, false);
     xmit_list.push_back(unacked.back());
     assert(timeout >= now);
     return true;

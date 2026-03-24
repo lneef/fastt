@@ -38,7 +38,7 @@ struct ack_cb {
     return rcv_una > rcv_acked || pending_dup_acks > 0;
   }
 
-  ack_cb(seq_t seq = {~0u}): rcv_una(seq), rcv_acked(seq), rcv_high(seq) {}
+  ack_cb(seq_t seq = {~0u}) : rcv_una(seq), rcv_acked(seq), rcv_high(seq) {}
 
   void add_dump_ack() {
     // we send at most kSACKCnt
@@ -89,10 +89,10 @@ struct transport_rxpath {
         : head(mbuf_take_owner_ship(head)), size(size), segs(segs) {}
   };
   // reserve some headroom
-  static constexpr unsigned kLowThreshold = 128;
   static constexpr unsigned kMaxGrantSize = 128;
   static constexpr unsigned kMaxBitMapSize = 2 * kMaxGrantSize;
-  transport_rxpath(seq_t max_rx_in_window = {~0u}, seq_t next_seq = {0}) : max_rx_in_window(max_rx_in_window), next_seq(next_seq) {}
+  transport_rxpath(seq_t max_rx_in_window = {~0u}, seq_t next_seq = {0})
+      : max_rx_in_window(max_rx_in_window), next_seq(next_seq) {}
 
   seq_t get_last_rcvd_in_seq() const { return seq_t{next_seq - 1}; }
 
@@ -128,7 +128,10 @@ struct transport_rxpath {
     }
     bool end = hdr->eom;
     pkt->adj(sizeof(protocol::ft_header));
-    mbuf::merge(reassembly.first, reassembly.last, pkt, reassembly.size, reassembly.segs);
+    auto csegs = reassembly.segs;
+    mbuf::merge(reassembly.first, reassembly.last, pkt, reassembly.size,
+                reassembly.segs);
+    crds.crds_stalled += reassembly.segs - csegs;
     if (end) {
       out.emplace_back(reassembly.first, reassembly.size, reassembly.segs);
       reassembly.reset();
@@ -184,7 +187,7 @@ struct transport_rxpath {
 
     for (auto i = next_seq; i <= highest_seq; ++i, ++id) {
       data->bit_map[id / 64] |= static_cast<uint64_t>(wnd[index(i)])
-                                  << (id & 63);
+                                << (id & 63);
     }
     data->bit_map_len = id;
     return id;
@@ -195,17 +198,32 @@ struct transport_rxpath {
   }
 
   ssize_t read(sgl &msgl) {
-    if (out.empty())
+    if (out.empty()) {
+      // probably we are stalled
+      crds.crds_returned = crds.crds_stalled;
+      crds.crds_stalled = 0;
       return -EAGAIN;
+    }
     auto &buffered = out.front();
     msgl.head = std::move(buffered.head);
     msgl.size = buffered.size;
     msgl.segs = buffered.segs;
+    crds.crds_returned += buffered.segs;
     out.pop_front();
     return msgl.size;
   }
 
   unsigned get_available_wnd() const { return kMaxGrantSize; }
+
+  bool return_stalled_crds() const {
+    return crds.crds_stalled >= kMaxGrantSize / 2;
+  }
+
+  uint16_t prepare_return_stalled_crds() {
+    auto stalled = crds.crds_stalled;
+    crds.crds_stalled = 0;
+    return stalled;
+  }
 
   ~transport_rxpath() {
     if (reassembly.first)
@@ -222,6 +240,11 @@ struct transport_rxpath {
       segs = 0;
     }
   } reassembly;
+
+  struct {
+    uint16_t crds_returned = 0;
+    uint16_t crds_stalled = 0;
+  } crds;
 
   reorder_buffer rb;
   std::deque<message> out;
