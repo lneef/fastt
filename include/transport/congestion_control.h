@@ -27,7 +27,7 @@ static __inline constexpr float fast_inv_sqrt(float val) {
 struct swift {
   static constexpr float mss = 1;
   static constexpr float initial_len = 8;
-  static constexpr float ai = 3;
+  static constexpr float ai = 1.5;
   static constexpr float beta = 0.8;
   static constexpr float max_md = 0.5;
   static constexpr uint64_t reset_threshold = 16;
@@ -96,7 +96,7 @@ struct swift {
   void update_stats() {
     // TODO: fix this according to real impl
     // but we currently dont have a pacer
-    cwnd_size = std::clamp<float>(cwnd_size, 1 * mss, 256 * mss);
+    cwnd_size = std::clamp<float>(cwnd_size, 1 * mss, 128 * mss);
   }
 
   unsigned space(size_t inflight) const {
