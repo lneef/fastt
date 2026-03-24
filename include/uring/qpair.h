@@ -9,6 +9,7 @@
 #include <sys/mman.h>
 #include <memory>
 #include <span>
+#include <thread>
 
 namespace uring {
 static constexpr int kQueueDepth = 512;
@@ -17,6 +18,7 @@ static constexpr int kBufSize = 2048 + 64;
 static constexpr unsigned kCQEntries = kQueueDepth * 8;
 
 struct qpair {
+    std::thread::id id;  
   io_uring ring{};
   io_uring_buf_ring *buf_ring = nullptr;
   unsigned char *buffer_base = nullptr;
@@ -30,6 +32,7 @@ struct qpair {
       io_uring_queue_exit(&qp->ring);
       return nullptr;
     }
+    qp->id = std::this_thread::get_id();
     return qp;
   }
 

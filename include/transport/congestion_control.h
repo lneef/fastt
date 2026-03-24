@@ -96,7 +96,7 @@ struct swift {
   void update_stats() {
     // TODO: fix this according to real impl
     // but we currently dont have a pacer
-    cwnd_size = std::clamp<float>(cwnd_size, 1 * mss, 128 * mss);
+    cwnd_size = std::clamp<float>(cwnd_size, 1 * mss, 256 * mss);
   }
 
   unsigned space(size_t inflight) const {

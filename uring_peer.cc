@@ -76,10 +76,6 @@ static bool request_single(uring::slot &slt, int64_t &key, std::mt19937& rng, st
   return true;
 }
 
-bool is_all_zero(const unsigned char *data, size_t size) {
-  return std::all_of(data, data + size, [](unsigned char b) { return b == 0; });
-}
-
 static void parse_request(uring::slot &slt) {
   using kv_request_t = kv::kv_packet<kv::kv_request>;
   unsigned i = 0;
@@ -162,6 +158,9 @@ static uint64_t process_completions(uring::client_iface &iface, F &&cb) {
   io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
     iface.handle_cqe(
         cqe, [&](unsigned idx, size_t size, [[maybe_unused]] unsigned sidx) {
+        if(iface.slt.idx != sidx)
+        printf("%u %u\n", iface.slt.idx, sidx);
+        assert(sidx == iface.slt.idx);
           handle_recv(iface, iface.slt, idx, size);
         return 0;
         });
@@ -182,6 +181,7 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
   set_thread_affinity(pthread_self(), id);
   uring::client_iface iface{};
   struct io_uring_cqe *cqe;
+  iface.slt.idx = id;
   iface.setup(0);
   iface.uring_connect(&addr);
   iface.uring_submit_and_wait();
@@ -214,7 +214,6 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
   };
 
   while (next < end_time) {
-    process_completions(iface, rx_cb);
     if (rdtsc() < next) {
       process_completions(iface, rx_cb);
       continue;
@@ -264,8 +263,9 @@ static int server_fun(uint16_t id, unsigned sz, int port_arg, in_addr_t addr) {
     uring::drain_rx_renew(&iface);
     unsigned cnt = 0;
     io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
-      iface.handle_cqe(cqe, [&](unsigned idx, size_t size, unsigned sidx) {
+      iface.handle_cqe(cqe, [&](unsigned idx, size_t size, unsigned sidx) {      
         auto &slt = iface.slot_at(sidx);
+        assert(slt.idx == sidx);
         handle_recv(iface, slt, idx, size);
         return 0;
       });
