@@ -64,13 +64,13 @@ static size_t handle_request(kv::kv_packet<kv::kv_request> *req,
   return resp_size;
 }
 
-static bool request_single(uring::slot &slt, int64_t &key, std::mt19937& rng, std::uniform_int_distribution<int64_t>& dist) {
+static bool request_single(uring::slot &slt, int64_t &key, std::mt19937& rng, std::uniform_int_distribution<int64_t>& dist, uint16_t id) {
   auto *req = slt.tx_buffer.reserve(sizeof(kv::kv_packet<kv::kv_request>));
   if (!req)
     return false;
   std::memset(req, 0, sizeof(kv::kv_packet<kv::kv_request>));
   key = dist(rng);
-  kv::create_kv_request(req, 0, key);
+  kv::create_kv_request(req, id, key);
   assert(reinterpret_cast<kv::kv_packet<kv::kv_request> *>(req)->payload.op ==
          kv::request_t::GET);
   return true;
@@ -214,13 +214,14 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
   };
 
   while (next < end_time) {
+    process_completions(iface, rx_cb);
     if (rdtsc() < next) {
       process_completions(iface, rx_cb);
       continue;
     }
 
     int64_t key;
-    while (!request_single(iface.slt, key, rng, dist))
+    while (!request_single(iface.slt, key, rng, dist, id))
       process_completions(iface, rx_cb);
     ++inflight;
     reqs.emplace_back(next, key);
