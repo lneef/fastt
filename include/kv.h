@@ -46,7 +46,10 @@ public:
     return 0;
   }
 
-  kv_slot &operator[](size_t i) { return slots.slots[i]; }
+  kv_slot &operator[](size_t i) { 
+      assert(i < slots.slots.size());
+      return slots.slots[i]; 
+  }
 
   kv_slot *start() {
     if (!con->can_send())

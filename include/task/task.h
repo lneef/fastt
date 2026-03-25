@@ -53,7 +53,7 @@ template <typename C> void make_progress(C &con) {
     auto retval = con.recv(*prms.segs);
     if (retval == -EAGAIN)
       return;
-    *prms.retval = retval;
+    *prms.retval += retval;
     op_completed = true;
   } break;
   case concurrency::io_yield_type::send_yield: {

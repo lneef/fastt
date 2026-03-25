@@ -39,24 +39,25 @@ struct lcore_server_adapter {
 static bench::storage store;
 static unsigned len = 8;
 
-static void serve(sgl &resp, slab_allocator &alloc,
+static void serve(sgl &resp_sgl, slab_allocator &alloc,
                   kv::kv_packet<kv::kv_request> *packet) {
   kv::kv_packet<kv::kv_completion> *completion;
   auto key = packet->payload.key;
   auto it = store.find(key);
   if (it == store.end()) {
     auto seg = alloc.alloc_default_safe(sizeof(*completion));
-    completion = resp.head->data<kv::kv_packet<kv::kv_completion>>();
+    completion = seg->data<kv::kv_packet<kv::kv_completion>>();
     completion->payload.reponse = kv::response_t::FAILURE;
     completion->payload.data_len = 0;
-    resp.add_segment_safe(std::move(seg));
+    resp_sgl.add_segment_safe(std::move(seg));
   } else {
-    auto seg = alloc.alloc_default_safe(sizeof(*completion) + it->second.size());
+    auto seg =
+        alloc.alloc_default_safe(sizeof(*completion) + it->second.size());
     completion = seg->data<kv::kv_packet<kv::kv_completion>>();
     completion->payload.reponse = kv::response_t::SUCCESS;
-    std::memcpy(it->second.data(), completion->payload.data, it->second.size());
+    std::memcpy(completion->payload.data, it->second.data(), it->second.size());
     completion->payload.data_len = it->second.size();
-    resp.add_segment_safe(std::move(seg));
+    resp_sgl.add_segment_safe(std::move(seg));
   }
   completion->id = packet->id;
   completion->pt = packet->pt;
@@ -101,14 +102,15 @@ int lcore_server_fun(void *arg) {
         while (true) {
           sgl rsgl{};
           auto sz = co_await recv(iface.get_scheduler(), con, rsgl);
-          if (sz == 0) {
+          if (sz == 0) 
             co_return;
-          }
-          for (auto &seg : rsgl){
-
-          assert(seg.data_len == sizeof(kv::kv_packet<kv::kv_request>));
+          
+          assert(ssgl.empty());
+          for (auto &seg : rsgl) {
+            assert(seg.data_len == sizeof(kv::kv_packet<kv::kv_request>));
             serve(ssgl, slab, seg.data<kv::kv_packet<kv::kv_request>>());
-            }
+          }
+
           ssize_t to_send = ssgl.size;
           auto sent =
               co_await send(iface.get_scheduler(), con, std::move(ssgl));

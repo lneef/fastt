@@ -68,6 +68,24 @@ struct mbuf {
     }
   }
 
+  void write(const void *buf, size_t buf_len, size_t off = 0) {
+    auto *src = static_cast<const uint8_t *>(buf);
+    auto *seg = this;
+    while (off >= seg->data_len) {
+      off -= seg->data_len;
+      seg = seg->next;
+    }
+    size_t buf_off = 0;
+    while (seg && buf_off < buf_len) {
+      auto len = seg->data_len - off;
+      len = std::min(len, buf_len - buf_off);
+      std::memcpy(seg->data<uint8_t>() + off, src + buf_off, len);
+      buf_off += len;
+      off = 0;
+      seg = seg->next;
+    }
+  }
+
   template <typename T> T *prepend() {
     headroom -= sizeof(T);
     data_len += sizeof(T);
@@ -136,6 +154,7 @@ public:
   static constexpr size_t kDefaultSize =
       kMaxDataLen + kDefaultHeadroom + sizeof(mbuf);
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
+
 public:
   slab_allocator() : cache(kDefaultSize) { alloc_new_slab(cache); }
 
@@ -156,7 +175,7 @@ public:
   }
 
   static uintptr_t virt_to_phys(void *vaddr) {
-    const  size_t PAGE_SIZE = sysconf(_SC_PAGESIZE);
+    const size_t PAGE_SIZE = sysconf(_SC_PAGESIZE);
     int fd;
     uint64_t entry;
     uintptr_t va = (uintptr_t)vaddr;
@@ -173,14 +192,14 @@ public:
     }
     close(fd);
 
-    if (!(entry & (1ULL << 63))){
-      printf("not present\n");  
+    if (!(entry & (1ULL << 63))) {
+      printf("not present\n");
       return RTE_BAD_IOVA;
     }
 
     uint64_t pfn = entry & ((1ULL << 55) - 1);
     if (pfn == 0) {
-        return RTE_BAD_IOVA;
+      return RTE_BAD_IOVA;
     }
     return (pfn * PAGE_SIZE + (va % PAGE_SIZE));
   }
