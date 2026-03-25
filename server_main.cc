@@ -46,16 +46,17 @@ static void serve(sgl &resp, slab_allocator &alloc,
   auto it = store.find(key);
   if (it == store.end()) {
     auto seg = alloc.alloc_default_safe(sizeof(*completion));
-    resp.add_segment_safe(std::move(seg));
     completion = resp.head->data<kv::kv_packet<kv::kv_completion>>();
     completion->payload.reponse = kv::response_t::FAILURE;
     completion->payload.data_len = 0;
+    resp.add_segment_safe(std::move(seg));
   } else {
-    resp.alloc_message(alloc, sizeof(*completion) + it->second.size());
-    completion = resp.head->data<kv::kv_packet<kv::kv_completion>>();
+    auto seg = alloc.alloc_default_safe(sizeof(*completion) + it->second.size());
+    completion = seg->data<kv::kv_packet<kv::kv_completion>>();
     completion->payload.reponse = kv::response_t::SUCCESS;
-    resp.write(it->second.data(), it->second.size(), sizeof(*completion));
+    std::memcpy(it->second.data(), completion->payload.data, it->second.size());
     completion->payload.data_len = it->second.size();
+    resp.add_segment_safe(std::move(seg));
   }
   completion->id = packet->id;
   completion->pt = packet->pt;

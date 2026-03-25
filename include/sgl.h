@@ -77,7 +77,8 @@ struct sgl{
         }
     }
 
-    void alloc_message(slab_allocator &slab, size_t len){
+    mbuf* alloc_message(slab_allocator &slab, size_t len){
+        mbuf *first = 0;
         while(len > 0){
             auto chunk = static_cast<uint16_t>(std::min(len, (size_t)slab_allocator::kMaxDataLen));
             add_segment_safe(slab.alloc_default_safe(chunk));
