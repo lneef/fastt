@@ -4,6 +4,7 @@
 #include "arch/nic.h"
 #include "util.h"
 #include <cstdint>
+#include <generic/rte_cycles.h>
 #include <memory>
 #include <rte_build_config.h>
 #include <rte_cycles.h>
@@ -35,8 +36,12 @@ public:
       rte_free(tx_buffer); 
   }
 
-  void enqueue_pkt(rte_mbuf *pkt) {
-    rte_eth_tx_buffer(port, txq, tx_buffer, pkt);
+  void enqueue_pkt(rte_mbuf *pkt) {  
+    auto sent = rte_eth_tx_buffer(port, txq, tx_buffer, pkt);
+    total_sent += sent;
+    if(sent)
+        ts_last_flush = rte_get_timer_cycles();
+
   }
 
   template <unsigned N> void rx_burst(packet_vector<rte_mbuf*, N> &vec) {
@@ -44,7 +49,14 @@ public:
     vec.i = rcvd;
   }
 
-  void flush() { rte_eth_tx_buffer_flush(port, txq, tx_buffer); }
+  void flush() {
+      static constexpr uint64_t kFlushThreshold = 5;
+      auto now = rte_get_timer_cycles();
+      if(now - ts_last_flush < get_ticks_us() * kFlushThreshold)
+          return;
+      rte_eth_tx_buffer_flush(port, txq, tx_buffer); 
+      ts_last_flush = now;
+  }
 
 private:
   static void unsent_cb(rte_mbuf** pkts, uint16_t unsent, void* userdata){
@@ -58,13 +70,16 @@ private:
       }while(sent < unsent && rte_get_timer_cycles() < end);
       if(unsent - sent)
           rte_pktmbuf_free_bulk(pkts + sent, unsent - sent);
+      qp->total_sent += sent;
+      qp->ts_last_flush = rte_get_timer_cycles();
   }
 
   uint16_t port;
   uint16_t txq;
   uint16_t rxq;
   rte_eth_dev_tx_buffer *tx_buffer;
-
+  uint64_t total_sent = 0;
+  uint64_t ts_last_flush = 0;
 public:
   std::unique_ptr<nic> nic_arch;
 };

@@ -80,15 +80,6 @@ struct reorder_buffer {
 };
 
 struct transport_rxpath {
-  struct message {
-    mbuf_ptr head;
-    uint64_t size : 48;
-    uint64_t segs : 16;
-    uint16_t crds = 0;
-
-    message(mbuf *head, uint64_t size, uint16_t segs, uint16_t crds)
-        : head(mbuf_take_owner_ship(head)), size(size), segs(segs), crds(crds) {}
-  };
   // reserve some headroom
   static constexpr unsigned kMaxGrantSize = 256;
   static constexpr unsigned kMaxBitMapSize = 2 * kMaxGrantSize;
@@ -119,30 +110,18 @@ struct transport_rxpath {
     assert(acb.rcv_high == max_rx_in_window);
   }
 
-  void reassemble_single_msg(mbuf *pkt) {
+  void put_dgram(mbuf_ptr &&pkt) {
     auto *hdr = pkt->data<protocol::ft_header>();
     // control frames are freed
     if (hdr->type != protocol::pkt_type::FT_MSG) {
       seen_done = hdr->type == protocol::pkt_type::FT_DONE;
-      mbuf_free(pkt);
       return;
     }
-    bool end = hdr->eom;
     pkt->adj(sizeof(protocol::ft_header));
-    auto csegs = reassembly.segs;
-    mbuf::merge(reassembly.first, reassembly.last, pkt, reassembly.size,
-                reassembly.segs);
-    crds.crds_stalled += reassembly.segs - csegs;
-    if (end) {
-      assert(crds.crds_stalled <= reassembly.segs);  
-      out.emplace_back(reassembly.first, reassembly.size, reassembly.segs, crds.crds_stalled);
-      reassembly.reset();
-      reassembly.size = 0;
-      crds.crds_stalled = 0;
-    }
+    out.emplace_back(std::move(pkt));
   }
 
-  bool empty() const { return out.empty() && reassembly.first == nullptr; }
+  bool empty() const { return out.empty(); }
 
   void reassemble(seq_t seq, mbuf_ptr &&pkt, ack_cb &acb) {
     if (seq != next_seq) {
@@ -151,7 +130,7 @@ struct transport_rxpath {
       rb.insert(seq, std::move(pkt));
     } else {
       assert(wnd.test(index(seq)));
-      reassemble_single_msg(pkt.release());
+      put_dgram(std::move(pkt));
       wnd.reset(index(next_seq));
       ++next_seq;
       while (wnd.test(index(next_seq))) {
@@ -159,7 +138,7 @@ struct transport_rxpath {
         assert(rb.next_buffered_seq() == next_seq);
         wnd.reset(index(next_seq));
         ++next_seq;
-        reassemble_single_msg(rb.front().release());
+        put_dgram(std::move(rb.front()));
         rb.pop_front();
       }
     }
@@ -197,23 +176,21 @@ struct transport_rxpath {
   }
 
   bool has_buffered_mbufs_frags() const {
-    return out.size() > 0 || reassembly.first != nullptr;
+    return out.size() > 0;
   }
 
   ssize_t read(sgl &msgl) {
-    if (out.empty()) {
-      // probably we are stalled
-      crds.crds_returned += crds.crds_stalled;
-      crds.crds_stalled = 0;
+    if (out.empty()) 
       return -EAGAIN;
+    ssize_t rx = 0;
+    while (!out.empty()) {
+      auto &buffered = out.front();
+      msgl.add_segment_safe(std::move(buffered)); 
+      ++crds.crds_returned;
+      ++rx;
+      out.pop_front();
     }
-    auto &buffered = out.front();
-    msgl.head = std::move(buffered.head);
-    msgl.size = buffered.size;
-    msgl.segs = buffered.segs;
-    crds.crds_returned += buffered.crds;
-    out.pop_front();
-    return msgl.size;
+    return rx;
   }
 
   unsigned get_available_wnd() const { return kMaxGrantSize; }
@@ -228,29 +205,14 @@ struct transport_rxpath {
     return crds_returned;
   }
 
-  ~transport_rxpath() {
-    if (reassembly.first)
-      mbuf_free(reassembly.first);
-  }
-
-  // pkt reassmbly and buffering
-  struct {
-    mbuf *first = nullptr, *last = nullptr;
-    uint64_t size = 0;
-    uint32_t segs = 0;
-    void reset() {
-      first = last = nullptr;
-      segs = 0;
-    }
-  } reassembly;
+  ~transport_rxpath() = default;
 
   struct {
     uint16_t crds_returned = 0;
-    uint16_t crds_stalled = 0;
   } crds;
 
   reorder_buffer rb;
-  std::deque<message> out;
+  std::deque<mbuf_ptr> out;
 
   // connection state
   std::bitset<kMaxBitMapSize> wnd;

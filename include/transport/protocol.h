@@ -22,10 +22,9 @@ struct [[gnu::packed]] ft_header {
   uint16_t dport;
   seq_t seq;
   seq_t ack;
-  pkt_type type : 3;
+  pkt_type type : 4;
   uint32_t ackframe : 1;
   uint32_t sack : 1;
-  uint32_t eom : 1;
   uint32_t magic :8;
   uint32_t crd: 18;
 };

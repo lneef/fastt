@@ -70,7 +70,7 @@ private:
     io_uring_params params{};
     params.cq_entries = kCQEntries;
     params.sq_entries = kQueueDepth;
-    params.flags = IORING_SETUP_SUBMIT_ALL | IORING_SETUP_COOP_TASKRUN |
+    params.flags = IORING_SETUP_SUBMIT_ALL | IORING_SETUP_DEFER_TASKRUN |
                    IORING_SETUP_CQSIZE | IORING_SETUP_SINGLE_ISSUER;
     int ret = io_uring_queue_init_params(kQueueDepth, &ring, &params);
     if (ret) {

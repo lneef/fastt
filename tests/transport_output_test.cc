@@ -26,15 +26,13 @@ protected:
     return make_frag(seq, true, true, payload);
   }
 
-  mbuf *make_frag(seq_t seq, [[maybe_unused]] bool start, bool end, char payload = 'A') {
+  mbuf *make_frag(seq_t seq, [[maybe_unused]] bool start, [[maybe_unused]] bool end, char payload = 'A') {
     auto *msg = slab->alloc_default( sizeof(protocol::ft_header) + 1);
     EXPECT_NE(msg, nullptr);
     auto *hdr = msg->data<protocol::ft_header>();
-    auto off = 0u;
     hdr->type = protocol::pkt_type::FT_MSG;
-    hdr->eom = end;
     hdr->seq = seq;
-    *msg->data<char>(sizeof(protocol::ft_header) + off) = payload;
+    *msg->data<char>(sizeof(protocol::ft_header)) = payload;
     return msg;
   }
 
@@ -82,12 +80,14 @@ TEST_F(TransportOutputTest, MultiSegmentReassembly) {
     to->insert({1}, make_frag({1}, false, false, 'B'), acb);
     to->insert({2}, make_frag({2}, false, true, 'C'), acb);
 
-    EXPECT_EQ(to->out.size(), 1);
-    EXPECT_EQ(to->out.front().segs, 3);
-    EXPECT_EQ(to->out.front().size, 3);
+    EXPECT_EQ(to->out.size(), 3u);
     to->insert({3}, make_msg({3}, 'A', 1), acb);
-    EXPECT_EQ(to->out.size(), 2u);
-    EXPECT_EQ(to->out.back().segs, 1);
+    EXPECT_EQ(to->out.size(), 4u);
+
+    sgl msgl;
+    auto rd = to->read(msgl);
+    EXPECT_EQ(rd, 4);
+    EXPECT_EQ(msgl.segs, 4u);
 }
 
 TEST_F(TransportOutputTest, ProactiveCreditReturnForBufferedMessage) {
@@ -95,26 +95,21 @@ TEST_F(TransportOutputTest, ProactiveCreditReturnForBufferedMessage) {
     to->insert({0}, make_frag({0}, true, false, 'A'), acb);
     to->insert({1}, make_frag({1}, false, false, 'B'), acb);
     to->insert({2}, make_frag({2}, false, false, 'C'), acb);
+    to->insert({3}, make_frag({3}, false, true, 'D'), acb);
 
-    EXPECT_EQ(to->out.size(), 0u);
-    EXPECT_EQ(to->reassembly.segs, 3u);
+    EXPECT_EQ(to->out.size(), 4u);
 
     sgl msgl;
-    // No complete message yet, read should fail
-    EXPECT_EQ(to->read(msgl), -EAGAIN);
+    auto rd = to->read(msgl);
+    EXPECT_EQ(rd, 4);
+    EXPECT_EQ(msgl.segs, 4u);
 
-    // complete the message with the final fragment
-    to->insert({3}, make_frag({3}, false, true, 'D'), acb);
-    EXPECT_EQ(to->out.size(), 1u);
-    EXPECT_EQ(to->out.front().segs, 4u);
-    EXPECT_EQ(to->out.front().size, 4u);
-
-    auto prev_wnd = to->get_available_wnd();
-    auto ret = to->read(msgl);
-
-    char buf[64] = {};
-    msgl.head->read(buf);
-    printf("%s\n", buf);
+    // each dgram is a separate segment in the sgl, verify payload order
+    char buf[4] = {};
+    int i = 0;
+    for (auto &seg : msgl) {
+        buf[i++] = *seg.data<char>();
+    }
     EXPECT_EQ(std::memcmp(buf, "ABCD", 4), 0);
 }
 
@@ -302,13 +297,19 @@ TEST_F(TransportOutputTest, MultiSegmentReassemblyReordered) {
     to->insert({0}, make_frag({0}, true, false, 'A'), acb);
     to->insert({2}, make_frag({2}, false, true, 'C'), acb);
 
-    EXPECT_EQ(to->out.size(), 0u);
+    // seq 0 drained, seq 2 in reorder buffer
+    EXPECT_EQ(to->out.size(), 1u);
     EXPECT_TRUE(to->has_holes());
 
     to->insert({1}, make_frag({1}, false, false, 'B'), acb);
-    EXPECT_EQ(to->out.size(), 1u);
-    EXPECT_EQ(to->out.front().segs, 3);
+    // all 3 dgrams now in out
+    EXPECT_EQ(to->out.size(), 3u);
     EXPECT_FALSE(to->has_holes());
+
+    sgl msgl;
+    auto rd = to->read(msgl);
+    EXPECT_EQ(rd, 3);
+    EXPECT_EQ(msgl.segs, 3u);
 }
 
 TEST_F(TransportOutputTest, MultiSegment) {
@@ -321,13 +322,14 @@ TEST_F(TransportOutputTest, MultiSegment) {
     auto seg2 = make_frag({1}, false, true);
     auto seg2last = slab->alloc_default(slab->kMaxDataLen);
     seg2->next = seg2last;
-    
+
     to->insert({0}, seg1, acb);
     to->insert({1}, seg2, acb);
 
-    EXPECT_EQ(to->out.size(), 1u);
+    EXPECT_EQ(to->out.size(), 2u);
     sgl msg;
     auto rd = to->read(msg);
-    EXPECT_EQ(rd, slab->kMaxDataLen * 3 + 2);
-    EXPECT_EQ(msg.segs, 5);
+    EXPECT_EQ(rd, 2);
+    EXPECT_EQ(msg.segs, 5u);
+    EXPECT_EQ(msg.size, slab->kMaxDataLen * 3 + 2);
 }

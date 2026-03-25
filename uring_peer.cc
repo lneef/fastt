@@ -32,7 +32,6 @@
 #include <tlx/container/btree_map.hpp>
 static bench::storage store;
 
-
 static size_t handle_request(kv::kv_packet<kv::kv_request> *req,
                              uring::slot &slt) {
   kv::kv_packet<kv::kv_completion> *completion;
@@ -64,7 +63,9 @@ static size_t handle_request(kv::kv_packet<kv::kv_request> *req,
   return resp_size;
 }
 
-static bool request_single(uring::slot &slt, int64_t &key, std::mt19937& rng, std::uniform_int_distribution<int64_t>& dist, uint16_t id) {
+static bool request_single(uring::slot &slt, int64_t &key, std::mt19937 &rng,
+                           std::uniform_int_distribution<int64_t> &dist,
+                           uint16_t id) {
   auto *req = slt.tx_buffer.reserve(sizeof(kv::kv_packet<kv::kv_request>));
   if (!req)
     return false;
@@ -100,7 +101,7 @@ static unsigned parse_completion(uring::slot &slt, F &&cb) {
   using packet_t = kv::kv_packet<kv::kv_completion>;
   unsigned i = 0;
   unsigned c = 0;
-  volatile auto data = slt.rbuffer.data();
+  auto data = slt.rbuffer.data();
   auto size = slt.rbuffer.off;
   packet_t resp;
   for (; i < size;) {
@@ -158,11 +159,10 @@ static uint64_t process_completions(uring::client_iface &iface, F &&cb) {
   io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
     iface.handle_cqe(
         cqe, [&](unsigned idx, size_t size, [[maybe_unused]] unsigned sidx) {
-        if(iface.slt.idx != sidx)
-        printf("%u %u\n", iface.slt.idx, sidx);
-        assert(sidx == iface.slt.idx);
+          if (iface.slt.idx != sidx)
+            assert(sidx == iface.slt.idx);
           handle_recv(iface, iface.slt, idx, size);
-        return 0;
+          return 0;
         });
     ++cnt;
   }
@@ -263,7 +263,7 @@ static int server_fun(uint16_t id, unsigned sz, int port_arg, in_addr_t addr) {
     uring::drain_rx_renew(&iface);
     unsigned cnt = 0;
     io_uring_for_each_cqe(&iface.ctx->ring, head, cqe) {
-      iface.handle_cqe(cqe, [&](unsigned idx, size_t size, unsigned sidx) {      
+      iface.handle_cqe(cqe, [&](unsigned idx, size_t size, unsigned sidx) {
         auto &slt = iface.slot_at(sidx);
         assert(slt.idx == sidx);
         handle_recv(iface, slt, idx, size);
@@ -277,6 +277,12 @@ static int server_fun(uint16_t id, unsigned sz, int port_arg, in_addr_t addr) {
       iface.drain_incoming(slt);
       parse_request(slt);
       submit_send(iface, slt, iface.clients[slt.idx]);
+    }
+
+    for(auto it = iface.down.begin(), end = iface.down.end(); it != end;){
+        auto &slt = *it;
+        ++it;
+        iface.submit_close(slt.idx);
     }
   }
   return 0;

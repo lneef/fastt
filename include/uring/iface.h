@@ -30,9 +30,11 @@ static constexpr int kMaxClientFdTag = 2 * kMaxClientFd + 1;
 static constexpr int kSetSockTag = kMaxClientFd + 1;
 static constexpr int kGetSockTCPInfoTag = kSetSockTag + 2;
 static constexpr int kCancelTag = kSetSockTag + 4;
+static constexpr int kCloseTag = kSetSockTag + 6;
 static constexpr int kDefaultBufferSize = 32;
 
 static_assert((kCancelTag & 1) == 1, "");
+static_assert((kCloseTag & 1) == 1, "");
 
 static constexpr uint64_t tag_send(unsigned idx) {
   return static_cast<uint64_t>(idx) * 2;
@@ -45,7 +47,7 @@ static constexpr uint64_t tag_recv(unsigned idx) {
 static constexpr unsigned untag(uint64_t user_data) { return user_data >> 1; }
 
 struct slot;
-template <typename T> int add_recv(T *iface, int fd, slot& slt);
+template <typename T> int add_recv(T *iface, int fd, slot &slt);
 template <typename T>
 int process_cqe_recv(T *st, struct io_uring_cqe *cqe, int fd, unsigned sidx,
                      auto &&f);
@@ -116,7 +118,7 @@ struct slot {
   data_buffer tx_buffer;
   reassembly_buffer rbuffer;
   list_hook link;
-  list_hook renew;
+  list_hook ctrl;
   slot()
       : tx_buffer(kDefaultTxBufferSize), rbuffer(kDefaultAssemblyBufferSize) {}
   void reset() {
@@ -146,7 +148,7 @@ struct iface_base {
   int flag;
   uint16_t port;
 
-  intrusive_list_t<slot, &slot::renew> rx_renew;
+  intrusive_list_t<slot, &slot::ctrl> rx_ctrl;
   struct tcp_info info;
   struct io_uring_napi napi{};
   std::unique_ptr<qpair> ctx;
@@ -168,12 +170,12 @@ struct iface_base {
     }
   }
 
-  void release_incoming(slot& slt){
-      while(!slt.incoming.empty()){
-          auto [idx, _] = slt.incoming.front();
-          recycle_buffer(ctx.get(), idx);
-          slt.incoming.pop_front();
-      }
+  void release_incoming(slot &slt) {
+    while (!slt.incoming.empty()) {
+      auto [idx, _] = slt.incoming.front();
+      recycle_buffer(ctx.get(), idx);
+      slt.incoming.pop_front();
+    }
   }
 
   int uring_submit_and_wait() {
@@ -271,11 +273,14 @@ struct client_iface : iface_base {
   }
 
   int process_cmd_cqe(io_uring_cqe *cqe) {
-    switch (cqe->user_data) {
+    switch (cqe->user_data & ((1ull << 32) - 1)) {
     case kSetSockTag:
     case kGetSockTCPInfoTag:
       return 0;
     case kCancelTag:
+      return 0;
+    case kCloseTag:
+      handle_close(cqe->user_data >> 32);
       return 0;
     default:
       assert(0);
@@ -295,17 +300,27 @@ struct client_iface : iface_base {
     return 0;
   }
 
-  void handle_cancel(unsigned idx){
-      (void)idx;
+  void handle_close(unsigned idx) { (void)idx; }
+
+  bool active() const{
+      return (slt.tx_inflight || slt.recv_scheduled);
   }
-  int handle_close(int idx) {
+
+  void submit_close(unsigned idx) {
+    (void)idx;
+    auto *sqe = ctx->get_sqe();
+    assert(sqe);
+    io_uring_prep_close(sqe, fd);
+    io_uring_sqe_set_data64(sqe, kCloseTag);
+  }
+
+  int cancel(int idx) {
     (void)idx;
     auto *sqe = ctx->get_sqe();
     assert(sqe);
     io_uring_prep_cancel64(sqe, static_cast<uint64_t>(fd),
                            IORING_ASYNC_CANCEL_FD);
-    sqe->flags |= IOSQE_CQE_SKIP_SUCCESS;
-    close(fd);
+    io_uring_sqe_set_data64(sqe, kCancelTag);
     return 0;
   }
 
@@ -317,6 +332,7 @@ struct server_iface : iface_base {
   std::vector<slot> con_state;
   std::deque<int> free_slots;
   intrusive_list_t<slot> active;
+  intrusive_list_t<slot, &slot::ctrl> down;
 
   server_iface()
       : iface_base(), clients(kMaxClientFd + 1), con_state(kMaxClientFd + 1) {
@@ -331,12 +347,16 @@ struct server_iface : iface_base {
   int process_cqe_send(struct io_uring_cqe *cqe) {
     auto idx = untag(cqe->user_data);
     auto &slt = con_state[idx];
-    if (cqe->res < 0) {
-      fprintf(stderr, "bad send %s %u %d %d\n", strerror(-cqe->res), idx, slt.tx_inflight, slt.txd);
-      return cqe->res;
-    }
-    assert(slt.tx_inflight || cqe->res == 0);
+    assert(slt.tx_inflight);
     slt.tx_inflight = false;
+    if (cqe->res < 0) {
+      fprintf(stderr, "bad send %s %u %d %d\n", strerror(-cqe->res), idx,
+              slt.tx_inflight, slt.txd);
+      return cqe->res;
+    }else if(cqe->res == 0){
+        cancel(idx);
+        return 0;
+    }
     slt.tx_buffer.mark_tx(cqe->res);
     --slt.txd;
     assert(cqe->flags == 0);
@@ -375,31 +395,44 @@ struct server_iface : iface_base {
     return 0;
   }
 
-  int handle_cancel(int idx) {
-    auto& slt = con_state[idx];
-    if(slt.eof)
-        return 0;
+  int cancel(int idx) {
+    auto &slt = con_state[idx];
+    if (slt.eof)
+      return 0;
     slt.eof = true;
-    if(slt.renew.is_linked())
-        slt.renew.unlink();
+    if (slt.ctrl.is_linked())
+      slt.ctrl.unlink();
     auto *sqe = ctx->get_sqe();
     assert(sqe);
     io_uring_prep_cancel_fd(sqe, clients[idx], IORING_ASYNC_CANCEL_ALL);
     io_uring_sqe_set_data64(sqe, static_cast<uint64_t>(idx) << 32 | kCancelTag);
+    down.push_back(slt);
     return 0;
   }
 
-  int handle_close(unsigned idx){
-      close(clients[idx]);
-      auto &slt = con_state[idx];
-      release_incoming(slt);
-      free_slots.push_front(slt.idx);
-      slt.link.unlink();
-      return 0;
+  int submit_close(unsigned idx) {
+    auto &slt = slot_at(idx);
+    printf("%u\n", slt.recv_scheduled);
+    if (slt.recv_scheduled || slt.tx_inflight)
+      return -1;
+    slt.ctrl.unlink();
+    auto *sqe = ctx->get_sqe();
+    assert(sqe);
+    io_uring_prep_close(sqe, slot_at(idx).fd);
+    io_uring_sqe_set_data64(sqe, static_cast<uint64_t>(idx) << 32 | kCloseTag);
+    return 0;
+  }
+
+  int handle_close(unsigned idx) {
+    printf("closing\n");  
+    auto &slt = con_state[idx];
+    release_incoming(slt);
+    free_slots.push_front(slt.idx);
+    slt.link.unlink();
+    return 0;
   }
 
   int handle_accept(struct io_uring_cqe *cqe) {
-      printf("new req\n");
     if (cqe->res > 0) {
       auto idx = free_slots.front();
       free_slots.pop_front();
@@ -424,13 +457,16 @@ struct server_iface : iface_base {
     case kSetSockTag:
     case kGetSockTCPInfoTag:
       return 0;
-    case kCancelTag:{
-      auto idx = cqe->user_data >> 32;                  
-      assert(!slot_at(idx).tx_inflight);
+    case kCancelTag: {
+      auto idx = cqe->user_data >> 32;
       printf("canceling %llu\n", idx);
+      return 0;
+    }
+    case kCloseTag: {
+      auto idx = cqe->user_data >> 32;
       handle_close(idx);
       return 0;
-                    }
+    }
     default:
       assert(0);
     }
@@ -450,7 +486,7 @@ struct server_iface : iface_base {
         return handle_accept(cqe);
       else {
         if (cqe->res == -ECONNRESET)
-          return handle_cancel(idx);
+          return cancel(idx);
         else
           return process_cqe_recv(this, cqe, clients[idx], idx, f);
       }
@@ -462,20 +498,19 @@ struct server_iface : iface_base {
   ~server_iface() override { close(clients.front()); }
 };
 
-template <typename T> int add_recv(T *iface, int fd, slot& slt) {
+template <typename T> int add_recv(T *iface, int fd, slot &slt) {
   struct io_uring_sqe *sqe;
-  if(slt.eof)
-      return 0;
+  if (slt.eof)
+    return 0;
   sqe = iface->ctx->get_sqe();
   if (!sqe) {
-    iface->rx_renew.push_back(slt);
+    iface->rx_ctrl.push_back(slt);
     return -1;
   }
 
   assert(slt.fd == fd);
-
+  slt.recv_scheduled = true;
   io_uring_prep_recv_multishot(sqe, fd, nullptr, 0, 0);
-
   sqe->flags |= IOSQE_BUFFER_SELECT;
   sqe->buf_group = 0;
   io_uring_sqe_set_data64(sqe, tag_recv(slt.idx));
@@ -483,18 +518,18 @@ template <typename T> int add_recv(T *iface, int fd, slot& slt) {
 }
 
 __inline void recycle_buffer(qpair *ctx, int idx) {
-  assert(ctx->id == std::this_thread::get_id());  
+  assert(ctx->id == std::this_thread::get_id());
   io_uring_buf_ring_add(ctx->buf_ring, ctx->get_buffer(idx), ctx->buffer_size(),
                         idx, io_uring_buf_ring_mask(kNumBuffer), 0);
   io_uring_buf_ring_advance(ctx->buf_ring, 1);
 }
 
 template <typename T> void drain_rx_renew(T *iface) {
-  while (!iface->rx_renew.empty()) {
-    auto &slt = iface->rx_renew.front();
+  while (!iface->rx_ctrl.empty()) {
+    auto &slt = iface->rx_ctrl.front();
     if (add_recv(iface, slt.fd, slt))
       break;
-    iface->rx_renew.pop_front();
+    iface->rx_ctrl.pop_front();
   }
 }
 
@@ -503,17 +538,20 @@ int process_cqe_recv(T *st, struct io_uring_cqe *cqe, int fd, unsigned sidx,
                      auto &&f) {
   assert(fd > 0);
   int ret, idx;
-  if (!(cqe->flags & IORING_CQE_F_MORE))
+
+  if (!(cqe->flags & IORING_CQE_F_MORE)) {
+    st->slot_at(sidx).recv_scheduled = false;
     ret = add_recv<T>(st, fd, st->slot_at(sidx));
+  }
 
   if (cqe->res == -ENOBUFS)
     return 0;
 
-  if (!(cqe->flags & IORING_CQE_F_BUFFER) || cqe->res < 0) {
-    ret = cqe->res;
+  if (!(cqe->flags & IORING_CQE_F_BUFFER) || cqe->res <= 0) {
+    printf("canceling\n");  
     if (cqe->res == 0)
-      st->handle_cancel(sidx);
-    return ret;
+      st->cancel(sidx);
+    return cqe->res;
   }
 
   idx = cqe->flags >> 16;

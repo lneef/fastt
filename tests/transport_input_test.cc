@@ -27,7 +27,7 @@ protected:
     EXPECT_NE(msg, nullptr);
     auto *hdr = msg->data<protocol::ft_header>();
     hdr->type = protocol::pkt_type::FT_MSG;
-    hdr->eom = 1;
+    hdr->seq = {};
     return msg;
   }
 
@@ -70,7 +70,7 @@ TEST_F(TransportInputTest, RetransmissionTransmitsCorrectPacket) {
         ASSERT_NE(msg, nullptr);
         auto *hdr = msg->data<protocol::ft_header>();
         hdr->type = protocol::pkt_type::FT_MSG;
-        hdr->eom = 1;
+        hdr->seq = {};
         // Write a unique tag after the header
         *msg->data<uint8_t>(sizeof(protocol::ft_header)) = static_cast<uint8_t>(0xA0 + i);
         originals.push_back(msg);

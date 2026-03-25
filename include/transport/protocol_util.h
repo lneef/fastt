@@ -12,7 +12,6 @@ inline void extract_ports(flow_tuple &ft, mbuf *pkt) {
 struct msg_frame_desc {
   seq_t seq, ack;
   uint16_t crd;
-  bool eom;
   bool ack_frame, sack;
 };
 
@@ -28,7 +27,6 @@ struct builder {
     ft->crd = desc.crd;
     ft->ackframe = desc.ack_frame;
     ft->sack = desc.sack;
-    ft->eom = desc.eom;
     ft->type = protocol::pkt_type::FT_MSG;
   }
 

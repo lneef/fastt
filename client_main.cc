@@ -126,10 +126,13 @@ static int lcore_closed_fn(void *arg) {
       auto rcvd = kv.recv(rsgl);
       if (rcvd <= 0)
         break;
-      auto *resp = rsgl.head->data<kv::kv_packet<kv::kv_completion>>();
-      assert(resp->payload.key == kv[resp->id].key);
-      kv.complete(resp->id);
-      ++c;
+      for (auto &seg : rsgl) {
+        auto *resp = seg.data<kv::kv_packet<kv::kv_completion>>();
+        assert(resp->payload.key == kv[resp->id].key);
+        kv.complete(resp->id);
+
+        ++c;
+      }
     }
   };
 
@@ -194,18 +197,18 @@ static int lcore_open_fn(void *arg) {
   uint64_t inflight = 0;
   auto rx_fn = [&](kv_proxy &pry) {
     for (;;) {
-      sgl rsgl;
+      sgl rsgl{};
       auto rcvd = pry.recv(rsgl);
       if (rcvd <= 0)
         break;
-      auto *resp = 
-      rsgl.head->data<kv::kv_packet<kv::kv_completion>>();
-      auto [t, k] = reqs.front();
-      ensure(resp->payload.key == k);
-      hdr_record_value(hist, (rte_get_timer_cycles() - t) /
-                                 get_ticks_us());
-      reqs.pop_front();
-      --inflight;
+      for (auto &seg : rsgl) {
+        auto *resp = seg.data<kv::kv_packet<kv::kv_completion>>();
+        auto [t, k] = reqs.front();
+        ensure(resp->payload.key == k);
+        hdr_record_value(hist, (rte_get_timer_cycles() - t) / get_ticks_us());
+        reqs.pop_front();
+        --inflight;
+      }
     }
   };
 
@@ -228,7 +231,7 @@ static int lcore_open_fn(void *arg) {
       if (retval == -EAGAIN) {
         cif.poll();
         rx_fn(kv);
-      } else 
+      } else
         sent += retval;
     }
     ++inflight;
