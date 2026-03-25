@@ -103,9 +103,11 @@ int lcore_server_fun(void *arg) {
           if (sz == 0) {
             co_return;
           }
-          assert(sz == sizeof(kv::kv_packet<kv::kv_request>));
-          for (auto &seg : rsgl)
+          for (auto &seg : rsgl){
+
+          assert(seg.data_len == sizeof(kv::kv_packet<kv::kv_request>));
             serve(ssgl, slab, seg.data<kv::kv_packet<kv::kv_request>>());
+            }
           ssize_t to_send = ssgl.size;
           auto sent =
               co_await send(iface.get_scheduler(), con, std::move(ssgl));
