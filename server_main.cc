@@ -50,7 +50,7 @@ static void serve(sgl &resp, slab_allocator &alloc,
     completion = resp.head->data<kv::kv_packet<kv::kv_completion>>();
     completion->payload.reponse = kv::response_t::FAILURE;
     completion->payload.data_len = 0;
-  } else { 
+  } else {
     resp.alloc_message(alloc, sizeof(*completion) + it->second.size());
     completion = resp.head->data<kv::kv_packet<kv::kv_completion>>();
     completion->payload.reponse = kv::response_t::SUCCESS;
@@ -96,20 +96,20 @@ int lcore_server_fun(void *arg) {
   server->register_service(
       2, [](server_iface &iface, connection &con) -> concurrency::task {
         sgl ssgl;
-        sgl rsgl;
         auto &slab = *iface.get_alloc();
         while (true) {
+          sgl rsgl{};
           auto sz = co_await recv(iface.get_scheduler(), con, rsgl);
           if (sz == 0) {
             co_return;
           }
           assert(sz == sizeof(kv::kv_packet<kv::kv_request>));
-          for(auto& seg : rsgl)
+          for (auto &seg : rsgl)
             serve(ssgl, slab, seg.data<kv::kv_packet<kv::kv_request>>());
           ssize_t to_send = ssgl.size;
           auto sent =
               co_await send(iface.get_scheduler(), con, std::move(ssgl));
-          if (sent == 0) 
+          if (sent == 0)
             co_return;
           assert(sent == to_send);
         }
