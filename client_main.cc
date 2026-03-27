@@ -275,7 +275,8 @@ static void run(lcore_function_t *f, void *args) {
         dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095));
     ++i;
   }
-  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);
+  std::vector<uint16_t> lcore_ids;
+  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators, lcore_ids);
   if (!ifc)
     return -1;
 

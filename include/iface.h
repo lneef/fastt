@@ -13,7 +13,8 @@ struct iface {
   using netdev_iface =
       std::tuple<uint16_t, uint16_t, uint16_t>;
   static std::unique_ptr<iface> configure_port(uint16_t port, uint16_t ntx,
-                                             uint16_t nrx, std::vector<std::shared_ptr<dpdk_allocator>>& pools);
+                                             uint16_t nrx, std::vector<std::shared_ptr<dpdk_allocator>>& pools, 
+                                              std::vector<uint16_t>& lcore_ids);
   void stop(){
       rte_eth_dev_stop(port);
   }
