@@ -85,16 +85,22 @@ struct rx_poll {
       auto cq_free = qp_rings->cq_free();
       if (cq_free < burst) {
         qp_rings->cq_get_bulk(fvec.data(), kFreeThres);
+        printf("Completing %u\n", kFreeThres);  
         rte_pktmbuf_free_bulk(fvec.data(), kFreeThres);
       }
       auto blen = rte_eth_rx_burst(port, qid, bvec.data(), burst);
       auto clen = std::min<unsigned>(qp_rings->sq_free(), blen);
       auto now = rte_get_timer_cycles();
-      for (auto i = 0u; i < blen; ++i)
+      for (auto i = 0u; i < clen; ++i)
         *get_tsc(bvec[i]) = now;
-      qp_rings->sq_put_bulk(bvec.data(), clen);
-      if (clen < blen)
+      if(clen){
+        printf("Enqueueing %u\n", clen);
+        qp_rings->sq_put_bulk(bvec.data(), clen);
+      }
+      if (clen < blen){
+        printf("Freeing %u\n", blen - clen);  
         rte_pktmbuf_free_bulk(bvec.data() + clen, blen - clen);
+      }
     }
   }
 };
