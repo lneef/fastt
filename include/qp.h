@@ -37,11 +37,11 @@ struct qp {
 
   unsigned sq_free() { return rte_ring_free_count(sq); }
 
-  unsigned sq_size() { return rte_ring_get_size(sq); }
+  unsigned sq_size() { return rte_ring_count(sq); }
 
   unsigned cq_free() { return rte_ring_free_count(cq); }
 
-  unsigned cq_size() { return rte_ring_get_size(cq); }
+  unsigned cq_size() { return rte_ring_count(cq); }
 
   unsigned sq_put_bulk(rte_mbuf **bufs, unsigned n) {
     return rte_ring_enqueue_bulk(sq, reinterpret_cast<void *const *>(bufs), n,
@@ -85,7 +85,6 @@ struct rx_poll {
       auto cq_free = qp_rings->cq_free();
       if (cq_free < burst) {
         qp_rings->cq_get_bulk(fvec.data(), kFreeThres);
-        printf("Completing %u\n", kFreeThres);  
         rte_pktmbuf_free_bulk(fvec.data(), kFreeThres);
       }
       auto blen = rte_eth_rx_burst(port, qid, bvec.data(), burst);
@@ -93,10 +92,9 @@ struct rx_poll {
       auto now = rte_get_timer_cycles();
       for (auto i = 0u; i < clen; ++i)
         *get_tsc(bvec[i]) = now;
-      if(clen){
-        printf("Enqueueing %u\n", clen);
+      if(clen)
         qp_rings->sq_put_bulk(bvec.data(), clen);
-      }
+
       if (clen < blen){
         printf("Freeing %u\n", blen - clen);  
         rte_pktmbuf_free_bulk(bvec.data() + clen, blen - clen);

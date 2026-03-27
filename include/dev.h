@@ -45,18 +45,14 @@ public:
   }
 
   template<unsigned N> void rx_burst_n(packet_vector<rte_mbuf*, N> &vec){
-      auto bs = std::min<unsigned>(kDefaultInputBurstSize, qp_rings->cq_size());
+      auto bs = std::min<unsigned>(kDefaultInputBurstSize, qp_rings->cq_free());
+      bs = std::min<unsigned>(bs, qp_rings->sq_size());
       auto rcvd = qp_rings->sq_get_bulk(vec.pkts.data(), bs);
       vec.i = rcvd;
   }
 
   template<unsigned N> void put_mbufs(packet_vector<rte_mbuf*, N>& vec){
       qp_rings->cq_put_bulk(vec.pkts.data(), vec.i);
-  }
-
-  template <unsigned N> void rx_burst(packet_vector<rte_mbuf*, N> &vec) {
-    auto rcvd = rte_eth_rx_burst(port, rxq, vec.pkts.data(), vec.pkts.size());
-    vec.i = rcvd;
   }
 
   void flush() {
