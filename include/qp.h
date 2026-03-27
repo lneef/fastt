@@ -26,13 +26,13 @@ struct qp {
         cq(static_cast<rte_ring *>(
             rte_malloc(nullptr, rte_ring_get_memsize(kDefaultRingSize),
                        alignof(uint64_t)))) {
-    rte_ring_init(sq, nullptr, kDefaultRingSize, RING_F_SP_ENQ | RING_F_SC_DEQ);
-    rte_ring_init(cq, nullptr, kDefaultRingSize, RING_F_SP_ENQ | RING_F_SC_DEQ);
+    rte_ring_init(sq, "", kDefaultRingSize, RING_F_SP_ENQ | RING_F_SC_DEQ);
+    rte_ring_init(cq, "", kDefaultRingSize, RING_F_SP_ENQ | RING_F_SC_DEQ);
   }
 
   ~qp() {
-    rte_ring_free(sq);
-    rte_ring_free(cq);
+    rte_free(sq);
+    rte_free(cq);
   }
 
   unsigned sq_free() { return rte_ring_free_count(sq); }
