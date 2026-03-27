@@ -38,9 +38,9 @@ class connection_manager {
 public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
-                     uint32_t sip, std::shared_ptr<dpdk_allocator> allocator,
+                     uint32_t sip, std::shared_ptr<dpdk_allocator> allocator, std::shared_ptr<qp>& qprings,
                      P *parent, uint16_t cores)
-      : dev(port, txq, rxq), pkt_if(&dev, allocator, &sb, sip, port), active(),
+      : dev(port, txq, rxq, qprings), pkt_if(&dev, allocator, &sb, sip, port), active(),
         cores(cores), is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
@@ -89,8 +89,7 @@ public:
   }
 
   connection *open_connection(uint16_t sport, uint16_t dport,
-                              const uint32_t sip, const uint32_t dip,
-                              const uint16_t target);
+                              const uint32_t sip, const uint32_t dip);
 
   void poll_client() {
     update_current_timer_cycles();

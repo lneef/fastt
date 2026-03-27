@@ -2,6 +2,7 @@
 
 #include "arch/ena.h"
 #include "arch/nic.h"
+#include "qp.h"
 #include "util.h"
 #include <cstdint>
 #include <generic/rte_cycles.h>
@@ -16,11 +17,10 @@
 #include <string>
 
 class qpair {
-  static constexpr uint16_t kDefaultInputBurstSize = 32;
-
+  static constexpr uint16_t kDefaultInputBurstSize = 64;
 public:
-  qpair(uint16_t port, uint16_t txq, uint16_t rxq)
-      : port(port), txq(txq), rxq(rxq),
+  qpair(uint16_t port, uint16_t txq, uint16_t rxq, std::shared_ptr<qp>& qp_rings)
+      : port(port), txq(txq), rxq(rxq), qp_rings(qp_rings),
         tx_buffer(static_cast<rte_eth_dev_tx_buffer *>(
             rte_zmalloc(("tx_buffer" + std::to_string(txq)).c_str(),
                         RTE_ETH_TX_BUFFER_SIZE(kDefaultInputBurstSize),
@@ -44,6 +44,16 @@ public:
 
   }
 
+  template<unsigned N> void rx_burst_n(packet_vector<rte_mbuf*, N> &vec){
+      auto bs = std::min<unsigned>(kDefaultInputBurstSize, qp_rings->cq_size());
+      auto rcvd = qp_rings->sq_get_bulk(vec.pkts.data(), bs);
+      vec.i = rcvd;
+  }
+
+  template<unsigned N> void put_mbufs(packet_vector<rte_mbuf*, N>& vec){
+      qp_rings->cq_put_bulk(vec.pkts.data(), vec.i);
+  }
+
   template <unsigned N> void rx_burst(packet_vector<rte_mbuf*, N> &vec) {
     auto rcvd = rte_eth_rx_burst(port, rxq, vec.pkts.data(), vec.pkts.size());
     vec.i = rcvd;
@@ -56,6 +66,10 @@ public:
           return;
       rte_eth_tx_buffer_flush(port, txq, tx_buffer); 
       ts_last_flush = now;
+  }
+
+  uint16_t get_rxq_id() const{
+      return rxq;
   }
 
 private:
@@ -77,6 +91,7 @@ private:
   uint16_t port;
   uint16_t txq;
   uint16_t rxq;
+  std::shared_ptr<qp> qp_rings;
   rte_eth_dev_tx_buffer *tx_buffer;
   uint64_t total_sent = 0;
   uint64_t ts_last_flush = 0;

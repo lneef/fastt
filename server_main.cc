@@ -3,6 +3,7 @@
 #include "dpdk/allocator.h"
 #include "iface.h"
 #include "kv_protocol.h"
+#include "qp.h"
 #include "server.h"
 #include "sgl.h"
 #include "slab_allocator.h"
@@ -16,6 +17,7 @@
 #include <getopt.h>
 #include <memory>
 #include <rte_ether.h>
+#include <rte_launch.h>
 #include <rte_lcore.h>
 #include <rte_log.h>
 #include <rte_mbuf.h>
@@ -127,6 +129,13 @@ int lcore_server_fun(void *arg) {
   return 0;
 }
 
+int run_rx_lcore(void* arg){
+    auto &rp = *static_cast<rx_poll*>(arg);
+    while(!terminate)
+        rp();
+    return 0;
+}
+
 int run(netconfig &conf) {
   bench::prepare(store, len);
 
@@ -134,31 +143,41 @@ int run(netconfig &conf) {
     return -1;
 
   auto nthreads = rte_lcore_count();
+  nthreads -= 1;
   unsigned i = 0;
   uint16_t lcore_id;
   std::vector<std::shared_ptr<dpdk_allocator>> allocators;
+  std::vector<std::shared_ptr<qp>> qps;
   allocators.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
+    if(lcore_id == rte_get_main_lcore())  
+        continue;
     allocators.emplace_back(
-        dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095));
+        dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 2047));
+    qps.emplace_back(std::make_shared<qp>());
     ++i;
   }
   auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);
   if (!ifc)
     return -1;
 
-  std::vector<lcore_server_adapter> adapters(nthreads);
+  std::vector<lcore_server_adapter> adapters(nthreads); 
+  rx_poll rp{0};
   i = 0;
   RTE_LCORE_FOREACH(lcore_id) {
+    if(lcore_id == rte_get_main_lcore())  
+        continue;    
     auto &adapter = adapters[i];
     auto [port, txq, rxq] = ifc->get_slice(i);
     adapter.allocator = std::move(allocators[i]);
     adapter.iface = std::make_unique<server_iface>(
-        port, txq, rxq, conf.sip, adapter.allocator, rte_lcore_count());
+        port, txq, rxq, conf.sip, adapter.allocator, qps[i], nthreads);
+    rp.register_rx(qps[i], rxq);
     ++i;
   }
 
-  rte_eal_mp_remote_launch(lcore_server_fun, &adapters, CALL_MAIN);
+  rte_eal_mp_remote_launch(lcore_server_fun, &adapters, SKIP_MAIN);
+  run_rx_lcore(&rp);
   rte_eal_mp_wait_lcore();
   ifc->stop();
   return 0;

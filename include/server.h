@@ -14,8 +14,8 @@ class server_iface {
 public:
   server_iface(uint16_t port, uint16_t txq, uint16_t rxq,
                uint32_t sip,
-               std::shared_ptr<dpdk_allocator> pool, uint16_t cores)
-      : manager(false, port, txq, rxq, sip, pool, this, cores) {}
+               std::shared_ptr<dpdk_allocator> pool, std::shared_ptr<qp>& qprings, uint16_t cores)
+      : manager(false, port, txq, rxq, sip, pool, qprings, this, cores) {}
 
   void complete() { manager.flush(); };
 

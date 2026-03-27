@@ -107,7 +107,7 @@ iface::configure_port(uint16_t port_id, uint16_t ntx, uint16_t nrx,
   RTE_LCORE_FOREACH(lcore_id) {
     if (rte_eth_rx_queue_setup(ifc->port, setup_rx++, nb_rxd,
                                rte_lcore_to_socket_id(lcore_id), &rxconf,
-                               pools[i]->get()))
+                               pools[i]->rx_pool))
       return nullptr;
     if (rte_eth_tx_queue_setup(ifc->port, setup_tx++, nb_txd,
                                rte_lcore_to_socket_id(lcore_id), &txconf))

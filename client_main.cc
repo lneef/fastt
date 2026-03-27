@@ -5,6 +5,7 @@
 #include "iface.h"
 #include "kv.h"
 #include "kv_protocol.h"
+#include "qp.h"
 #include "sgl.h"
 #include "slab_allocator.h"
 #include "util.h"
@@ -115,7 +116,7 @@ static int lcore_closed_fn(void *arg) {
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
   kv_proxy kv(&cif);
-  kv.connect(adapter->cfg, rte_lcore_id(), adapter->dmac);
+  kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
   uint64_t t = 0;
   uint64_t c = 0;
@@ -182,7 +183,7 @@ static int lcore_open_fn(void *arg) {
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
   kv_proxy kv(&cif);
-  kv.connect(adapter->cfg, rte_lcore_id(), adapter->dmac);
+  kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
 
   std::exponential_distribution<double> exp(adapter->rate);
@@ -283,12 +284,13 @@ static void run(lcore_function_t *f, void *args) {
   adapter.duration = conf.duration;
   adapter.rate = conf.rate;
   i = 0;
+  std::shared_ptr<qp> qp_rings = nullptr;
   RTE_LCORE_FOREACH(lcore_id) {
     auto [port, txq, rxq] = ifc->get_slice(i);
     adapter.allocator[i] = std::move(allocators[i]);
     adapter.cifs[i] = std::make_unique<client_iface>(
         port, txq, rxq, adapter.allocator[i],
-        con_config{conf.sip, conf.sports[i]}, rte_lcore_count());
+        con_config{conf.sip, conf.sports[i]}, qp_rings, nthreads);
     ++i;
   }
   if (conf.open)

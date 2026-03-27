@@ -108,36 +108,9 @@ public:
     msg->pkt_len += msg->l2_len;
   }
 
-  /*
-  void consume_pkt_mbuf(mbuf *pkt, transport_config &cfg, void *backend_buf) {
-    auto iova = pkt->sb->get_iova(pkt);
-    assert(iova != RTE_BAD_IOVA);
-    auto *ext = rte_pktmbuf_alloc(pool->small);
-    auto *shinfo = new (backend_buf) rte_mbuf_ext_shared_info;
-    shinfo->fcb_opaque = nullptr;
-    shinfo->refcnt = 1;
-    shinfo->free_cb = free_cb;
-    rte_pktmbuf_attach_extbuf(
-        ext, pkt->data<void>(), iova, pkt->data_len,
-        shinfo);
-    auto *head = rte_pktmbuf_alloc(pool->small);
-    rte_pktmbuf_chain(head, ext);
-
-    auto *udp = udp_header(head, cfg.transport_ports.sport,
-                           cfg.transport_ports.dport, pkt->data_len);
-    ip_header(head, udp, sip, cfg.ip, pkt->data_len);
-    auto it = arp_table.find(cfg.ip);
-    assert(it != arp_table.end());
-    eth_header(head, smac, it->second);
-    assert(head->pkt_len == static_cast<size_t>(pkt->data_len + head->l2_len +
-                                                head->l3_len + head->l4_len));
-    qp->enqueue_pkt(head);
-  }
-  */
-
   void consume_pkt_mbuf(mbuf *pkt, transport_config &cfg) {
 
-    auto *dpdk_mbuf = rte_pktmbuf_alloc(pool->get());
+    auto *dpdk_mbuf = rte_pktmbuf_alloc(pool->tx_pool);
     dpdk_mbuf->data_len = pkt->data_len;
     dpdk_mbuf->pkt_len = pkt->data_len;
     std::memcpy(rte_pktmbuf_mtod_offset(dpdk_mbuf, uint8_t *,
@@ -159,9 +132,8 @@ public:
     arp_table.emplace(ip, addr);
   }
 
-  void broken_packet(rte_mbuf *pkt) {
+  void broken_packet() {
     FASTT_LOG_DEBUG("Got broken packet\n");
-    rte_pktmbuf_free(pkt);
   }
 
   bool check_ip_cksum(rte_mbuf *mbuf) {
@@ -200,24 +172,22 @@ public:
   rte_mbuf *consume_pkt(rte_mbuf *mbuf) {
     assert(mbuf->nb_segs == 1);
     if (!check_ether(mbuf)) {
-      broken_packet(mbuf);
+      broken_packet();
       return nullptr;
     }
 
     if (!check_ip_cksum(mbuf)) {
-      broken_packet(mbuf);
+      broken_packet();
       return nullptr;
     }
 
     if (!check_udp_cksum(mbuf)) {
-      broken_packet(mbuf);
+      broken_packet();
       return nullptr;
     }
 
-    if (sim.should_drop()) {
-      rte_pktmbuf_free(mbuf);
+    if (sim.should_drop()) 
       return nullptr;
-    }
     return mbuf;
   }
 
@@ -248,30 +218,37 @@ public:
         pkt_len -= alloc_size;
       }
     }
-    rte_pktmbuf_free(msg);
     return head;
   }
 
   void fetch_from_qpair(std::array<flow_tuple, kDefaultInBurstSize> &fts,
-                        packet_vector<mbuf *, kDefaultInBurstSize> &mbufs) {
+                        packet_vector<mbuf *, kDefaultInBurstSize> &mbufs) {    
+    packet_vector<rte_mbuf*, kDefaultInBurstSize> cqes;
+    cqes.i = 0;
     uint16_t valid = 0, out = 0;
     assert(vec.i == 0);
-    qp->rx_burst(vec);
+    qp->rx_burst_n(vec);
+    auto pkt_cnt = vec.i;
     for (uint16_t i = 0; i < vec.i; ++i) {
       auto *pkt = consume_pkt(vec.pkts[i]);
-      if (!pkt)
+      if (!pkt){
+        cqes.pkts[cqes.i++] = vec.pkts[i];  
         continue;
+      }
       vec.pkts[valid++] = pkt;
     }
     vec.i = valid;
     assert(out == 0);
     for (auto *msg : vec) {
       mbufs.pkts[out] = strip_header_and_copy(msg, fts[out]);
+      cqes.pkts[cqes.i++] = msg;
       ++out;
     }
     mbufs.i = out;
     assert(out == valid);
+    assert(cqes.i == pkt_cnt);
     vec.clear();
+    qp->put_mbufs(cqes);
   }
 
   uint32_t get_sip() const { return sip; }
