@@ -7,8 +7,9 @@
 
 static int tsc_dynfield_offset = -1;
 
-inline uint64_t* get_tsc(rte_mbuf* buf){
-     return RTE_MBUF_DYNFIELD(buf, tsc_dynfield_offset, uint64_t *);
+inline uint64_t *get_tsc(rte_mbuf *buf) {
+  assert(tsc_dynfield_offset != -1);
+  return RTE_MBUF_DYNFIELD(buf, tsc_dynfield_offset, uint64_t *);
 }
 
 struct dpdk_allocator {
@@ -36,8 +37,9 @@ struct dpdk_allocator {
         name, n, 0, 0, RTE_MBUF_DEFAULT_BUF_SIZE, SOCKET_ID_ANY);
     assert(pool);
 
-    auto *rx_pool = rte_pktmbuf_pool_create((std::string(name) + "rx").c_str(),
-                                          n, 0, 0, RTE_MBUF_DEFAULT_BUF_SIZE, SOCKET_ID_ANY);
+    auto *rx_pool =
+        rte_pktmbuf_pool_create((std::string(name) + "rx").c_str(), n, 0, 0,
+                                RTE_MBUF_DEFAULT_BUF_SIZE, SOCKET_ID_ANY);
     assert(rx_pool);
     return std::make_shared<dpdk_allocator>(pool, rx_pool);
   }
