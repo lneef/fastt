@@ -38,6 +38,7 @@ struct dpdk_allocator {
 
     auto *rx_pool = rte_pktmbuf_pool_create((std::string(name) + "rx").c_str(),
                                           n, 0, 0, RTE_MBUF_DEFAULT_BUF_SIZE, SOCKET_ID_ANY);
+    assert(rx_pool);
     return std::make_shared<dpdk_allocator>(pool, rx_pool);
   }
   dpdk_allocator(rte_mempool *tx_pool, rte_mempool *rx_pool)

@@ -23,6 +23,7 @@ int fastt::init() {
   FASTT_LOG_DEBUG("init fasst\n");
   rte_timer_subsystem_init();
   init_timing();
+  dpdk_allocator::register_ts_field();
   return 0;
 }
 
