@@ -26,7 +26,7 @@ struct dpdk_allocator {
   static void register_ts_field() {
     static const struct rte_mbuf_dynfield tsc_dynfield_desc = {
         .name = "dynfield_tsc",
-        .size = sizeof(uint16_t),
+        .size = sizeof(uint64_t),
         .align = alignof(uint64_t),
         .flags = 0};
     tsc_dynfield_offset = rte_mbuf_dynfield_register(&tsc_dynfield_desc);
