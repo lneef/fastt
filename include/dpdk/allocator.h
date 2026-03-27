@@ -5,8 +5,8 @@
 #include <rte_mbuf_core.h>
 #include <rte_memory.h>
 
-static int tsc_dynfield_offset = -1;
 
+extern int tsc_dynfield_offset;
 inline uint64_t *get_tsc(rte_mbuf *buf) {
   assert(tsc_dynfield_offset != -1);
   return RTE_MBUF_DYNFIELD(buf, tsc_dynfield_offset, uint64_t *);
