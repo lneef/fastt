@@ -15,6 +15,7 @@ class slab_allocator;
 struct mbuf {
   slab_allocator *sb;
   mbuf *next;
+  uint64_t ts;
   uint32_t size;
   uint16_t data_len;
   uint16_t headroom : 15;

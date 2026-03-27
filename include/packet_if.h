@@ -218,6 +218,7 @@ public:
         pkt_len -= alloc_size;
       }
     }
+    head->ts = *get_tsc(msg);
     return head;
   }
 

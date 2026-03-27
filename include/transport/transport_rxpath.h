@@ -117,6 +117,7 @@ struct transport_rxpath {
       seen_done = hdr->type == protocol::pkt_type::FT_DONE;
       return;
     }
+    dgram_ts = std::max(pkt->ts, dgram_ts);
     pkt->adj(sizeof(protocol::ft_header));
     out.emplace_back(std::move(pkt));
   }
@@ -210,6 +211,7 @@ struct transport_rxpath {
   struct {
     uint16_t crds_returned = 0;
   } crds;
+  uint64_t dgram_ts = 0;
 
   reorder_buffer rb;
   std::deque<mbuf_ptr> out;
