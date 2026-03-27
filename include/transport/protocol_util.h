@@ -29,6 +29,7 @@ struct builder {
     ft->ackframe = desc.ack_frame;
     ft->sack = desc.sack;
     ft->type = protocol::pkt_type::FT_MSG;
+    ft->ts = 0;
   }
 
   inline void prepare_ack_pkt(mbuf *msg, seq_t ack, bool is_sack, uint32_t ts) {
@@ -51,6 +52,7 @@ struct builder {
     ft->sack = 0;
     ft->crd = budget;
     ft->type = protocol::pkt_type::FT_SYN;
+    ft->ts = 0;
   }
 
   inline void prepare_ctrl_pkt(mbuf *msg, seq_t seq, seq_t ack, uint16_t wnd,
@@ -63,6 +65,7 @@ struct builder {
     ft->crd = wnd;
     ft->ackframe = is_ack_frame;
     ft->type = protocol::pkt_type::FT_CRD_UPDATE;
+    ft->ts = 0;
   }
 
   inline void prepare_init_ack_header(mbuf *msg, seq_t seq, seq_t ack,
@@ -76,6 +79,7 @@ struct builder {
     ft->ackframe = is_ack_frame;
     ft->sack = 0;
     ft->type = protocol::pkt_type::FT_SYN_ACK;
+    ft->ts = 0;
   }
 
   inline void prepare_done_header(mbuf *msg, seq_t seq, seq_t ack,
@@ -87,6 +91,7 @@ struct builder {
     ft->ack = ack;
     ft->ackframe = is_ack_frame;
     ft->type = protocol::pkt_type::FT_DONE;
+    ft->ts = 0;
   }
 };
 } // namespace protocol

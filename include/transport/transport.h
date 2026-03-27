@@ -147,7 +147,7 @@ public:
     }
     case protocol::pkt_type::FT_ACK: {
       FASTT_LOG_DEBUG("Got ACK ack=%u sack=%u\n", hdr->ack.v, hdr->sack);
-      ttx.acknowledge(hdr->ack, ts);
+      ttx.acknowledge(hdr->ack, ts, hdr->ts);
       if (hdr->sack) {
         auto *sack_payload =
             msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));

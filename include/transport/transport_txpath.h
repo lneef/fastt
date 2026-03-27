@@ -193,7 +193,7 @@ public:
 
   void rearm(uint64_t ts, uint64_t bkoff = 1) { timeout = ts + bkoff * rto; }
 
-  void cleanup_acked_pkts(seq_t seq, uint64_t ts) {
+  void cleanup_acked_pkts(seq_t seq, uint64_t ts, uint64_t app_delay) {
     uint64_t cumulative_rtt = ~0ull;
     uint64_t acked = 0;
     while (!unacked.empty() && unacked.front().seq <= seq) {
@@ -223,7 +223,7 @@ public:
     }
 
     assert(budget <= transport_rxpath::kMaxGrantSize);
-    cc.on_ack(acked, ts, rtt, rck.rtt);
+    cc.on_ack(acked, ts, rtt, rck.rtt - app_delay);
   }
 
   template <typename F>
@@ -269,11 +269,11 @@ public:
     }
   }
 
-  void acknowledge(seq_t seq, uint64_t ts) {
+  void acknowledge(seq_t seq, uint64_t ts, uint64_t app_delay = 0) {
     if (seq < least_unacked_pkt)
       return;
     stats.acked = seq;
-    cleanup_acked_pkts(seq, ts);
+    cleanup_acked_pkts(seq, ts, app_delay * get_ticks_us());
     rearm(ts);
     least_unacked_pkt = seq + 1;
     if ((rck.in_fast_recovery || rck.in_rto_recovery) && seq > rck.high_data) {
