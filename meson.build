@@ -3,7 +3,7 @@ project('dpdk-perf', 'cpp',
   default_options: ['warning_level=2', 'cpp_std=c++23', 'buildtype=debugoptimized'])
 
 cmake = import('cmake')
-dpdk_dep = dependency('libdpdk', method: 'pkg-config', required: true, static: true)
+dpdk_dep = dependency('libdpdk', method: 'pkg-config', required: true, static: true, version: '25.11.0')
 tlx_proj = cmake.subproject('tlx')
 tlx_dep = tlx_proj.dependency('tlx')
 hdr_hist = cmake.subproject('hdr_histogram')
