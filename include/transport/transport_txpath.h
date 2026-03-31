@@ -147,7 +147,6 @@ public:
       ++stats.retransmitted;
       desc.xmit_ts = now;
       desc.retransmitted = true;
-      desc.packet->xmit = false;
       desc.queued = false;
       if(desc.link.is_linked())
         desc.link.unlink();
@@ -231,7 +230,6 @@ public:
     if (all_acked())
       rearm(now);
     ctor(pkt, seq);
-    pkt->xmit = false;
     ++inflight_pkts;
     ++xmitted;
     unacked.emplace_back(mbuf_take_owner_ship(pkt), now, seq++, false);
@@ -246,7 +244,6 @@ public:
       rearm(now);
     --budget;
     ctor(pkt, seq);
-    pkt->xmit = false;
     ++inflight_pkts;
     ++xmitted;
     unacked.emplace_back(std::move(pkt), now, seq++, false);

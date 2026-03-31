@@ -15,16 +15,17 @@ class slab_allocator;
 struct mbuf {
   slab_allocator *sb;
   mbuf *next;
-  uint32_t size;
+  uint32_t size : 28;
+  uint32_t size_class : 4;
   uint16_t data_len;
-  uint16_t headroom : 15;
-  uint16_t xmit : 1;
+  uint16_t headroom : 10;
+  uint16_t refcnt :6;
 
   mbuf() = default;
-  mbuf(slab_allocator *sb, mbuf *next, uint32_t size, uint16_t data_len,
-       uint16_t headroom, bool xmit)
-      : sb(sb), next(next), size(size), data_len(data_len), headroom(headroom),
-        xmit(xmit) {}
+  mbuf(slab_allocator *sb, mbuf *next, uint32_t size, uint32_t size_class,
+       uint16_t data_len, uint16_t headroom)
+      : sb(sb), next(next), size(size), size_class(size_class),
+        data_len(data_len), headroom(headroom), refcnt(1) {}
 
   uint8_t *buf_start() {
     return reinterpret_cast<uint8_t *>(this) + sizeof(mbuf);
@@ -105,6 +106,7 @@ struct obj_header {
 struct slab {
   slab *next;
   slab *prev;
+  uintptr_t iova;
   obj_header *freelist;
   uint32_t inuse;
   uint32_t padding;
@@ -144,24 +146,44 @@ struct slab_cache {
   slab_cache(size_t obj_size) : partial(), full(), obj_size(obj_size) {}
 };
 
+template<typename B>
+B* get_new_backend_data(mbuf *data){
+    auto *hdroom_start = reinterpret_cast<uint8_t*>(data) + sizeof(mbuf);
+    return new (hdroom_start) B;
+} 
+
+template<typename B>
+B* get_backend_data(mbuf *data){
+    auto *hdroom_start = reinterpret_cast<uint8_t*>(data) + sizeof(mbuf);
+    return reinterpret_cast<B*>(hdroom_start);
+} 
+
 inline void mbuf_free(mbuf *buf);
 
 using mbuf_ptr = std::unique_ptr<mbuf, decltype(&mbuf_free)>;
 class slab_allocator {
+  static constexpr unsigned kSizeClassCnt = 2;
 public:
-  static constexpr size_t kDefaultHeadroom = 128;
+  static constexpr size_t kDefaultHeadroom = 20;
   static constexpr size_t kMaxDataLen = 1500 - protocol::defs::kHeaderMTUlen;
   static constexpr size_t kDefaultSize =
       kMaxDataLen + kDefaultHeadroom + sizeof(mbuf);
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
+  static constexpr size_t kJumboHeadroom = 48;
+  static constexpr size_t kMaxJumboDataLen =
+      9001 - protocol::defs::kHeaderMTUlen;
+  static constexpr size_t kDefaultJumboSize =
+      kMaxJumboDataLen + kJumboHeadroom + sizeof(mbuf) + 7;
 
+  static_assert(kDefaultJumboSize % 8 == 0, "");
 public:
-  slab_allocator() : cache(kDefaultSize) { alloc_new_slab(cache); }
+  slab_allocator()
+      : caches{slab_cache(kDefaultSize), slab_cache(kDefaultJumboSize)} {}
 
-  mbuf *alloc_default(uint16_t data_len) {
-    assert(data_len <= kMaxDataLen);
+  template <unsigned cl, size_t mbuf_size, size_t hdroom, bool iova> mbuf *alloc(uint16_t data_len) {
+    auto &cache = caches[cl];
     if (cache.partial.empty())
-      alloc_new_slab(cache);
+      alloc_new_slab<iova>(cache);
     auto *s = cache.partial.front();
     auto *obj = s->freelist;
     s->freelist = obj->next;
@@ -171,7 +193,17 @@ public:
       cache.full.list_push(s);
     }
     return new (obj)
-        mbuf{this, nullptr, kDefaultSize, data_len, kDefaultHeadroom, false};
+        mbuf{this, nullptr, mbuf_size, cl, data_len, hdroom};
+  }
+
+  mbuf *alloc_default(uint16_t data_len) {
+    assert(data_len <= kMaxDataLen);
+    return alloc<0, kDefaultSize, kDefaultHeadroom, false>(data_len);
+  }
+
+  mbuf *alloc_large(uint16_t data_len) {
+    assert(data_len <= kMaxJumboDataLen);
+    return alloc<1, kDefaultJumboSize, kJumboHeadroom, true>(data_len);
   }
 
   static uintptr_t virt_to_phys(void *vaddr) {
@@ -192,10 +224,8 @@ public:
     }
     close(fd);
 
-    if (!(entry & (1ULL << 63))) {
-      printf("not present\n");
+    if (!(entry & (1ULL << 63))) 
       return RTE_BAD_IOVA;
-    }
 
     uint64_t pfn = entry & ((1ULL << 55) - 1);
     if (pfn == 0) {
@@ -204,11 +234,14 @@ public:
     return (pfn * PAGE_SIZE + (va % PAGE_SIZE));
   }
 
+  template<bool iova = false>
   void alloc_new_slab(slab_cache &c) {
     auto *region = mmap(nullptr, kSlabSize, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
     assert(region != MAP_FAILED);
     auto *s = static_cast<slab *>(region);
+    if constexpr(iova)
+        s->iova = virt_to_phys(region);
     auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
     s->freelist = new (base) obj_header;
     size_t space = kSlabSize - sizeof(slab);
@@ -221,10 +254,18 @@ public:
     auto *obj = reinterpret_cast<obj_header *>(base + off);
     obj->next = nullptr;
     c.partial.list_push(s);
-    assert(!cache.partial.empty());
+    assert(!c.partial.empty());
+  }
+
+  uintptr_t get_iova(mbuf* obj) const{
+    auto iptr = reinterpret_cast<intptr_t>(obj);
+    auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
+    return slb->iova + (obj->data<uint8_t>() - reinterpret_cast<uint8_t*>(slb));
   }
 
   void free_single_mbuf(mbuf *obj) {
+    assert(obj->size_class < kSizeClassCnt);
+    auto &cache = caches[obj->size_class];
     auto iptr = reinterpret_cast<intptr_t>(obj);
     auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
     bool was_full = !slb->freelist;
@@ -261,15 +302,20 @@ public:
         s = next;
       }
     };
-    free_slabs(cache.partial);
-    free_slabs(cache.full);
+    for (auto &cache : caches) {
+      free_slabs(cache.partial);
+      free_slabs(cache.full);
+    }
   }
 
 private:
-  slab_cache cache;
+  std::array<slab_cache, kSizeClassCnt> caches;
 };
 
-inline void mbuf_free(mbuf *buf) {
+inline void mbuf_free(mbuf *buf) {  
+  --buf->refcnt;
+  if(buf->refcnt != 0)
+      return;
   assert(buf->sb);
   buf->sb->free_mbuf(buf);
 }

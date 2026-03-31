@@ -35,7 +35,6 @@ class transport {
   friend M;
 
 public:
-  static constexpr uint16_t kMaxPayload = 1500 - protocol::defs::kHeaderMTUlen;
   struct {
     uint64_t sent = 0;
     uint64_t retransmissions = 0;
@@ -48,6 +47,7 @@ public:
 
   void perform_recovery() {
     ttx.advance_recovery([&](mbuf *pkt) { pkt_if->consume_pkt_mbuf(pkt, cfg); },
+
                          manager->get_current_timer_cycles());
   }
 
