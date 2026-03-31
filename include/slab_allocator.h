@@ -233,13 +233,16 @@ public:
   }
 
   template <bool iova = false> void alloc_new_slab(slab_cache &c) {
-    auto *region = mmap(nullptr, kSlabSize, PROT_READ | PROT_WRITE,
-                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);
+    auto *region =
+        mmap(nullptr, kSlabSize, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);
     assert(region != MAP_FAILED);
-    *reinterpret_cast<volatile uint64_t*>(region) = 0;
     auto *s = static_cast<slab *>(region);
-    if constexpr (iova)
+    if constexpr (iova) {
+      //prefault, MAP_POPULATE may fail   
+      *reinterpret_cast<volatile uint64_t *>(region) = 0;
       s->iova = virt_to_phys(region);
+    }
 
     auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
     s->freelist = new (base) obj_header;
