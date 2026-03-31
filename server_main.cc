@@ -137,13 +137,16 @@ int run(netconfig &conf) {
   unsigned i = 0;
   uint16_t lcore_id;
   std::vector<std::shared_ptr<dpdk_allocator>> allocators;
+  std::vector<uint16_t> lcore_ids;
   allocators.reserve(nthreads);
+  lcore_ids.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
     allocators.emplace_back(
         dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095));
+    lcore_ids.push_back(lcore_id);
     ++i;
   }
-  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);
+  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators, lcore_ids);
   if (!ifc)
     return -1;
 

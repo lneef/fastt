@@ -89,8 +89,7 @@ public:
   }
 
   connection *open_connection(uint16_t sport, uint16_t dport,
-                              const uint32_t sip, const uint32_t dip,
-                              const uint16_t target);
+                              const uint32_t sip, const uint32_t dip);
 
   void poll_client() {
     update_current_timer_cycles();

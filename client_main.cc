@@ -115,7 +115,7 @@ static int lcore_closed_fn(void *arg) {
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
   kv_proxy kv(&cif);
-  kv.connect(adapter->cfg, rte_lcore_id(), adapter->dmac);
+  kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
   uint64_t t = 0;
   uint64_t c = 0;
@@ -182,7 +182,7 @@ static int lcore_open_fn(void *arg) {
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
   kv_proxy kv(&cif);
-  kv.connect(adapter->cfg, rte_lcore_id(), adapter->dmac);
+  kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
 
   std::exponential_distribution<double> exp(adapter->rate);
@@ -268,13 +268,16 @@ static void run(lcore_function_t *f, void *args) {
   unsigned i = 0;
   uint16_t lcore_id;
   std::vector<std::shared_ptr<dpdk_allocator>> allocators;
+  std::vector<uint16_t> lcore_ids;
   allocators.reserve(nthreads);
+  lcore_ids.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
     allocators.emplace_back(
         dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095));
+    lcore_ids.emplace_back(lcore_id);
     ++i;
   }
-  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators);
+  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators, lcore_ids);
   if (!ifc)
     return -1;
 

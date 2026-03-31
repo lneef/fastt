@@ -48,7 +48,7 @@ static inline int setup_reta(uint16_t port, uint32_t nrx, uint32_t reta_size) {
 
 std::unique_ptr<iface>
 iface::configure_port(uint16_t port_id, uint16_t ntx, uint16_t nrx,
-                      std::vector<std::shared_ptr<dpdk_allocator>> &pools) {
+                      std::vector<std::shared_ptr<dpdk_allocator>> &pools, const std::vector<uint16_t>& lcore_ids) {
   static constexpr uint16_t kDefaultQueueSize = 1024;  
   uint16_t nb_rxd, nb_txd;
   int retval;
@@ -100,11 +100,10 @@ iface::configure_port(uint16_t port_id, uint16_t ntx, uint16_t nrx,
   rxconf = dev_info.default_rxconf;
   rxconf.offloads = port_conf.rxmode.offloads;
   rxconf.rx_free_thresh = 0;
-  uint16_t lcore_id = 0;
   uint16_t setup_tx = 0;
   uint16_t setup_rx = 0;
   uint16_t i = 0;
-  RTE_LCORE_FOREACH(lcore_id) {
+  for(auto lcore_id : lcore_ids) {
     if (rte_eth_rx_queue_setup(ifc->port, setup_rx++, nb_rxd,
                                rte_lcore_to_socket_id(lcore_id), &rxconf,
                                pools[i]->get()))

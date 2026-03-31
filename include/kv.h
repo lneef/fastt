@@ -39,8 +39,8 @@ class kv_proxy {
 public:
   kv_proxy(client_iface *ifc) : ifc(ifc), slots(128) {}
 
-  int connect(const con_config &target, uint16_t rtid, rte_ether_addr &dmac) {
-    con = ifc->open(target, rtid, dmac);
+  int connect(const con_config &target, rte_ether_addr &dmac) {
+    con = ifc->open(target, dmac);
     if (!con)
       return -1;
     return 0;

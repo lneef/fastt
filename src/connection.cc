@@ -14,8 +14,7 @@ static std::uniform_int_distribution<uint16_t> dist{0, UINT16_MAX};
 
 connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
                                                 const uint32_t sip,
-                                                const uint32_t dip,
-                                                const uint16_t target) {
+                                                const uint32_t dip) {
   uint16_t rx_flow_sport, rx_flow_dport;
   transport_config cfg;
   cfg.ip = dip;
@@ -27,7 +26,7 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
   cfg.transport_ports.dport = dist(rng);
   // find transport level queue pair
   dev.nic_arch->find_port_pair(cfg.ip, sip, rx_flow_sport, rx_flow_dport,
-                               target, cores);
+                               dev.get_rx_qid(), cores);
   FASTT_LOG_DEBUG("Found pair for incoming: %u -> %u\n",
                   ntohs(cfg.transport_ports.dport),
                   ntohs(cfg.transport_ports.sport));

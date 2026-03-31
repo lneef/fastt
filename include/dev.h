@@ -58,6 +58,10 @@ public:
       ts_last_flush = now;
   }
 
+  uint16_t get_rx_qid() const{
+      return rxq;
+  }
+
 private:
   static void unsent_cb(rte_mbuf** pkts, uint16_t unsent, void* userdata){
       static constexpr uint16_t kRetryTOus = 10;
