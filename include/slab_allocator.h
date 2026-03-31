@@ -242,6 +242,7 @@ public:
       //prefault, MAP_POPULATE may fail   
       *reinterpret_cast<volatile uint64_t *>(region) = 0;
       s->iova = virt_to_phys(region);
+      assert(s->iova != RTE_BAD_IOVA);
     }
 
     auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
