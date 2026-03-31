@@ -16,9 +16,8 @@
 #include <string>
 
 class qpair {
-  static constexpr uint16_t kDefaultInputBurstSize = 32;
-
 public:
+    static constexpr uint16_t kDefaultInputBurstSize = 64;
   qpair(uint16_t port, uint16_t txq, uint16_t rxq)
       : port(port), txq(txq), rxq(rxq),
         tx_buffer(static_cast<rte_eth_dev_tx_buffer *>(

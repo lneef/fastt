@@ -42,9 +42,9 @@ class packet_if {
   static void free_cb(void *, void *) {}
   static constexpr uint16_t kdefaultTTL = 64;
   static constexpr uint16_t kDefaultOutBurstSize = 32;
-
 public:
-  static constexpr uint16_t kDefaultInBurstSize = 64;
+  static constexpr uint16_t kDefaultInBurstSize = qpair::kDefaultInputBurstSize;
+
   packet_if(qpair *qp, std::shared_ptr<dpdk_allocator> pool, slab_allocator *sb,
             uint32_t sip, uint16_t port)
       : arp_table(), pool(pool), sb(sb), qp(qp), sip(sip) {
