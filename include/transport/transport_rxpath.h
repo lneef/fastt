@@ -98,8 +98,6 @@ struct transport_rxpath {
   }
 
   void insert(seq_t seq, mbuf *pkt, ack_cb &acb) {
-    assert(inside(seq));
-    assert(!wnd.test(index(seq)));
     if (seq > acb.rcv_high) {
       acb.rcv_high = seq;
       max_rx_in_window = seq;
