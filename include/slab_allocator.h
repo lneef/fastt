@@ -238,7 +238,6 @@ public:
     assert(region != MAP_FAILED);
     *reinterpret_cast<volatile uint64_t*>(region) = 0;
     auto *s = static_cast<slab *>(region);
-    reinterpret_cast<volatile slab*>(s)->prev = nullptr;
     if constexpr (iova)
       s->iova = virt_to_phys(region);
 
