@@ -5,6 +5,7 @@
 #include "transport/protocol.h"
 #include "transport/seq.h"
 #include "transport/transport.h"
+#include "util.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -34,6 +35,10 @@ struct mock_packet_if {
 
   void consume_pkt_mbuf(mbuf *pkt, transport_config &) {
     sent_pkts.push_back(pkt);
+  }
+
+  void consume_pkt_mbuf_zc(mbuf* , transport_config&){
+
   }
 
   void consume_for_retransmission(mbuf *msg) { sent_pkts.push_back(msg); }
@@ -387,7 +392,7 @@ TEST_F(TransportCoroTest, TwoConnectionsRecvThenSend) {
 TEST_F(TransportCoroTest, TwoConnectionsStaggeredRecvPartialWndReturn) {
   static constexpr uint16_t kSport2 = 300;
   static constexpr uint16_t kDport2 = 400;
-  static constexpr size_t kSegSz = mock_transport::kMaxPayload;
+  static constexpr size_t kSegSz = 1500 - protocol::defs::kHeaderMTUlen;
 
   mock_packet_if mock2;
   mock_manager mgr2;
