@@ -239,7 +239,7 @@ public:
   }
 
   rte_mbuf *consume_pkt(rte_mbuf *mbuf) {
-    assert(mbuf->nb_segs == 1);
+    FASTT_LOG_DEBUG("Packet with %u segs of len %u\n", mbuf->nb_segs, mbuf->pkt_len);  
     if (!check_ether(mbuf)) {
       broken_packet(mbuf);
       return nullptr;
