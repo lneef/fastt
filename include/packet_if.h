@@ -225,8 +225,6 @@ public:
     add_mapping(ip->src_addr, eth->src_addr);
     ft.sip = ip->src_addr;
     ft.dip = ip->dst_addr;
-    mbuf->pkt_len -= (sizeof(rte_ipv4_hdr) + sizeof(rte_ether_hdr));
-    mbuf->data_len -= (sizeof(rte_ipv4_hdr) + sizeof(rte_ether_hdr));
   }
 
   void strip_udp(rte_mbuf *mbuf, flow_tuple &ft) {
@@ -234,8 +232,6 @@ public:
                                         protocol::defs::kudpOffset);
     ft.sport = udp->src_port;
     ft.dport = udp->dst_port;
-    mbuf->pkt_len -= sizeof(rte_udp_hdr);
-    mbuf->data_len -= sizeof(rte_udp_hdr);
   }
 
   rte_mbuf *consume_pkt(rte_mbuf *mbuf) {
@@ -267,7 +263,7 @@ public:
   mbuf *strip_header_and_copy(rte_mbuf *msg, flow_tuple &ft) {
     strip_ether_ip(msg, ft);
     strip_udp(msg, ft);
-    auto pkt_len = msg->pkt_len;
+    auto pkt_len = msg->pkt_len - protocol::defs::kftOffset;
     mbuf *head = nullptr;
     auto off = protocol::defs::kftOffset;
     if (likely(pkt_len <= sb->kMaxDataLen)) {
