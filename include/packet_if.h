@@ -273,8 +273,9 @@ public:
     if (likely(pkt_len <= sb->kMaxDataLen)) {
       // fast path for small packets
       head = sb->alloc_default(pkt_len);
-      rte_memcpy(head->data<void>(), rte_pktmbuf_mtod_offset(msg, void *, off),
-                 msg->pkt_len);
+      auto *src = rte_pktmbuf_read(msg, off, pkt_len, head->data<void>());
+      if (src != head->data<void>())
+        rte_memcpy(head->data<void>(), src, pkt_len);
     } else {
       mbuf **last = &head;
       while (pkt_len > 0) {
@@ -282,9 +283,9 @@ public:
         auto *elem = sb->alloc_default(alloc_size);
         *last = elem;
         last = &elem->next;
-        if (rte_pktmbuf_read(msg, off, alloc_size, elem->data<void>()))
-          rte_memcpy(elem->data<void>(),
-                     rte_pktmbuf_mtod_offset(msg, void *, off), alloc_size);
+        auto *src = rte_pktmbuf_read(msg, off, alloc_size, elem->data<void>());
+        if (src != elem->data<void>())
+          rte_memcpy(elem->data<void>(), src, alloc_size);
         off += alloc_size;
         pkt_len -= alloc_size;
       }
