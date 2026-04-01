@@ -201,9 +201,8 @@ public:
     return alloc<0, kDefaultSize, kDefaultHeadroom, false>(data_len);
   }
 
-  mbuf *alloc_large(uint16_t data_len) {
-    assert(data_len <= kMaxJumboDataLen);
-    return alloc<1, kDefaultJumboSize, kJumboHeadroom, true>(data_len);
+  mbuf *alloc_large() {
+    return alloc<1, kDefaultJumboSize, kJumboHeadroom, true>(kMaxJumboDataLen);
   }
 
   static uintptr_t virt_to_phys(void *vaddr) {
