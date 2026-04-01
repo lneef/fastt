@@ -259,11 +259,11 @@ public:
     c.partial.list_push(s);
   }
 
-  uintptr_t get_iova(mbuf *obj) const {
+  uintptr_t get_iova(mbuf *obj, unsigned off) const {
     auto iptr = reinterpret_cast<intptr_t>(obj);
     auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
     return slb->iova +
-           (obj->data<uint8_t>() - reinterpret_cast<uint8_t *>(slb));
+           (obj->data<uint8_t>(off) - reinterpret_cast<uint8_t *>(slb));
   }
 
   void free_single_mbuf(mbuf *obj) {

@@ -126,11 +126,16 @@ public:
         (slab_allocator::kJumboHeadroom - sizeof(protocol::ft_header)) >=
             sizeof(dpdk_allocator::backend_data),
         "");
-    auto iova = pkt->sb->get_iova(pkt);
+    auto *data = pkt->data<uint8_t>(sizeof(protocol::ft_header));
+    auto iova = pkt->sb->get_iova(pkt, sizeof(protocol::ft_header));
     assert(iova != RTE_BAD_IOVA);
     assert(pkt->size_class == 1);
     assert(pkt->size == slab_allocator::kDefaultJumboSize);
+    assert(
+        (reinterpret_cast<uintptr_t>(data) & (slab_allocator::kSlabSize - 1)) ==
+        (iova & (slab_allocator::kSlabSize - 1)));
     auto *ext = rte_pktmbuf_alloc(pool->small);
+    auto mbuf_data_len = pkt->data_len - sizeof(protocol::ft_header);
     dpdk_allocator::backend_data *shinfo;
     if (pkt->refcnt == 1) {
       shinfo = get_new_backend_data<dpdk_allocator::backend_data>(pkt);
@@ -144,22 +149,30 @@ public:
     }
     assert(pkt->refcnt == 2);
     assert(shinfo->refcnt >= 1);
-    rte_pktmbuf_attach_extbuf(ext, pkt->data<void>(), iova, pkt->data_len,
+    rte_pktmbuf_attach_extbuf(ext, data, iova, mbuf_data_len,
                               shinfo);
-    ext->data_len = pkt->data_len;
+    ext->data_len = mbuf_data_len;
     auto *head = rte_pktmbuf_alloc(pool->pool);
     rte_pktmbuf_chain(head, ext);
-    head->pkt_len = ext->data_len;
-    assert(head->pkt_len == pkt->data_len);
 
+    head->pkt_len = ext->data_len;
+    auto head_payload_len = ext->data_len + sizeof(protocol::ft_header);
+    assert(head->pkt_len == mbuf_data_len);
+    rte_memcpy(
+        rte_pktmbuf_mtod_offset(head, void *, protocol::defs::kftOffset),
+        pkt->data<void>(), sizeof(protocol::ft_header));
+
+    head->data_len = sizeof(protocol::ft_header);
+    head->pkt_len += sizeof(protocol::ft_header);
     auto *udp = udp_header(head, cfg.transport_ports.sport,
-                           cfg.transport_ports.dport, pkt->data_len);
-    ip_header(head, udp, sip, cfg.ip, pkt->data_len);
+                           cfg.transport_ports.dport, head_payload_len);
+    ip_header(head, udp, sip, cfg.ip, head_payload_len);
     auto it = arp_table.find(cfg.ip);
     assert(it != arp_table.end());
     eth_header(head, smac, it->second);
-    assert(head->pkt_len == static_cast<size_t>(pkt->data_len + head->l2_len +
-                                                head->l3_len + head->l4_len));
+    assert(head->pkt_len ==
+           static_cast<size_t>(head_payload_len +
+                               head->l2_len + head->l3_len + head->l4_len));
     qp->enqueue_pkt(head);
   }
 
