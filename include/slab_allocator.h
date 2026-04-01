@@ -296,6 +296,11 @@ public:
     return mbuf_ptr(pkt, mbuf_free);
   }
 
+  mbuf_ptr alloc_large_safe(){
+      auto *jumbo_pkt = alloc_large();
+      return mbuf_ptr(jumbo_pkt, mbuf_free);
+  }
+
   ~slab_allocator() {
     auto free_slabs = [](slab_cache::slab_list &list) {
       auto *s = list.head.next;
