@@ -149,8 +149,7 @@ public:
     }
     assert(pkt->refcnt == 2);
     assert(shinfo->refcnt >= 1);
-    rte_pktmbuf_attach_extbuf(ext, data, iova, mbuf_data_len,
-                              shinfo);
+    rte_pktmbuf_attach_extbuf(ext, data, iova, mbuf_data_len, shinfo);
     ext->data_len = mbuf_data_len;
     auto *head = rte_pktmbuf_alloc(pool->pool);
     rte_pktmbuf_chain(head, ext);
@@ -158,9 +157,8 @@ public:
     head->pkt_len = ext->data_len;
     auto head_payload_len = ext->data_len + sizeof(protocol::ft_header);
     assert(head->pkt_len == mbuf_data_len);
-    rte_memcpy(
-        rte_pktmbuf_mtod_offset(head, void *, protocol::defs::kftOffset),
-        pkt->data<void>(), sizeof(protocol::ft_header));
+    rte_memcpy(rte_pktmbuf_mtod_offset(head, void *, protocol::defs::kftOffset),
+               pkt->data<void>(), sizeof(protocol::ft_header));
 
     head->data_len = sizeof(protocol::ft_header);
     head->pkt_len += sizeof(protocol::ft_header);
@@ -171,8 +169,8 @@ public:
     assert(it != arp_table.end());
     eth_header(head, smac, it->second);
     assert(head->pkt_len ==
-           static_cast<size_t>(head_payload_len +
-                               head->l2_len + head->l3_len + head->l4_len));
+           static_cast<size_t>(head_payload_len + head->l2_len + head->l3_len +
+                               head->l4_len));
     qp->enqueue_pkt(head);
   }
 
@@ -235,7 +233,8 @@ public:
   }
 
   rte_mbuf *consume_pkt(rte_mbuf *mbuf) {
-    FASTT_LOG_DEBUG("Packet with %u segs of len %u\n", mbuf->nb_segs, mbuf->pkt_len);  
+    FASTT_LOG_DEBUG("Packet with %u segs of len %u\n", mbuf->nb_segs,
+                    mbuf->pkt_len);
     if (!check_ether(mbuf)) {
       broken_packet(mbuf);
       return nullptr;
@@ -273,18 +272,11 @@ public:
       if (src != head->data<void>())
         rte_memcpy(head->data<void>(), src, pkt_len);
     } else {
-      mbuf **last = &head;
-      while (pkt_len > 0) {
-        auto alloc_size = std::min<uint32_t>(pkt_len, sb->kMaxDataLen);
-        auto *elem = sb->alloc_default(alloc_size);
-        *last = elem;
-        last = &elem->next;
-        auto *src = rte_pktmbuf_read(msg, off, alloc_size, elem->data<void>());
-        if (src != elem->data<void>())
-          rte_memcpy(elem->data<void>(), src, alloc_size);
-        off += alloc_size;
-        pkt_len -= alloc_size;
-      }
+      head = sb->alloc_large();
+      assert(head->data_len >= pkt_len);
+      auto *src = rte_pktmbuf_read(msg, off, pkt_len, head->data<void>());
+      if (src != head->data<void>())
+        rte_memcpy(head->data<void>(), src, pkt_len);
     }
     rte_pktmbuf_free(msg);
     return head;
