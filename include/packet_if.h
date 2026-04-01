@@ -273,6 +273,7 @@ public:
         rte_memcpy(head->data<void>(), src, pkt_len);
     } else {
       head = sb->alloc_large();
+      head->adj(sizeof(protocol::ft_header));
       assert(head->data_len >= pkt_len);
       auto *src = rte_pktmbuf_read(msg, off, pkt_len, head->data<void>());
       if (src != head->data<void>())
