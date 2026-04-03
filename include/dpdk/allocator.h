@@ -9,14 +9,6 @@ struct dpdk_allocator {
   using backend_data = rte_mbuf_ext_shared_info;
   static constexpr uint16_t kJumboFrameSize = 9001 + sizeof(rte_ether_hdr);
 
-  static void populate_backend_data(backend_data *shinfo,
-                                    rte_mbuf_extbuf_free_callback_t cb,
-                                    void *opaque) {
-    shinfo->free_cb = cb;
-    shinfo->refcnt = 1;
-    shinfo->fcb_opaque = opaque;
-  }
-
   static std::shared_ptr<dpdk_allocator> create(const char *name, unsigned n) {
     auto *pool = rte_pktmbuf_pool_create(
         name, n, 0, 0, RTE_MBUF_DEFAULT_BUF_SIZE, SOCKET_ID_ANY);

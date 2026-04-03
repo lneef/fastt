@@ -277,7 +277,8 @@ static void run(lcore_function_t *f, void *args) {
     lcore_ids.emplace_back(lcore_id);
     ++i;
   }
-  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators, lcore_ids);
+  auto ifc =
+      iface::configure_port(0, nthreads, nthreads, allocators, lcore_ids);
   if (!ifc)
     return -1;
 
@@ -298,6 +299,15 @@ static void run(lcore_function_t *f, void *args) {
     run(lcore_open_fn, &adapter);
   else
     run(lcore_closed_fn, &adapter);
+  {
+    auto n = rte_eth_xstats_get_names(0, nullptr, 0);
+    std::vector<rte_eth_xstat_name> names(n);
+    std::vector<rte_eth_xstat> xstats(n);
+    rte_eth_xstats_get_names(0, names.data(), n);
+    rte_eth_xstats_get(0, xstats.data(), n);
+    for (auto &xstat : xstats)
+      printf("%s: %lu\n", names[xstat.id].name, xstat.value);
+  }
   ifc->stop();
   std::cout << "avg: " << lat.load() / rte_lcore_count() << std::endl;
   return 0;

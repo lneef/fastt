@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <deque>
-#include <generic/rte_cycles.h>
 #include <memory>
 #include <netinet/in.h>
 #include <sys/types.h>

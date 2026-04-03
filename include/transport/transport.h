@@ -3,7 +3,6 @@
 #include <cassert>
 #include <cerrno>
 #include <cstdint>
-#include <generic/rte_cycles.h>
 #include <sys/types.h>
 
 #include "debug.h"
