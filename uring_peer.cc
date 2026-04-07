@@ -27,7 +27,6 @@
 #include <hdr/hdr_histogram.h>
 
 #include "bench.h"
-#include "iface.h"
 #include "uring/cpu.h"
 #include "uring/iface.h"
 #include "util.h"
@@ -248,10 +247,10 @@ static int client_fun_closed(uint16_t id, struct sockaddr_in addr, uint64_t dura
       }
       start = rdtsc();
   }
-
+  auto rpcs_finished = rpcs;
   while(inflight)
-      process_completions(iface, [](auto*){});
-  printf("RPCs: %f\n", static_cast<double>(rpcs) / duration);
+      process_completions(iface, rx_cb);
+  printf("RPCs: %f\n", static_cast<double>(rpcs_finished) / duration);
   printf("P99 %ld\n", hdr_value_at_percentile(hist, 99.0));
   return 0;
 }
@@ -362,6 +361,7 @@ static int server_fun(uint16_t id, unsigned sz, int port_arg, in_addr_t addr) {
 
 int main(int argc, char *argv[]) {
   uint16_t port_arg = 0;
+  init_tsc();
   int opt, nt = 1;
   bool is_client = false;
   bool is_open = false;
