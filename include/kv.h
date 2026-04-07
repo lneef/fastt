@@ -12,6 +12,7 @@
 struct kv_slot {
   uint16_t id;
   int64_t key;
+  uint64_t ts;
 };
 
 struct kv_slot_store {

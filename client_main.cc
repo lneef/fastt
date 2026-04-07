@@ -116,6 +116,8 @@ static int lcore_closed_fn(void *arg) {
   kv_proxy kv(&cif);
   kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
+  hdr_histogram *hist;
+  hdr_init(1, 500'000, 3, &hist);
 
   uint64_t rpcs_cnt = 0;
   uint64_t rpcs_finished = 0;
@@ -127,10 +129,12 @@ static int lcore_closed_fn(void *arg) {
       auto rcvd = kv.recv(rsgl);
       if (rcvd <= 0)
         break;
+      auto now = rte_get_timer_cycles();
       for (auto &seg : rsgl) {
         auto *resp = seg.data<kv::kv_packet<kv::kv_completion>>();
         assert(resp->payload.key == kv[resp->id].key);
         kv.complete(resp->id);
+        hdr_record_value(hist, (now - kv[resp->id].ts) / get_ticks_us());
         ++rpcs_cnt;
         --inflight;
       }
@@ -138,7 +142,7 @@ static int lcore_closed_fn(void *arg) {
   };
 
   auto start = rte_get_timer_cycles();
-  auto end = start + adapter->duration * rte_get_timer_hz();
+  auto end = start + adapter->duration;
 
   while (start < end) {
     cif.poll();
@@ -150,6 +154,7 @@ static int lcore_closed_fn(void *arg) {
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
     kv::create_kv_request(m->data<uint8_t>(), tx->id, key);
     tx->key = key;
+    tx->ts = rte_get_timer_cycles();
     sgl ssgl;
     ssgl.add_segment_safe(mbuf_take_owner_ship(m));
     auto sent = 0u;
@@ -173,7 +178,8 @@ static int lcore_closed_fn(void *arg) {
 
   auto stats = kv.con->get_stats();
   kv.close();
-  std::cout << static_cast<double>(rpcs_finished) / adapter->duration << std::endl;
+  std::cout << static_cast<double>(rpcs_finished) / (static_cast<double>(adapter->duration) / rte_get_timer_hz()) << std::endl;
+  std::cout << hdr_value_at_percentile(hist, 99.0) << std::endl;
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   return 0;
 }
