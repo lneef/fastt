@@ -30,6 +30,7 @@
 #include "iface.h"
 #include "uring/cpu.h"
 #include "uring/iface.h"
+#include "util.h"
 #include <tlx/container/btree_map.hpp>
 static bench::storage store;
 
@@ -221,13 +222,17 @@ static int client_fun_closed(uint16_t id, struct sockaddr_in addr, uint64_t dura
   uint64_t inflight = 0;
   uint64_t rpcs = 0;
   slot_store st(128);
+  hdr_histogram *hist;
+  hdr_init(1, 500'000, 3, &hist);
   auto start = rdtsc_precise();
   auto end = duration * get_tsc_freq() + start;
+  auto ticks_per_us = get_tsc_freq() / 1e6;
   auto rx_cb = [&](kv::kv_packet<kv::kv_completion> *resp) {
     auto& slt = st.slots[resp->id];
-    assert(resp->payload.key == resp->payload.key);
+    assert(resp->payload.key == slt.key);
     --inflight;
     ++rpcs;
+    hdr_record_value(hist, (rdtsc() - slt.lat) / (ticks_per_us));
     st.free_slots.push_back(slt.slt_idx);
   };
   while(start < end){
@@ -237,15 +242,17 @@ static int client_fun_closed(uint16_t id, struct sockaddr_in addr, uint64_t dura
           auto req = request_single(iface.slt, st.slots[id].key, rng, dist, id);
           if(!req)
               continue;
-          st.free_slots.pop_back();
+          st.free_slots.pop_front();
+          st.slots[id].lat = rdtsc();
           ++inflight;
       }
       start = rdtsc();
   }
 
   while(inflight)
-      process_completions(iface, [&](kv::kv_packet<kv::kv_completion> *){});
+      process_completions(iface, [](auto*){});
   printf("RPCs: %f\n", static_cast<double>(rpcs) / duration);
+  printf("P99 %ld\n", hdr_value_at_percentile(hist, 99.0));
   return 0;
 }
 
