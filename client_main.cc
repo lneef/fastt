@@ -106,7 +106,6 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
   return conf;
 }
 
-static constexpr auto dur = 1e6;
 static int lcore_closed_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
@@ -117,8 +116,10 @@ static int lcore_closed_fn(void *arg) {
   kv_proxy kv(&cif);
   kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
-  uint64_t t = 0;
-  uint64_t c = 0;
+
+  uint64_t rpcs_cnt = 0;
+  uint64_t rpcs_finished = 0;
+  uint64_t inflight = 0;
 
   auto rx_fn = [&] {
     for (;;) {
@@ -130,14 +131,16 @@ static int lcore_closed_fn(void *arg) {
         auto *resp = seg.data<kv::kv_packet<kv::kv_completion>>();
         assert(resp->payload.key == kv[resp->id].key);
         kv.complete(resp->id);
-
-        ++c;
+        ++rpcs_cnt;
+        --inflight;
       }
     }
   };
 
-  auto now = rte_get_timer_cycles();
-  while (t < dur) {
+  auto start = rte_get_timer_cycles();
+  auto end = start + adapter->duration * rte_get_timer_hz();
+
+  while (start < end) {
     cif.poll();
     rx_fn();
     auto *tx = kv.start();
@@ -159,18 +162,19 @@ static int lcore_closed_fn(void *arg) {
         sent += retval;
     }
     assert(sent == sizeof(kv::kv_packet<kv::kv_request>));
-    ++t;
+    ++inflight;
+    start = rte_get_timer_cycles();
   }
-  while (c < dur) {
+  rpcs_finished = rpcs_cnt;
+  while (inflight) {
     cif.poll();
     rx_fn();
   }
 
   auto stats = kv.con->get_stats();
   kv.close();
+  std::cout << static_cast<double>(rpcs_finished) / adapter->duration << std::endl;
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
-  auto end = rte_get_timer_cycles();
-  std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
   return 0;
 }
 

@@ -27,10 +27,29 @@
 #include <hdr/hdr_histogram.h>
 
 #include "bench.h"
+#include "iface.h"
 #include "uring/cpu.h"
 #include "uring/iface.h"
 #include <tlx/container/btree_map.hpp>
 static bench::storage store;
+
+struct slot_store{
+    struct slot{
+        unsigned slt_idx;
+        int64_t key;
+        uint64_t lat = 0;
+    };
+
+    std::deque<unsigned> free_slots;
+    std::vector<slot> slots;
+    slot_store(unsigned size): slots(size){
+        for(unsigned i = 0; i < size; ++i){
+            free_slots.push_back(i);
+            slots[i].key = 0;
+            slots[i].slt_idx = i;
+        }
+    } 
+};
 
 static size_t handle_request(kv::kv_packet<kv::kv_request> *req,
                              uring::slot &slt) {
@@ -173,26 +192,72 @@ static uint64_t process_completions(uring::client_iface &iface, F &&cb) {
   return c;
 }
 
-static int client_fun_open(uint16_t id, struct sockaddr_in addr,
-                           uint64_t duration, double rate) {
-  std::random_device dev;
-  std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
-  set_thread_affinity(pthread_self(), id);
-  uring::client_iface iface{};
+static int client_setup(uring::client_iface &iface, uint16_t id,
+                        struct sockaddr_in *addr) {
   struct io_uring_cqe *cqe;
+  set_thread_affinity(pthread_self(), id);
   iface.slt.idx = id;
   iface.setup(0);
-  iface.uring_connect(&addr);
+  iface.uring_connect(addr);
   iface.uring_submit_and_wait();
   io_uring_peek_cqe(&iface.ctx->ring, &cqe);
   if (cqe->res < 0) {
     fprintf(stderr, "Failed to connect: %s\n", strerror(-cqe->res));
     return cqe->res;
   }
-
   io_uring_cq_advance(&iface.ctx->ring, 1);
   iface.prepare_recv();
+  return 0;
+}
+
+static int client_fun_closed(uint16_t id, struct sockaddr_in addr, uint64_t duration){
+  std::random_device dev;
+  std::mt19937 rng(dev());
+  std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
+  uring::client_iface iface{};
+  int ret = client_setup(iface, id, &addr);
+  if (ret < 0)
+    return ret;
+  uint64_t inflight = 0;
+  uint64_t rpcs = 0;
+  slot_store st(128);
+  auto start = rdtsc_precise();
+  auto end = duration * get_tsc_freq() + start;
+  auto rx_cb = [&](kv::kv_packet<kv::kv_completion> *resp) {
+    auto& slt = st.slots[resp->id];
+    assert(resp->payload.key == resp->payload.key);
+    --inflight;
+    ++rpcs;
+    st.free_slots.push_back(slt.slt_idx);
+  };
+  while(start < end){
+      process_completions(iface, rx_cb);
+      if(!st.free_slots.empty()){
+          auto id = st.free_slots.front();
+          auto req = request_single(iface.slt, st.slots[id].key, rng, dist, id);
+          if(!req)
+              continue;
+          st.free_slots.pop_back();
+          ++inflight;
+      }
+      start = rdtsc();
+  }
+
+  while(inflight)
+      process_completions(iface, [&](kv::kv_packet<kv::kv_completion> *){});
+  printf("RPCs: %f\n", static_cast<double>(rpcs) / duration);
+  return 0;
+}
+
+static int client_fun_open(uint16_t id, struct sockaddr_in addr,
+                           uint64_t duration, double rate) {
+  std::random_device dev;
+  std::mt19937 rng(dev());
+  std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
+  uring::client_iface iface{};
+  int ret = client_setup(iface, id, &addr);
+  if (ret < 0)
+    return ret;
 
   std::exponential_distribution<> exp(rate);
   auto start_time = rdtsc_precise() + 1 * get_tsc_freq();
@@ -292,6 +357,7 @@ int main(int argc, char *argv[]) {
   uint16_t port_arg = 0;
   int opt, nt = 1;
   bool is_client = false;
+  bool is_open = false;
   bool did_init_addr = false;
   uint64_t duration = 5;
   double rate = 100000;
@@ -321,6 +387,9 @@ int main(int argc, char *argv[]) {
       rate = std::stod(optarg);
       break;
 
+    case 'o':
+      is_open = true;
+      break;
     case 's':
       sz = std::atol(optarg);
       break;
@@ -336,14 +405,20 @@ int main(int argc, char *argv[]) {
   threads.reserve(nt);
   uint16_t pidx = 0;
   for (uint16_t i = 0; i < nt; ++i) {
-    if (is_client) {
+    if (is_client && is_open) {
       threads.emplace_back(client_fun_open, i,
                            sockaddr_in{.sin_family = AF_INET,
                                        .sin_port = htons(port_arg),
                                        .sin_addr = {ip_addr},
                                        .sin_zero = {}},
                            duration, rate);
-
+    } else if (is_client) {
+      threads.emplace_back(client_fun_closed, i,
+                           sockaddr_in{.sin_family = AF_INET,
+                                       .sin_port = htons(port_arg),
+                                       .sin_addr = {ip_addr},
+                                       .sin_zero = {}},
+                           duration);
     } else {
       threads.emplace_back(server_fun, i, sz, port_arg + pidx++,
                            did_init_addr ? ip_addr.s_addr : INADDR_ANY);

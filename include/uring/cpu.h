@@ -2,20 +2,16 @@
 
 #include <cassert>
 #include <cstdint>
-#include <cstdio>
 #include <pthread.h>
 #include <sched.h>
 
 #ifdef __x86_64__
 #include <cpuid.h>
 __inline uint64_t get_tsc_freq() {
-  /*
 uint32_t eax, ebx, ecx, edx;
 __cpuid(0x15, eax, ebx, ecx, edx);
 assert(eax && ebx && ecx);
 return static_cast<uint64_t>(ecx * ebx) / eax;
-*/
-  return 1996.389 * 1e6;
 }
 
 __inline uint64_t rdtsc() {
