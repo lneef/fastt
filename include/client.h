@@ -17,8 +17,20 @@ public:
         manager(true, port, txq, rxq, scon_config.ip, pool, this, cores) {}
 
   connection *open(const con_config &target, rte_ether_addr &dmac) {
-
     auto *con = open_connection(target, dmac);
+    if (!con)
+      return nullptr;
+    while (!con->up())
+      poll();
+    return con;
+  }
+
+  connection *open(const con_config &target, rte_ether_addr &dmac, uint16_t pid,
+                   uint32_t server_cores) {
+    manager.add_mac(target.ip, dmac);
+    auto *con = manager.open_connection(scon_config.port, target.port,
+                                   scon_config.ip, target.ip, pid,
+                                   server_cores);
     if (!con)
       return nullptr;
     while (!con->up())
@@ -38,7 +50,7 @@ public:
   void flush() { manager.flush(); }
 
 private:
-  connection *open_connection(const con_config &target,                               rte_ether_addr &dmac);
+  connection *open_connection(const con_config &target, rte_ether_addr &dmac);
   con_config scon_config;
 
 public:

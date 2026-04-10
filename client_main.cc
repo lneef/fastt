@@ -10,6 +10,7 @@
 #include "util.h"
 #include <arpa/inet.h>
 #include <atomic>
+#include <bits/getopt_core.h>
 #include <cassert>
 #include <cerrno>
 #include <charconv>
@@ -37,6 +38,7 @@ struct netconfig {
   uint16_t dport;
   uint64_t duration;
   double rate;
+  uint32_t server_cores = 0;
   bool open = false;
   std::vector<uint16_t> sports;
 };
@@ -48,9 +50,10 @@ struct lcore_adapter {
   rte_ether_addr dmac;
   uint64_t duration;
   double rate;
+  uint32_t server_cores;
 
   lcore_adapter(std::size_t n, con_config cfg)
-      : cifs(n), allocator(n, nullptr), cfg(cfg) {}
+      : cifs(n), allocator(n, nullptr), cfg(cfg), server_cores() {}
 };
 
 static netconfig parse_cmdline(int argc, char *argv[]) {
@@ -66,6 +69,7 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
       {"duration", required_argument, 0, 0},
       {"rate", required_argument, 0, 0},
       {"open", no_argument, 0, 0},
+      {"server_cores", required_argument, 0, 0},
       {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
@@ -99,6 +103,9 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
       break;
     case 7:
       conf.open = true;
+      break;
+    case 8:
+      conf.server_cores = std::atoi(optarg);
     default:
       break;
     }
@@ -114,7 +121,10 @@ static int lcore_closed_fn(void *arg) {
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
   kv_proxy kv(&cif);
-  kv.connect(adapter->cfg, adapter->dmac);
+  if (adapter->server_cores)
+    kv.connect(adapter->cfg, adapter->dmac, me, adapter->server_cores);
+  else
+    kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
   hdr_histogram *hist;
   hdr_init(1, 500'000, 3, &hist);
@@ -178,7 +188,9 @@ static int lcore_closed_fn(void *arg) {
 
   auto stats = kv.con->get_stats();
   kv.close();
-  std::cout << static_cast<double>(rpcs_finished) / (static_cast<double>(adapter->duration) / rte_get_timer_hz()) << std::endl;
+  std::cout << static_cast<double>(rpcs_finished) /
+                   (static_cast<double>(adapter->duration) / rte_get_timer_hz())
+            << std::endl;
   std::cout << hdr_value_at_percentile(hist, 99.0) << std::endl;
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   return 0;
@@ -296,6 +308,7 @@ static void run(lcore_function_t *f, void *args) {
   adapter.dmac = conf.dmac;
   adapter.duration = conf.duration;
   adapter.rate = conf.rate;
+  adapter.server_cores = conf.server_cores;
   i = 0;
   RTE_LCORE_FOREACH(lcore_id) {
     auto [port, txq, rxq] = ifc->get_slice(i);

@@ -91,6 +91,10 @@ public:
   connection *open_connection(uint16_t sport, uint16_t dport,
                               const uint32_t sip, const uint32_t dip);
 
+  connection *open_connection(uint16_t sport, uint16_t dport,
+                              const uint32_t sip, const uint32_t dip,
+                              uint16_t target, uint32_t server_cores);
+
   void poll_client() {
     update_current_timer_cycles();
     fetch_from_qpair();
@@ -102,7 +106,7 @@ public:
     }
     flush();
 
-    for (auto& con: ready) {
+    for (auto &con : ready) {
       con.perform_recovery();
       if (con.get_state() == connection_state::DISCONNECTED)
         con.link.unlink();
@@ -139,7 +143,8 @@ public:
     }
   }
 
-  std::pair<connection *, bool> add_connection(flow_tuple &tuple, rte_mbuf *pkt) {
+  std::pair<connection *, bool> add_connection(flow_tuple &tuple,
+                                               rte_mbuf *pkt) {
     transport_config cfg;
     cfg.ip = tuple.sip;
     cfg.transport_ports.dport = tuple.sport;

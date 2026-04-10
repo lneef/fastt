@@ -47,9 +47,17 @@ public:
     return 0;
   }
 
-  kv_slot &operator[](size_t i) { 
-      assert(i < slots.slots.size());
-      return slots.slots[i]; 
+  int connect(const con_config &target, rte_ether_addr &dmac, uint16_t peer_id,
+              uint32_t server_cores) {
+    con = ifc->open(target, dmac, peer_id, server_cores);
+    if (!con)
+      return -1;
+    return 0;
+  }
+
+  kv_slot &operator[](size_t i) {
+    assert(i < slots.slots.size());
+    return slots.slots[i];
   }
 
   kv_slot *start() {
