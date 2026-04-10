@@ -11,7 +11,6 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
-#include <poll.h>
 #include <pthread.h>
 #include <random>
 #include <stdio.h>
@@ -23,7 +22,6 @@
 #include <thread>
 #include <unistd.h>
 #include <utility>
-
 #include <hdr/hdr_histogram.h>
 
 #include "bench.h"
@@ -222,7 +220,7 @@ static int client_fun_closed(uint16_t id, struct sockaddr_in addr, uint64_t dura
   uint64_t rpcs = 0;
   slot_store st(128);
   hdr_histogram *hist;
-  hdr_init(1, 500'000, 3, &hist);
+  hdr_init(1, 500000, 3, &hist);
   auto start = rdtsc_precise();
   auto end = duration * get_tsc_freq() + start;
   auto ticks_per_us = get_tsc_freq() / 1e6;
@@ -250,6 +248,7 @@ static int client_fun_closed(uint16_t id, struct sockaddr_in addr, uint64_t dura
   auto rpcs_finished = rpcs;
   while(inflight)
       process_completions(iface, rx_cb);
+  printf("%lu\n", st.free_slots.size());
   printf("RPCs: %f\n", static_cast<double>(rpcs_finished) / duration);
   printf("P99 %ld\n", hdr_value_at_percentile(hist, 99.0));
   return 0;
@@ -372,7 +371,7 @@ int main(int argc, char *argv[]) {
   struct in_addr ip_addr;
   std::vector<std::thread> threads;
 
-  while ((opt = getopt(argc, argv, "p:ca:t:d:r:os:P")) != -1) {
+  while ((opt = getopt(argc, argv, "p:ca:t:d:r:os:")) != -1) {
     switch (opt) {
     case 'p':
       port_arg = std::atoi(optarg);
@@ -393,7 +392,6 @@ int main(int argc, char *argv[]) {
     case 'r':
       rate = std::stod(optarg);
       break;
-
     case 'o':
       is_open = true;
       break;
@@ -402,10 +400,6 @@ int main(int argc, char *argv[]) {
       break;
 
     default:
-      fprintf(stderr,
-              "Usage: %s [-p port] "
-              "[-b log2(BufferSize)] [-6] [-v]\n",
-              argv[0]);
       exit(-1);
     }
   }
