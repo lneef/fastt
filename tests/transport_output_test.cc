@@ -14,7 +14,7 @@ class TransportOutputTest : public ::testing::Test {
 protected:
   void SetUp() override {
     slab = new slab_allocator{};
-    to = new transport_rxpath();
+    to = new transport_rxpath(*slab);
   }
 
   void TearDown() override {

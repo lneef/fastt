@@ -83,8 +83,8 @@ struct transport_rxpath {
   // reserve some headroom
   static constexpr unsigned kMaxGrantSize = 256;
   static constexpr unsigned kMaxBitMapSize = 2 * kMaxGrantSize;
-  transport_rxpath(seq_t max_rx_in_window = {~0u}, seq_t next_seq = {0})
-      : max_rx_in_window(max_rx_in_window), next_seq(next_seq) {}
+  transport_rxpath(slab_allocator &sb, seq_t max_rx_in_window = {~0u}, seq_t next_seq = {0})
+      : sb(sb), max_rx_in_window(max_rx_in_window), next_seq(next_seq) {}
 
   seq_t get_last_rcvd_in_seq() const { return seq_t{next_seq - 1}; }
 
@@ -97,14 +97,36 @@ struct transport_rxpath {
     return seq >= next_seq + kMaxBitMapSize;
   }
 
-  void insert(seq_t seq, mbuf *pkt, ack_cb &acb) {
+  mbuf_ptr make_dgram(rte_mbuf *msg) {
+    auto pkt_len = msg->pkt_len - protocol::defs::kftOffset;
+    mbuf *head = nullptr;
+    auto off = protocol::defs::kftOffset;
+    if (likely(pkt_len <= sb.kMaxDataLen)) {
+      // fast path for small packets
+      head = sb.alloc_default(pkt_len);
+      auto *src = rte_pktmbuf_read(msg, off, pkt_len, head->data<void>());
+      if (src != head->data<void>())
+        rte_memcpy(head->data<void>(), src, pkt_len);
+    } else {
+      head = sb.alloc_large();
+      head->prepend<protocol::ft_header>();
+      assert(head->data_len >= pkt_len);
+      auto *src = rte_pktmbuf_read(msg, off, pkt_len, head->data<void>());
+      if (src != head->data<void>())
+        rte_memcpy(head->data<void>(), src, pkt_len);
+    }
+    rte_pktmbuf_free(msg);
+    return mbuf_take_owner_ship(head);
+  }
+
+  void insert(seq_t seq, rte_mbuf *pkt, ack_cb &acb) {
     if (seq > acb.rcv_high) {
       acb.rcv_high = seq;
       max_rx_in_window = seq;
     }
     assert(max_rx_in_window - next_seq + 1 <= kMaxBitMapSize);
     wnd.set(index(seq));
-    reassemble(seq, mbuf_take_owner_ship(pkt), acb);
+    reassemble(seq, make_dgram(pkt), acb);
     assert(acb.rcv_high == max_rx_in_window);
   }
 
@@ -211,6 +233,7 @@ struct transport_rxpath {
 
   reorder_buffer rb;
   std::deque<mbuf_ptr> out;
+  slab_allocator& sb;
 
   // connection state
   std::bitset<kMaxBitMapSize> wnd;

@@ -15,6 +15,7 @@
 #include "slab_allocator.h"
 #include "task/task.h"
 #include "transport/protocol.h"
+#include "transport/protocol_util.h"
 #include "transport/transport.h"
 #include "util.h"
 
@@ -39,7 +40,7 @@ public:
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
                      uint32_t sip, std::shared_ptr<dpdk_allocator> allocator,
                      P *parent, uint16_t cores)
-      : dev(port, txq, rxq), pkt_if(&dev, allocator, &sb, sip, port), active(),
+      : dev(port, txq, rxq), pkt_if(&dev, allocator, sip, port), active(),
         cores(cores), is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
@@ -47,9 +48,9 @@ public:
       server_parent = parent;
   }
 
-  void handle_pkt(mbuf *pkt, flow_tuple &ft) {
+  void handle_pkt(rte_mbuf *pkt, flow_tuple &ft) {
     FASTT_LOG_DEBUG("Got pkt via UDP ports: %s \n", ft.print().c_str());
-    auto *header = pkt->data<protocol::ft_header>();
+    auto *header = protocol::mtod<protocol::ft_header>(pkt);
     if (unlikely(header->type == protocol::FT_SYN)) {
       FASTT_LOG_DEBUG("Registering new request");
       connection_requests.emplace_back(pkt, ft);
@@ -65,7 +66,7 @@ public:
           ack_outstanding.push_back(*it->second);
 
       } else {
-        mbuf_free(pkt);
+        rte_pktmbuf_free(pkt);
       }
     }
   }
@@ -115,7 +116,7 @@ public:
 
   void fetch_from_qpair() {
     std::array<flow_tuple, packet_if::kDefaultInBurstSize> fts;
-    packet_vector<mbuf *, packet_if::kDefaultInBurstSize> mbufs;
+    packet_vector<rte_mbuf *, packet_if::kDefaultInBurstSize> mbufs;
     pkt_if.fetch_from_qpair(fts, mbufs);
     uint16_t i = 0;
     for (auto *pkt : mbufs) {
@@ -138,7 +139,7 @@ public:
     }
   }
 
-  std::pair<connection *, bool> add_connection(flow_tuple &tuple, mbuf *pkt) {
+  std::pair<connection *, bool> add_connection(flow_tuple &tuple, rte_mbuf *pkt) {
     transport_config cfg;
     cfg.ip = tuple.sip;
     cfg.transport_ports.dport = tuple.sport;
@@ -192,7 +193,7 @@ public:
   ~connection_manager() {}
 
 private:
-  std::deque<std::pair<mbuf *, flow_tuple>> connection_requests;
+  std::deque<std::pair<rte_mbuf *, flow_tuple>> connection_requests;
   qpair dev;
   slab_allocator sb;
   packet_if pkt_if;

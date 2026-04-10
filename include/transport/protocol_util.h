@@ -1,10 +1,17 @@
 #pragma once
 #include "protocol.h"
 #include "slab_allocator.h"
+#include <rte_mbuf_core.h>
 namespace protocol {
 
-inline void extract_ports(flow_tuple &ft, mbuf *pkt) {
-  auto *hdr = pkt->data<protocol::ft_header>();
+
+template<typename T>
+inline T* mtod(rte_mbuf* m, unsigned off = 0){
+    return rte_pktmbuf_mtod_offset(m, T*, protocol::defs::kftOffset + off);
+}
+
+inline void extract_ports(flow_tuple &ft, rte_mbuf *pkt) {
+  auto *hdr = mtod<protocol::ft_header>(pkt);
   ft.sport = hdr->sport;
   ft.dport = hdr->dport;
 }

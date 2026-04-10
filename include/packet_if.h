@@ -48,9 +48,9 @@ class packet_if {
 public:
   static constexpr uint16_t kDefaultInBurstSize = qpair::kDefaultInputBurstSize;
 
-  packet_if(qpair *qp, std::shared_ptr<dpdk_allocator> pool, slab_allocator *sb,
+  packet_if(qpair *qp, std::shared_ptr<dpdk_allocator> pool, 
             uint32_t sip, uint16_t port)
-      : arp_table(), pool(pool), sb(sb), qp(qp), sip(sip) {
+      : arp_table(), pool(pool), qp(qp), sip(sip) {
     rte_eth_macaddr_get(port, &smac);
     sim.set_rate(0.0);
     reo_off = sim.dist(sim.rng) & (UINT16_MAX - 1);
@@ -259,49 +259,25 @@ public:
 
   void flush_out_buffer() { qp->flush(); }
 
-  mbuf *strip_header_and_copy(rte_mbuf *msg, flow_tuple &ft) {
+  void get_flow_identifiers(rte_mbuf *msg, flow_tuple &ft) {
     strip_ether_ip(msg, ft);
     strip_udp(msg, ft);
-    auto pkt_len = msg->pkt_len - protocol::defs::kftOffset;
-    mbuf *head = nullptr;
-    auto off = protocol::defs::kftOffset;
-    if (likely(pkt_len <= sb->kMaxDataLen)) {
-      // fast path for small packets
-      head = sb->alloc_default(pkt_len);
-      auto *src = rte_pktmbuf_read(msg, off, pkt_len, head->data<void>());
-      if (src != head->data<void>())
-        rte_memcpy(head->data<void>(), src, pkt_len);
-    } else {
-      head = sb->alloc_large();
-      head->prepend<protocol::ft_header>();
-      assert(head->data_len >= pkt_len);
-      auto *src = rte_pktmbuf_read(msg, off, pkt_len, head->data<void>());
-      if (src != head->data<void>())
-        rte_memcpy(head->data<void>(), src, pkt_len);
-    }
-    rte_pktmbuf_free(msg);
-    return head;
   }
 
   void fetch_from_qpair(std::array<flow_tuple, kDefaultInBurstSize> &fts,
-                        packet_vector<mbuf *, kDefaultInBurstSize> &mbufs) {
-    uint16_t valid = 0, out = 0;
+                        packet_vector<rte_mbuf *, kDefaultInBurstSize> &mbufs) {
+    uint16_t valid = 0;
     assert(vec.i == 0);
     qp->rx_burst(vec);
     for (uint16_t i = 0; i < vec.i; ++i) {
       auto *pkt = consume_pkt(vec.pkts[i]);
       if (!pkt)
         continue;
-      vec.pkts[valid++] = pkt;
+      get_flow_identifiers(pkt, fts[valid]);
+      mbufs.pkts[valid] = pkt;
+      ++valid;
     }
-    vec.i = valid;
-    assert(out == 0);
-    for (auto *msg : vec) {
-      mbufs.pkts[out] = strip_header_and_copy(msg, fts[out]);
-      ++out;
-    }
-    mbufs.i = out;
-    assert(out == valid);
+    mbufs.i = valid;
     vec.clear();
   }
 
@@ -312,7 +288,6 @@ private:
   flow_table<uint32_t, rte_ether_addr> arp_table;
   rte_ether_addr smac;
   std::shared_ptr<dpdk_allocator> pool;
-  slab_allocator *sb;
   qpair *qp;
   packet_vector<rte_mbuf *, kDefaultInBurstSize> vec;
   uint32_t sip;
