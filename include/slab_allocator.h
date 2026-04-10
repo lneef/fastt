@@ -103,7 +103,7 @@ struct obj_header {
   obj_header *next;
 };
 
-struct slab {
+struct alignas(64) slab {
   slab *next;
   slab *prev;
   uintptr_t iova;
@@ -142,6 +142,9 @@ struct slab_cache {
   slab_list partial;
   slab_list full;
   size_t obj_size;
+  unsigned top = 0;
+  unsigned color = 0;
+  std::array<obj_header *, kDefaultCacheSize> local_cache;
 
   slab_cache(size_t obj_size) : partial(), full(), obj_size(obj_size) {}
 };
@@ -168,13 +171,13 @@ public:
   static constexpr size_t kDefaultSize =
       kMaxDataLen + kDefaultHeadroom + sizeof(mbuf);
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
-  static constexpr size_t kJumboHeadroom = 48;
+  static constexpr size_t kJumboHeadroom = 104;
   static constexpr size_t kMaxJumboDataLen =
       9001 - protocol::defs::kHeaderMTUlen;
   static constexpr size_t kDefaultJumboSize =
       kMaxJumboDataLen + kJumboHeadroom + sizeof(mbuf) + 7;
 
-  static_assert(kDefaultJumboSize % 8 == 0, "");
+  static_assert(kDefaultJumboSize % 64 == 0, "");
 
 public:
   slab_allocator()
@@ -183,15 +186,20 @@ public:
   template <unsigned cl, size_t mbuf_size, size_t hdroom, bool iova>
   mbuf *alloc(uint16_t data_len) {
     auto &cache = caches[cl];
-    if (cache.partial.empty())
-      alloc_new_slab<iova>(cache);
-    auto *s = cache.partial.front();
-    auto *obj = s->freelist;
-    s->freelist = obj->next;
-    ++s->inuse;
-    if (!s->freelist) {
-      slab::list_remove(s);
-      cache.full.list_push(s);
+    obj_header *obj = nullptr;
+    if (cache.top) {
+      obj = cache.local_cache[--cache.top];
+    } else {
+      if (cache.partial.empty())
+        alloc_new_slab<iova>(cache);
+      auto *s = cache.partial.front();
+      obj = s->freelist;
+      s->freelist = obj->next;
+      ++s->inuse;
+      if (!s->freelist) {
+        slab::list_remove(s);
+        cache.full.list_push(s);
+      }
     }
     return new (obj) mbuf{this, nullptr, mbuf_size, cl, data_len, hdroom};
   }
@@ -236,18 +244,18 @@ public:
         mmap(nullptr, kSlabSize, PROT_READ | PROT_WRITE,
              MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);
     assert(region != MAP_FAILED);
-    auto *s = static_cast<slab *>(region);
+    auto *s = new (region) slab();
     if constexpr (iova) {
-      //prefault, MAP_POPULATE may fail   
+      // prefault, MAP_POPULATE may fail
       *reinterpret_cast<volatile uint64_t *>(region) = 0;
       s->iova = virt_to_phys(region);
       assert(s->iova != RTE_BAD_IOVA);
     }
 
+    size_t off = c.color;
     auto *base = reinterpret_cast<uint8_t *>(region) + sizeof(slab);
-    s->freelist = new (base) obj_header;
+    s->freelist = new (base + off) obj_header;
     size_t space = kSlabSize - sizeof(slab);
-    size_t off = 0;
     while (off + 2 * c.obj_size <= space) {
       auto *obj = reinterpret_cast<obj_header *>(base + off);
       obj->next = new (base + off + c.obj_size) obj_header;
@@ -255,6 +263,7 @@ public:
     }
     auto *obj = reinterpret_cast<obj_header *>(base + off);
     obj->next = nullptr;
+    c.color = (c.color + 64) & 1023;
     c.partial.list_push(s);
   }
 
@@ -270,15 +279,20 @@ public:
     auto &cache = caches[obj->size_class];
     assert(cache.obj_size == obj->size);
     auto iptr = reinterpret_cast<intptr_t>(obj);
-    auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
-    bool was_full = !slb->freelist;
     auto *hdr = reinterpret_cast<obj_header *>(obj);
-    hdr->next = slb->freelist;
-    slb->freelist = hdr;
-    --slb->inuse;
-    if (was_full) {
-      slab::list_remove(slb);
-      cache.partial.list_push(slb);
+    if (cache.top < slab_cache::kDefaultCacheSize) {
+      hdr->next = nullptr;
+      cache.local_cache[cache.top++] = hdr;
+    } else {
+      auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
+      bool was_full = !slb->freelist;
+      hdr->next = slb->freelist;
+      slb->freelist = hdr;
+      --slb->inuse;
+      if (was_full) {
+        slab::list_remove(slb);
+        cache.partial.list_push(slb);
+      }
     }
   }
 
@@ -296,9 +310,9 @@ public:
     return mbuf_ptr(pkt, mbuf_free);
   }
 
-  mbuf_ptr alloc_large_safe(){
-      auto *jumbo_pkt = alloc_large();
-      return mbuf_ptr(jumbo_pkt, mbuf_free);
+  mbuf_ptr alloc_large_safe() {
+    auto *jumbo_pkt = alloc_large();
+    return mbuf_ptr(jumbo_pkt, mbuf_free);
   }
 
   ~slab_allocator() {
