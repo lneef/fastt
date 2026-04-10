@@ -122,7 +122,7 @@ static int lcore_closed_fn(void *arg) {
   auto &cif = *adapter->cifs[me];
   kv_proxy kv(&cif);
   if (adapter->server_cores)
-    kv.connect(adapter->cfg, adapter->dmac, me, adapter->server_cores);
+    kv.connect(adapter->cfg, adapter->dmac, me % adapter->server_cores, adapter->server_cores);
   else
     kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
