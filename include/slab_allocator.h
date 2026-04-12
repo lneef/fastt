@@ -119,7 +119,7 @@ struct alignas(64) slab {
     s->next->prev = s->prev;
   }
 
-  slab() : next(nullptr), prev(nullptr), freelist(nullptr), inuse() {}
+  slab() : next(nullptr), prev(nullptr), iova(0), freelist(nullptr), inuse() {}
 };
 
 struct slab_cache {
@@ -181,10 +181,12 @@ public:
       kMaxJumboDataLen + kJumboHeadroom + sizeof(mbuf) + 7;
 
   static_assert(kDefaultJumboSize % 64 == 0, "");
+  using dma_map_t = int(*)(void*, size_t, unsigned, uint64_t, size_t);
+  using dma_unmap_t = int(*)(void*, uint64_t, size_t);
 
 public:
-  slab_allocator()
-      : caches{slab_cache(kDefaultSize), slab_cache(kDefaultJumboSize)} {}
+  slab_allocator(dma_map_t map = nullptr, dma_unmap_t unmap = nullptr)
+      : caches{slab_cache(kDefaultSize), slab_cache(kDefaultJumboSize)}, map(map), unmap(unmap) {}
 
   template <unsigned cl, size_t mbuf_size, size_t hdroom, bool iova>
   mbuf *alloc(uint16_t data_len) {
@@ -252,10 +254,8 @@ public:
       // prefault, MAP_POPULATE may fail
       s->iova = virt_to_phys(region);
       assert(s->iova != RTE_BAD_IOVA);
-      struct rte_eth_dev_info dev_info;
-      auto ret = rte_eth_dev_info_get(0, &dev_info);
-      assert(ret == 0);
-      rte_dev_dma_map(dev_info.device, region, s->iova, kSlabSize);
+      if(map)
+        map(region, kSlabSize, 1, s->iova, kSlabSize);
     }
 
     size_t off = c.color;
@@ -322,10 +322,12 @@ public:
   }
 
   ~slab_allocator() {
-    auto free_slabs = [](slab_cache::slab_list &list) {
+    auto free_slabs = [&](slab_cache::slab_list &list) {
       auto *s = list.head.next;
       while (s != &list.tail) {
         auto *next = s->next;
+        if(s->iova && unmap)
+            unmap(s, s->iova, kSlabSize);
         munmap(s, kSlabSize);
         s = next;
       }
@@ -338,6 +340,8 @@ public:
 
 private:
   std::array<slab_cache, kSizeClassCnt> caches;
+  const dma_map_t map;
+  const dma_unmap_t unmap;
 };
 
 static constexpr int16_t sign_extend(uint16_t val) {

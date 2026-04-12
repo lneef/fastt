@@ -11,6 +11,7 @@
 #include "debug.h"
 #include "dev.h"
 #include "dpdk/allocator.h"
+#include "dpdk/dma_mapper.h"
 #include "packet_if.h"
 #include "slab_allocator.h"
 #include "task/task.h"
@@ -39,7 +40,7 @@ public:
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
                      uint32_t sip, std::shared_ptr<dpdk_allocator> allocator,
                      P *parent, uint16_t cores)
-      : dev(port, txq, rxq), pkt_if(&dev, allocator, &sb, sip, port), active(),
+      : dev(port, txq, rxq), sb(dpdk_dma_map, dpdk_dma_unmap), pkt_if(&dev, allocator, &sb, sip, port), active(),
         cores(cores), is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
