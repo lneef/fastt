@@ -8,8 +8,11 @@
 #include <fcntl.h>
 #include <generic/rte_prefetch.h>
 #include <memory>
+#include <rte_dev.h>
+#include <rte_ethdev.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <rte_dev.h>
 class slab_allocator;
 
 struct mbuf {
@@ -247,9 +250,12 @@ public:
     auto *s = new (region) slab();
     if constexpr (iova) {
       // prefault, MAP_POPULATE may fail
-      *reinterpret_cast<volatile uint64_t *>(region) = 0;
       s->iova = virt_to_phys(region);
       assert(s->iova != RTE_BAD_IOVA);
+      struct rte_eth_dev_info dev_info;
+      auto ret = rte_eth_dev_info_get(0, &dev_info);
+      assert(ret == 0);
+      rte_dev_dma_map(dev_info.device, region, s->iova, kSlabSize);
     }
 
     size_t off = c.color;

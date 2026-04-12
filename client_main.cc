@@ -26,6 +26,7 @@
 #include <memory>
 #include <random>
 #include <ranges>
+#include <rte_lcore.h>
 #include <sys/types.h>
 #include <vector>
 
@@ -178,6 +179,9 @@ static int lcore_closed_fn(void *arg) {
 
   auto stats = kv.con->get_stats();
   kv.close();
+FILE *f = fopen(("latency.hgrm" + std::to_string(rte_lcore_id())).c_str(), "w");
+  hdr_percentiles_print(kv.con->get_hist(), f, 5, 1.0, CLASSIC);
+  fclose(f);
   std::cout << static_cast<double>(rpcs_finished) / (static_cast<double>(adapter->duration) / rte_get_timer_hz()) << std::endl;
   std::cout << hdr_value_at_percentile(hist, 99.0) << std::endl;
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
