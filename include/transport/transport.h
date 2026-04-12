@@ -6,6 +6,7 @@
 #include <sys/types.h>
 
 #include "debug.h"
+#include "hdr/hdr_histogram.h"
 #include "packet_if.h"
 #include "protocol.h"
 #include "protocol_util.h"
@@ -293,6 +294,10 @@ public:
   bool can_recv() { return trx.has_buffered_mbufs_frags(); }
 
   bool can_send() { return (ttx.get_current_wnd() > 0); }
+
+  hdr_histogram* get_hist() const{
+      return cc.get_hist();
+  }
 
   ssize_t send_single_seg(sgl &msgl) {
     if (!ttx.can_transmit())
