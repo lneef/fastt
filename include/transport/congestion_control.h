@@ -1,4 +1,5 @@
 #pragma once
+#include "hdr/hdr_histogram.h"
 #include "transport/filter.h"
 #include "util.h"
 #include <algorithm>
@@ -35,10 +36,12 @@ struct swift {
   uint64_t retransmit_cnt, last_decrease;
   float base_target_delay, cwnd_size;
   const uint64_t min_wd_size;
+  hdr_histogram *hist;
 
   swift(uint64_t target_delay)
       : retransmit_cnt(0), last_decrease(0), base_target_delay(target_delay),
         cwnd_size(initial_len), min_wd_size(initial_len) {
+            hdr_init(0, 500'000, 1, &hist);
   }
 
   void on_ack(uint64_t acked, uint64_t now, uint64_t srtt,
@@ -50,6 +53,7 @@ struct swift {
     else
       delay =
           filter::exp_filter<uint64_t>(delay, delay_measured);
+    hdr_record_value(hist, delay / get_ticks_us());
 
     // Skip hop delay
     auto target_delay =
@@ -103,5 +107,9 @@ struct swift {
     auto cap =
         std::min<unsigned>(1, cwnd_size > inflight ? cwnd_size - inflight : 0);
     return cap;
+  }
+
+  hdr_histogram* get_hist() const{
+      return hist;
   }
 };

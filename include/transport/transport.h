@@ -295,6 +295,10 @@ public:
 
   bool can_send() { return (ttx.get_current_wnd() > 0); }
 
+  hdr_histogram* get_hist() const{
+      return cc.get_hist();
+  }
+
   ssize_t send_single_seg(sgl &msgl) {
     if (!ttx.can_transmit())
       return -EAGAIN;
