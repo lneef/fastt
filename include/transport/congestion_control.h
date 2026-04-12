@@ -41,7 +41,7 @@ struct swift {
   swift(uint64_t target_delay)
       : retransmit_cnt(0), last_decrease(0), base_target_delay(target_delay),
         cwnd_size(initial_len), min_wd_size(initial_len) {
-            hdr_init(0, 500'000, 1, &hist);
+            hdr_init(1, 500'000, 3, &hist);
   }
 
   void on_ack(uint64_t acked, uint64_t now, uint64_t srtt,
