@@ -104,15 +104,14 @@ int lcore_server_fun(void *arg) {
         while (true) {
           sgl rsgl{};
           auto sz = co_await recv(iface.get_scheduler(), con, rsgl);
-          if (sz == 0) 
+          if (sz == 0)
             co_return;
-          
+
           assert(ssgl.empty());
           for (auto &seg : rsgl) {
             assert(seg.data_len == sizeof(kv::kv_packet<kv::kv_request>));
             serve(ssgl, slab, seg.data<kv::kv_packet<kv::kv_request>>());
           }
-
           ssize_t to_send = ssgl.size;
           auto sent =
               co_await send(iface.get_scheduler(), con, std::move(ssgl));
@@ -129,11 +128,11 @@ int lcore_server_fun(void *arg) {
   return 0;
 }
 
-int run_rx_lcore(void* arg){
-    auto &rp = *static_cast<rx_poll*>(arg);
-    while(!terminate)
-        rp();
-    return 0;
+int run_rx_lcore(void *arg) {
+  auto &rp = *static_cast<rx_poll *>(arg);
+  while (!terminate)
+    rp();
+  return 0;
 }
 
 int run(netconfig &conf) {
@@ -148,11 +147,13 @@ int run(netconfig &conf) {
   uint16_t lcore_id;
   std::vector<std::shared_ptr<dpdk_allocator>> allocators;
   std::vector<std::shared_ptr<qp>> qps;
+
   std::vector<uint16_t> lcore_ids;
   allocators.reserve(nthreads);
+  lcore_ids.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
-    if(lcore_id == rte_get_main_lcore())  
-        continue;
+    if (lcore_id == rte_get_main_lcore())
+      continue;
     allocators.emplace_back(
         dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 2047));
     qps.emplace_back(std::make_shared<qp>());
@@ -160,16 +161,19 @@ int run(netconfig &conf) {
     ++i;
   }
 
-  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators, lcore_ids);
+  std::shared_ptr<dpdk_allocator> rx_allocator =
+      dpdk_allocator::create("rx", (nthreads - 1) * 2048 - 1);
+  auto ifc =
+      iface::configure_port(0, nthreads, nthreads, rx_allocator, lcore_ids);
   if (!ifc)
     return -1;
 
-  std::vector<lcore_server_adapter> adapters(nthreads); 
+  std::vector<lcore_server_adapter> adapters(nthreads);
   rx_poll rp{0};
   i = 0;
   RTE_LCORE_FOREACH(lcore_id) {
-    if(lcore_id == rte_get_main_lcore())  
-        continue;    
+    if (lcore_id == rte_get_main_lcore())
+      continue;
     auto &adapter = adapters[i];
     auto [port, txq, rxq] = ifc->get_slice(i);
     adapter.allocator = std::move(allocators[i]);

@@ -51,7 +51,7 @@ static inline int setup_reta(uint16_t port, uint32_t nrx, uint32_t reta_size) {
 
 std::unique_ptr<iface>
 iface::configure_port(uint16_t port_id, uint16_t ntx, uint16_t nrx,
-                      std::vector<std::shared_ptr<dpdk_allocator>> &pools, std::vector<uint16_t>& lcore_ids) {
+                      std::shared_ptr<dpdk_allocator> &pools, const std::vector<uint16_t>& lcore_ids) {
   static constexpr uint16_t kDefaultQueueSize = 1024;  
   uint16_t nb_rxd, nb_txd;
   int retval;
@@ -69,8 +69,8 @@ iface::configure_port(uint16_t port_id, uint16_t ntx, uint16_t nrx,
   nb_rxd = kDefaultQueueSize;
   nb_txd = kDefaultQueueSize;
 
-  if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
-    port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+  if(dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MULTI_SEGS)
+      port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
   if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM)
     port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
   if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_CKSUM)
@@ -105,16 +105,15 @@ iface::configure_port(uint16_t port_id, uint16_t ntx, uint16_t nrx,
   rxconf.rx_free_thresh = 0;
   uint16_t setup_tx = 0;
   uint16_t setup_rx = 0;
-  uint16_t i = 0;
-  for(auto lcore_id : lcore_ids){
+
+  for(auto lcore_id : lcore_ids) {
     if (rte_eth_rx_queue_setup(ifc->port, setup_rx++, nb_rxd,
                                rte_lcore_to_socket_id(lcore_id), &rxconf,
-                               pools[i]->rx_pool))
+                               pools->get()))
       return nullptr;
     if (rte_eth_tx_queue_setup(ifc->port, setup_tx++, nb_txd,
                                rte_lcore_to_socket_id(lcore_id), &txconf))
       return nullptr;
-    ++i;
   }
   ifc->tx_queues = setup_tx;
   ifc->rx_queues = setup_rx;

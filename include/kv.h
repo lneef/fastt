@@ -12,6 +12,7 @@
 struct kv_slot {
   uint16_t id;
   int64_t key;
+  uint64_t ts;
 };
 
 struct kv_slot_store {
@@ -39,7 +40,8 @@ class kv_proxy {
 public:
   kv_proxy(client_iface *ifc) : ifc(ifc), slots(128) {}
 
-  int connect(const con_config &target,  rte_ether_addr &dmac) {
+
+  int connect(const con_config &target, rte_ether_addr &dmac) {
     con = ifc->open(target, dmac);
     if (!con)
       return -1;

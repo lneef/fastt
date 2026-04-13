@@ -12,15 +12,16 @@ class transaction_queue;
 class client_iface {
 public:
   client_iface(uint16_t port, uint16_t txq, uint16_t rxq,
-            std::shared_ptr<dpdk_allocator> pool,
-               const con_config &scon_config, std::shared_ptr<qp>& qp_rings, uint16_t cores)
-      : scon_config(scon_config),
-        manager(true, port, txq, rxq, scon_config.ip, pool, qp_rings, this, cores) {
-            assert(qp_rings);
-        }
-  
-  connection *open(const con_config &target, 
-                   rte_ether_addr &dmac) {
+               std::shared_ptr<dpdk_allocator> pool,
+               const con_config &scon_config, std::shared_ptr<qp> &qp_rings,
+               uint16_t cores)
+      : scon_config(scon_config), manager(true, port, txq, rxq, scon_config.ip,
+                                          pool, qp_rings, this, cores) {
+    assert(qp_rings);
+  }
+
+  connection *open(const con_config &target, rte_ether_addr &dmac) {
+
     auto *con = open_connection(target, dmac);
     if (!con)
       return nullptr;
@@ -41,8 +42,7 @@ public:
   void flush() { manager.flush(); }
 
 private:
-  connection *open_connection(const con_config &target, 
-                              rte_ether_addr &dmac);
+  connection *open_connection(const con_config &target, rte_ether_addr &dmac);
   con_config scon_config;
 
 public:

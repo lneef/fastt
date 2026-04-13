@@ -39,12 +39,15 @@ struct packet_drop_sim {
 };
 
 class packet_if {
-  static void free_cb(void *, void *) {}
+  static void free_cb(void *, void *buf) {
+    mbuf_free(reinterpret_cast<mbuf *>(buf));
+  }
   static constexpr uint16_t kdefaultTTL = 64;
   static constexpr uint16_t kDefaultOutBurstSize = 32;
 
 public:
-  static constexpr uint16_t kDefaultInBurstSize = 64;
+  static constexpr uint16_t kDefaultInBurstSize = qpair::kDefaultInputBurstSize;
+
   packet_if(qpair *qp, std::shared_ptr<dpdk_allocator> pool, slab_allocator *sb,
             uint32_t sip, uint16_t port)
       : arp_table(), pool(pool), sb(sb), qp(qp), sip(sip) {
@@ -110,7 +113,70 @@ public:
 
   void consume_pkt_mbuf(mbuf *pkt, transport_config &cfg) {
 
-    auto *dpdk_mbuf = rte_pktmbuf_alloc(pool->tx_pool);
+    switch (pkt->size_class) {
+    case 1:
+      consume_pkt_mbuf_zc(pkt, cfg);
+      break;
+    default:
+      consume_pkt_mbuf_sc(pkt, cfg);
+    }
+  }
+
+  void consume_pkt_mbuf_zc(mbuf *pkt, transport_config &cfg) {
+    static_assert(
+        (slab_allocator::kJumboHeadroom - sizeof(protocol::ft_header)) >=
+            sizeof(dpdk_allocator::backend_data),
+        "");
+    auto *data = pkt->data<uint8_t>(sizeof(protocol::ft_header));
+    auto iova = pkt->sb->get_iova(pkt, sizeof(protocol::ft_header));
+    assert(iova != RTE_BAD_IOVA);
+    assert(pkt->size_class == 1);
+    assert(pkt->size == slab_allocator::kDefaultJumboSize);
+    assert(
+        (reinterpret_cast<uintptr_t>(data) & (slab_allocator::kSlabSize - 1)) ==
+        (iova & (slab_allocator::kSlabSize - 1)));
+    auto *ext = rte_pktmbuf_alloc(pool->pool);
+    auto mbuf_data_len = pkt->data_len - sizeof(protocol::ft_header);
+    dpdk_allocator::backend_data *shinfo;
+    if (pkt->refcnt == 1) {
+      shinfo = get_new_backend_data<dpdk_allocator::backend_data>(pkt);
+      shinfo->fcb_opaque = pkt;
+      shinfo->refcnt = 1;
+      shinfo->free_cb = free_cb;
+      ++pkt->refcnt;
+    } else {
+      shinfo = get_backend_data<dpdk_allocator::backend_data>(pkt);
+      ++shinfo->refcnt;
+    }
+    assert(pkt->refcnt == 2);
+    assert(shinfo->refcnt >= 1);
+    rte_pktmbuf_attach_extbuf(ext, data, iova, mbuf_data_len, shinfo);
+    ext->data_len = mbuf_data_len;
+    auto *head = rte_pktmbuf_alloc(pool->pool);
+    rte_pktmbuf_chain(head, ext);
+
+    head->pkt_len = ext->data_len;
+    auto head_payload_len = ext->data_len + sizeof(protocol::ft_header);
+    assert(head->pkt_len == mbuf_data_len);
+    rte_memcpy(rte_pktmbuf_mtod_offset(head, void *, protocol::defs::kftOffset),
+               pkt->data<void>(), sizeof(protocol::ft_header));
+
+    head->data_len = sizeof(protocol::ft_header);
+    head->pkt_len += sizeof(protocol::ft_header);
+    auto *udp = udp_header(head, cfg.transport_ports.sport,
+                           cfg.transport_ports.dport, head_payload_len);
+    ip_header(head, udp, sip, cfg.ip, head_payload_len);
+    auto it = arp_table.find(cfg.ip);
+    assert(it != arp_table.end());
+    eth_header(head, smac, it->second);
+    assert(head->pkt_len ==
+           static_cast<size_t>(head_payload_len + head->l2_len + head->l3_len +
+                               head->l4_len));
+    qp->enqueue_pkt(head);
+  }
+
+  void consume_pkt_mbuf_sc(mbuf *pkt, transport_config &cfg) {
+    auto *dpdk_mbuf = rte_pktmbuf_alloc(pool->pool);
     dpdk_mbuf->data_len = pkt->data_len;
     dpdk_mbuf->pkt_len = pkt->data_len;
     std::memcpy(rte_pktmbuf_mtod_offset(dpdk_mbuf, uint8_t *,
@@ -156,8 +222,6 @@ public:
     add_mapping(ip->src_addr, eth->src_addr);
     ft.sip = ip->src_addr;
     ft.dip = ip->dst_addr;
-    mbuf->pkt_len -= (sizeof(rte_ipv4_hdr) + sizeof(rte_ether_hdr));
-    mbuf->data_len -= (sizeof(rte_ipv4_hdr) + sizeof(rte_ether_hdr));
   }
 
   void strip_udp(rte_mbuf *mbuf, flow_tuple &ft) {
@@ -165,12 +229,11 @@ public:
                                         protocol::defs::kudpOffset);
     ft.sport = udp->src_port;
     ft.dport = udp->dst_port;
-    mbuf->pkt_len -= sizeof(rte_udp_hdr);
-    mbuf->data_len -= sizeof(rte_udp_hdr);
   }
 
   rte_mbuf *consume_pkt(rte_mbuf *mbuf) {
-    assert(mbuf->nb_segs == 1);
+    FASTT_LOG_DEBUG("Packet with %u segs of len %u\n", mbuf->nb_segs,
+                    mbuf->pkt_len);
     if (!check_ether(mbuf)) {
       broken_packet();
       return nullptr;
@@ -193,30 +256,25 @@ public:
 
   void flush_out_buffer() { qp->flush(); }
 
-  mbuf *strip_header_and_copy(rte_mbuf *msg, flow_tuple &ft) {  
+  mbuf *strip_header_and_copy(rte_mbuf *msg, flow_tuple &ft) {
     strip_ether_ip(msg, ft);
     strip_udp(msg, ft);
-    auto pkt_len = msg->pkt_len;
+    auto pkt_len = msg->pkt_len - protocol::defs::kftOffset;
     mbuf *head = nullptr;
     auto off = protocol::defs::kftOffset;
     if (likely(pkt_len <= sb->kMaxDataLen)) {
-      // fast path for small packets  
+      // fast path for small packets
       head = sb->alloc_default(pkt_len);
-      rte_memcpy(head->data<void>(), rte_pktmbuf_mtod_offset(msg, void *, off),
-                 msg->pkt_len);
+      auto *src = rte_pktmbuf_read(msg, off, pkt_len, head->data<void>());
+      if (src != head->data<void>())
+        rte_memcpy(head->data<void>(), src, pkt_len);
     } else {
-      mbuf **last = &head;
-      while (pkt_len > 0) {
-        auto alloc_size = std::min<uint32_t>(pkt_len, sb->kMaxDataLen);
-        auto *elem = sb->alloc_default(alloc_size);
-        *last = elem;
-        last = &elem->next;
-        if (rte_pktmbuf_read(msg, off, alloc_size, elem->data<void>()))
-          rte_memcpy(elem->data<void>(),
-                     rte_pktmbuf_mtod_offset(msg, void *, off), alloc_size);
-        off += alloc_size;
-        pkt_len -= alloc_size;
-      }
+      head = sb->alloc_large();
+      head->prepend<protocol::ft_header>();
+      assert(head->data_len >= pkt_len);
+      auto *src = rte_pktmbuf_read(msg, off, pkt_len, head->data<void>());
+      if (src != head->data<void>())
+        rte_memcpy(head->data<void>(), src, pkt_len);
     }
     head->ts = *get_tsc(msg);
     return head;

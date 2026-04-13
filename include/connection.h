@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <deque>
-#include <generic/rte_cycles.h>
 #include <memory>
 #include <netinet/in.h>
 #include <sys/types.h>
@@ -12,6 +11,7 @@
 #include "debug.h"
 #include "dev.h"
 #include "dpdk/allocator.h"
+#include "dpdk/dma_mapper.h"
 #include "packet_if.h"
 #include "slab_allocator.h"
 #include "task/task.h"
@@ -38,10 +38,11 @@ class connection_manager {
 public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
-                     uint32_t sip, std::shared_ptr<dpdk_allocator> allocator, std::shared_ptr<qp>& qprings,
-                     P *parent, uint16_t cores)
-      : dev(port, txq, rxq, qprings), pkt_if(&dev, allocator, &sb, sip, port), active(),
-        cores(cores), is_client(is_client) {
+                     uint32_t sip, std::shared_ptr<dpdk_allocator> allocator,
+                     std::shared_ptr<qp> &qprings, P *parent, uint16_t cores)
+      : dev(port, txq, rxq, qprings), sb(dpdk_dma_map, dpdk_dma_unmap),
+        pkt_if(&dev, allocator, &sb, sip, port), active(), cores(cores),
+        is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
     else
@@ -102,7 +103,7 @@ public:
     }
     flush();
 
-    for (auto& con: ready) {
+    for (auto &con : ready) {
       con.perform_recovery();
       if (con.get_state() == connection_state::DISCONNECTED)
         con.link.unlink();

@@ -11,7 +11,6 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
-#include <poll.h>
 #include <pthread.h>
 #include <random>
 #include <stdio.h>
@@ -23,14 +22,32 @@
 #include <thread>
 #include <unistd.h>
 #include <utility>
-
 #include <hdr/hdr_histogram.h>
 
 #include "bench.h"
 #include "uring/cpu.h"
 #include "uring/iface.h"
+#include "util.h"
 #include <tlx/container/btree_map.hpp>
 static bench::storage store;
+
+struct slot_store{
+    struct slot{
+        unsigned slt_idx;
+        int64_t key;
+        uint64_t lat = 0;
+    };
+
+    std::deque<unsigned> free_slots;
+    std::vector<slot> slots;
+    slot_store(unsigned size): slots(size){
+        for(unsigned i = 0; i < size; ++i){
+            free_slots.push_back(i);
+            slots[i].key = 0;
+            slots[i].slt_idx = i;
+        }
+    } 
+};
 
 static size_t handle_request(kv::kv_packet<kv::kv_request> *req,
                              uring::slot &slt) {
@@ -173,26 +190,79 @@ static uint64_t process_completions(uring::client_iface &iface, F &&cb) {
   return c;
 }
 
-static int client_fun_open(uint16_t id, struct sockaddr_in addr,
-                           uint64_t duration, double rate) {
-  std::random_device dev;
-  std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
-  set_thread_affinity(pthread_self(), id);
-  uring::client_iface iface{};
+static int client_setup(uring::client_iface &iface, uint16_t id,
+                        struct sockaddr_in *addr) {
   struct io_uring_cqe *cqe;
+  set_thread_affinity(pthread_self(), id);
   iface.slt.idx = id;
   iface.setup(0);
-  iface.uring_connect(&addr);
+  iface.uring_connect(addr);
   iface.uring_submit_and_wait();
   io_uring_peek_cqe(&iface.ctx->ring, &cqe);
   if (cqe->res < 0) {
     fprintf(stderr, "Failed to connect: %s\n", strerror(-cqe->res));
     return cqe->res;
   }
-
   io_uring_cq_advance(&iface.ctx->ring, 1);
   iface.prepare_recv();
+  return 0;
+}
+
+static int client_fun_closed(uint16_t id, struct sockaddr_in addr, uint64_t duration){
+  std::random_device dev;
+  std::mt19937 rng(dev());
+  std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
+  uring::client_iface iface{};
+  int ret = client_setup(iface, id, &addr);
+  if (ret < 0)
+    return ret;
+  uint64_t inflight = 0;
+  uint64_t rpcs = 0;
+  slot_store st(128);
+  hdr_histogram *hist;
+  hdr_init(1, 500000, 3, &hist);
+  auto start = rdtsc_precise();
+  auto end = duration * get_tsc_freq() + start;
+  auto ticks_per_us = get_tsc_freq() / 1e6;
+  auto rx_cb = [&](kv::kv_packet<kv::kv_completion> *resp) {
+    auto& slt = st.slots[resp->id];
+    assert(resp->payload.key == slt.key);
+    --inflight;
+    ++rpcs;
+    hdr_record_value(hist, (rdtsc() - slt.lat) / (ticks_per_us));
+    st.free_slots.push_back(slt.slt_idx);
+  };
+  while(start < end){
+      process_completions(iface, rx_cb);
+      if(!st.free_slots.empty()){
+          auto id = st.free_slots.front();
+          auto req = request_single(iface.slt, st.slots[id].key, rng, dist, id);
+          if(!req)
+              continue;
+          st.free_slots.pop_front();
+          st.slots[id].lat = rdtsc();
+          ++inflight;
+      }
+      start = rdtsc();
+  }
+  auto rpcs_finished = rpcs;
+  while(inflight)
+      process_completions(iface, rx_cb);
+  printf("%lu\n", st.free_slots.size());
+  printf("RPCs: %f\n", static_cast<double>(rpcs_finished) / duration);
+  printf("P99 %ld\n", hdr_value_at_percentile(hist, 99.0));
+  return 0;
+}
+
+static int client_fun_open(uint16_t id, struct sockaddr_in addr,
+                           uint64_t duration, double rate) {
+  std::random_device dev;
+  std::mt19937 rng(dev());
+  std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
+  uring::client_iface iface{};
+  int ret = client_setup(iface, id, &addr);
+  if (ret < 0)
+    return ret;
 
   std::exponential_distribution<> exp(rate);
   auto start_time = rdtsc_precise() + 1 * get_tsc_freq();
@@ -290,8 +360,10 @@ static int server_fun(uint16_t id, unsigned sz, int port_arg, in_addr_t addr) {
 
 int main(int argc, char *argv[]) {
   uint16_t port_arg = 0;
+  init_tsc();
   int opt, nt = 1;
   bool is_client = false;
+  bool is_open = false;
   bool did_init_addr = false;
   uint64_t duration = 5;
   double rate = 100000;
@@ -299,7 +371,7 @@ int main(int argc, char *argv[]) {
   struct in_addr ip_addr;
   std::vector<std::thread> threads;
 
-  while ((opt = getopt(argc, argv, "p:ca:t:d:r:os:P")) != -1) {
+  while ((opt = getopt(argc, argv, "p:ca:t:d:r:os:")) != -1) {
     switch (opt) {
     case 'p':
       port_arg = std::atoi(optarg);
@@ -320,30 +392,34 @@ int main(int argc, char *argv[]) {
     case 'r':
       rate = std::stod(optarg);
       break;
-
+    case 'o':
+      is_open = true;
+      break;
     case 's':
       sz = std::atol(optarg);
       break;
 
     default:
-      fprintf(stderr,
-              "Usage: %s [-p port] "
-              "[-b log2(BufferSize)] [-6] [-v]\n",
-              argv[0]);
       exit(-1);
     }
   }
   threads.reserve(nt);
   uint16_t pidx = 0;
   for (uint16_t i = 0; i < nt; ++i) {
-    if (is_client) {
+    if (is_client && is_open) {
       threads.emplace_back(client_fun_open, i,
                            sockaddr_in{.sin_family = AF_INET,
                                        .sin_port = htons(port_arg),
                                        .sin_addr = {ip_addr},
                                        .sin_zero = {}},
                            duration, rate);
-
+    } else if (is_client) {
+      threads.emplace_back(client_fun_closed, i,
+                           sockaddr_in{.sin_family = AF_INET,
+                                       .sin_port = htons(port_arg),
+                                       .sin_addr = {ip_addr},
+                                       .sin_zero = {}},
+                           duration);
     } else {
       threads.emplace_back(server_fun, i, sz, port_arg + pidx++,
                            did_init_addr ? ip_addr.s_addr : INADDR_ANY);

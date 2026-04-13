@@ -3,7 +3,6 @@
 #include <cassert>
 #include <cerrno>
 #include <cstdint>
-#include <generic/rte_cycles.h>
 #include <sys/types.h>
 
 #include "debug.h"
@@ -35,7 +34,6 @@ class transport {
   friend M;
 
 public:
-  static constexpr uint16_t kMaxPayload = 1500 - protocol::defs::kHeaderMTUlen;
   struct {
     uint64_t sent = 0;
     uint64_t retransmissions = 0;
@@ -48,6 +46,7 @@ public:
 
   void perform_recovery() {
     ttx.advance_recovery([&](mbuf *pkt) { pkt_if->consume_pkt_mbuf(pkt, cfg); },
+
                          manager->get_current_timer_cycles());
   }
 
@@ -296,6 +295,10 @@ public:
   bool can_recv() { return trx.has_buffered_mbufs_frags(); }
 
   bool can_send() { return (ttx.get_current_wnd() > 0); }
+
+  hdr_histogram* get_hist() const{
+      return cc.get_hist();
+  }
 
   ssize_t send_single_seg(sgl &msgl) {
     if (!ttx.can_transmit())

@@ -17,10 +17,12 @@
 #include <string>
 
 class qpair {
-  static constexpr uint16_t kDefaultInputBurstSize = 64;
 public:
+
+  static constexpr uint16_t kDefaultInputBurstSize = 64;
   qpair(uint16_t port, uint16_t txq, uint16_t rxq, std::shared_ptr<qp>& qp_rings)
       : port(port), txq(txq), rxq(rxq), qp_rings(qp_rings),
+
         tx_buffer(static_cast<rte_eth_dev_tx_buffer *>(
             rte_zmalloc(("tx_buffer" + std::to_string(txq)).c_str(),
                         RTE_ETH_TX_BUFFER_SIZE(kDefaultInputBurstSize),
@@ -64,7 +66,8 @@ public:
       ts_last_flush = now;
   }
 
-  uint16_t get_rxq_id() const{
+
+  uint16_t get_rx_qid() const{
       return rxq;
   }
 

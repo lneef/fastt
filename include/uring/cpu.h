@@ -1,23 +1,14 @@
 #pragma once
 
 #include <cassert>
+#include <chrono>
 #include <cstdint>
-#include <cstdio>
 #include <pthread.h>
 #include <sched.h>
 
 #ifdef __x86_64__
-#include <cpuid.h>
-__inline uint64_t get_tsc_freq() {
-  /*
-uint32_t eax, ebx, ecx, edx;
-__cpuid(0x15, eax, ebx, ecx, edx);
-assert(eax && ebx && ecx);
-return static_cast<uint64_t>(ecx * ebx) / eax;
-*/
-  return 1996.389 * 1e6;
-}
 
+static uint64_t freq = 0;
 __inline uint64_t rdtsc() {
   uint32_t lo, hi;
   __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
@@ -29,8 +20,27 @@ __inline uint64_t rdtsc_precise() {
   __asm__ volatile("rdtscp" : "=a"(lo), "=d"(hi), "=c"(aux));
   return ((uint64_t)hi << 32) | lo;
 }
+
+inline void init_tsc(){
+    auto now = std::chrono::steady_clock::now();
+    auto tsc_now = rdtsc_precise();
+    auto start = now;
+    auto end = now + std::chrono::milliseconds(1000);
+    while(start < end)
+        start = std::chrono::steady_clock::now();
+    auto tsc_end = rdtsc_precise();
+
+    freq = (tsc_end - tsc_now);
+}
+#include <cpuid.h>
+__inline uint64_t get_tsc_freq() {
+    return freq;
+}
+
 #else
 #include <arm_acle.h>
+
+inline void init_tsc(){}
 
 __inline uint64_t get_tsc_freq() {
   uint64_t freq;

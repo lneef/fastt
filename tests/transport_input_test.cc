@@ -122,6 +122,7 @@ TEST_F(TransportInputTest, CumulativeAckReturnsCrd) {
         bool ok = ti->record_pkt(mbuf_take_owner_ship(msg), [](mbuf_ptr&, seq_t) {}, rte_get_timer_cycles());
         ASSERT_TRUE(ok);
     }
+    
     EXPECT_EQ(ti->get_current_wnd(), 125u);
 
     // Control packet uses a seq but does not consume budget
