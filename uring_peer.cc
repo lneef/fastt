@@ -13,7 +13,6 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
-#include <print>
 #include <pthread.h>
 #include <random>
 #include <ranges>
@@ -305,7 +304,7 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
   while (inflight > 0)
     process_completions(iface, rx_cb);
   std::lock_guard lg(mtx);
-  std::printf("%lu\n", hdr_value_at_percentile(hist, 99.0)); 
+  printf("%lu\n", hdr_value_at_percentile(hist, 99.0)); 
   return 0;
 }
 
