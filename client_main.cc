@@ -240,8 +240,6 @@ static int lcore_open_fn(void *arg) {
       }
     }
   };
-
-  auto now = rte_get_timer_cycles();
   while (next < end_time) {
     if (rte_get_timer_cycles() < next) {
       cif.poll();
@@ -272,12 +270,8 @@ static int lcore_open_fn(void *arg) {
     rx_fn(kv);
   }
 
-  auto stats = kv.con->get_stats();
   std::lock_guard lg(mtx);
-  std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   std::cerr << hdr_value_at_percentile(hist, 99.0) << std::endl;
-  auto end = rte_get_timer_cycles();
-  std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
   return 0;
 }
 
