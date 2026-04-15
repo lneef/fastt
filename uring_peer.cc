@@ -414,7 +414,7 @@ int main(int argc, char *argv[]) {
     return -1;
   }
 
-  if(!is_client && threads.size() < ports.size()){
+  if(!is_client && threads.size() > ports.size()){
       fprintf(stderr, "%lu server threads, but only %lu port specified\n", threads.size(), ports.size());
       return -1;
   }
