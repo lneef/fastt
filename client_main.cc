@@ -326,6 +326,7 @@ static void run(lcore_function_t *f, void *args) {
     run(lcore_open_fn, &adapter);
   else
     run(lcore_closed_fn, &adapter);
+#ifdef PRINT_STATS
   {
     auto n = rte_eth_xstats_get_names(0, nullptr, 0);
     std::vector<rte_eth_xstat_name> names(n);
@@ -335,6 +336,7 @@ static void run(lcore_function_t *f, void *args) {
     for (auto &xstat : xstats)
       printf("%s: %lu\n", names[xstat.id].name, xstat.value);
   }
+#endif
   ifc->stop();
   std::cout << "avg: " << lat.load() / rte_lcore_count() << std::endl;
   return 0;
