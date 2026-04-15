@@ -17,16 +17,17 @@
 
 class qpair {
 public:
-    static constexpr uint16_t kDefaultInputBurstSize = 64;
+    static constexpr uint16_t kDefaultInputBurstSize = 256;
+    static constexpr uint16_t kDefaultOutputBurstSize = 32;
   qpair(uint16_t port, uint16_t txq, uint16_t rxq)
       : port(port), txq(txq), rxq(rxq),
         tx_buffer(static_cast<rte_eth_dev_tx_buffer *>(
             rte_zmalloc(("tx_buffer" + std::to_string(txq)).c_str(),
-                        RTE_ETH_TX_BUFFER_SIZE(kDefaultInputBurstSize),
+                        RTE_ETH_TX_BUFFER_SIZE(kDefaultOutputBurstSize),
                         RTE_CACHE_LINE_SIZE))),
         nic_arch(std::make_unique<ena::ena>()) {
     assert(tx_buffer);
-    rte_eth_tx_buffer_init(tx_buffer, kDefaultInputBurstSize);
+    rte_eth_tx_buffer_init(tx_buffer, kDefaultOutputBurstSize);
   };
 
   ~qpair() {
@@ -35,11 +36,7 @@ public:
   }
 
   void enqueue_pkt(rte_mbuf *pkt) {  
-    auto sent = rte_eth_tx_buffer(port, txq, tx_buffer, pkt);
-    total_sent += sent;
-    if(sent)
-        ts_last_flush = rte_get_timer_cycles();
-
+    rte_eth_tx_buffer(port, txq, tx_buffer, pkt);
   }
 
   template <unsigned N> void rx_burst(packet_vector<rte_mbuf*, N> &vec) {
@@ -48,12 +45,7 @@ public:
   }
 
   void flush() {
-      static constexpr uint64_t kFlushThreshold = 5;
-      auto now = rte_get_timer_cycles();
-      if(now - ts_last_flush < get_ticks_us() * kFlushThreshold)
-          return;
       rte_eth_tx_buffer_flush(port, txq, tx_buffer); 
-      ts_last_flush = now;
   }
 
   uint16_t get_rx_qid() const{
@@ -65,8 +57,6 @@ private:
   uint16_t txq;
   uint16_t rxq;
   rte_eth_dev_tx_buffer *tx_buffer;
-  uint64_t total_sent = 0;
-  uint64_t ts_last_flush = 0;
 public:
   std::unique_ptr<nic> nic_arch;
 };
