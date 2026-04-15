@@ -268,7 +268,9 @@ public:
     auto off = protocol::defs::kftOffset;
     if (likely(pkt_len <= kDefaultLen)) {
       // fast path for small packets
-      head = sb->alloc_default(pkt_len);
+      head = sb->alloc_default(pkt_len - sizeof(protocol::ft_header));
+      head->prepend<protocol::ft_header>();
+      assert(head->data_len == pkt_len);
       auto *src = rte_pktmbuf_read(msg, off, pkt_len, head->data<void>());
       if (src != head->data<void>())
         rte_memcpy(head->data<void>(), src, pkt_len);
