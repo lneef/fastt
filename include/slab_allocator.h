@@ -18,16 +18,16 @@ class slab_allocator;
 struct mbuf {
   slab_allocator *sb;
   mbuf *next;
-  uint32_t size : 28;
+  uint32_t data_room : 28;
   uint32_t size_class : 4;
   uint16_t data_len;
   uint16_t headroom : 10;
   uint16_t refcnt : 6;
 
   mbuf() = default;
-  mbuf(slab_allocator *sb, mbuf *next, uint32_t size, uint32_t size_class,
+  mbuf(slab_allocator *sb, mbuf *next, uint32_t data_room, uint32_t size_class,
        uint16_t data_len, uint16_t headroom)
-      : sb(sb), next(next), size(size), size_class(size_class),
+      : sb(sb), next(next), data_room(data_room), size_class(size_class),
         data_len(data_len), headroom(headroom), refcnt(1) {}
 
   uint8_t *buf_start() {
@@ -101,6 +101,13 @@ struct mbuf {
     data_len -= len;
   }
 };
+
+template <typename T, typename F>
+static void parse_mbuf(mbuf &dgram, F &&consumer) {
+  auto off = 0u;
+  while (off < dgram.data_len)
+    off += consumer(dgram.data<T>(off));
+}
 
 struct obj_header {
   obj_header *next;
@@ -211,11 +218,11 @@ public:
 
   mbuf *alloc_default(uint16_t data_len) {
     assert(data_len <= kMaxDataLen);
-    return alloc<0, kDefaultSize, kDefaultHeadroom, false>(data_len);
+    return alloc<0, kMaxDataLen, kDefaultHeadroom, false>(data_len);
   }
 
   mbuf *alloc_large() {
-    return alloc<1, kDefaultJumboSize, kJumboHeadroom, true>(kMaxJumboDataLen);
+    return alloc<1, kMaxJumboDataLen, kJumboHeadroom, true>(kMaxJumboDataLen);
   }
 
   static uintptr_t virt_to_phys(void *vaddr) {
@@ -283,7 +290,6 @@ public:
   void free_single_mbuf(mbuf *obj) {
     assert(obj->size_class < kSizeClassCnt);
     auto &cache = caches[obj->size_class];
-    assert(cache.obj_size == obj->size);
     auto iptr = reinterpret_cast<intptr_t>(obj);
     auto *hdr = reinterpret_cast<obj_header *>(obj);
     if (cache.top < slab_cache::kDefaultCacheSize) {

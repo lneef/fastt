@@ -32,6 +32,8 @@
 
 alignas(RTE_CACHE_LINE_MIN_SIZE) std::atomic<double> lat = 0;
 
+static std::atomic<unsigned> slot_wnd = 8;
+
 struct netconfig {
   rte_ether_addr dmac;
   uint32_t sip, dip;
@@ -59,15 +61,11 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 
   netconfig conf;
   static const struct option long_options[] = {
-      {"dip", required_argument, 0, 0},
-      {"sip", required_argument, 0, 0},
-      {"dmac", required_argument, 0, 0},
-      {"sport", required_argument, 0, 0},
-      {"dport", required_argument, 0, 0},
-      {"duration", required_argument, 0, 0},
-      {"rate", required_argument, 0, 0},
-      {"open", no_argument, 0, 0},
-      {0, 0, 0, 0}};
+      {"dip", required_argument, 0, 0},   {"sip", required_argument, 0, 0},
+      {"dmac", required_argument, 0, 0},  {"sport", required_argument, 0, 0},
+      {"dport", required_argument, 0, 0}, {"duration", required_argument, 0, 0},
+      {"rate", required_argument, 0, 0},  {"open", no_argument, 0, 0},
+      {"wnd", required_argument, 0, 0},   {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
     switch (option_index) {
@@ -100,6 +98,9 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
       break;
     case 7:
       conf.open = true;
+      break;
+    case 8:
+      slot_wnd = atoi(optarg);
     default:
       break;
     }
@@ -114,7 +115,7 @@ static int lcore_closed_fn(void *arg) {
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
-  kv_proxy kv(&cif);
+  kv_proxy kv(&cif, slot_wnd);
   kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
   hdr_histogram *hist;
@@ -132,12 +133,16 @@ static int lcore_closed_fn(void *arg) {
         break;
       auto now = rte_get_timer_cycles();
       for (auto &seg : rsgl) {
-        auto *resp = seg.data<kv::kv_packet<kv::kv_completion>>();
-        assert(resp->payload.key == kv[resp->id].key);
-        kv.complete(resp->id);
-        hdr_record_value(hist, (now - kv[resp->id].ts) / get_ticks_us());
-        ++rpcs_cnt;
-        --inflight;
+        parse_mbuf<kv::kv_packet<kv::kv_completion>>(
+            seg, [&](kv::kv_packet<kv::kv_completion> *resp) {
+              assert(resp->payload.key == kv[resp->id].key);
+              kv.complete(resp->id);
+              hdr_record_value(hist, (now - kv[resp->id].ts) / get_ticks_us());
+              ++rpcs_cnt;
+              --inflight;
+              return resp->payload.data_len +
+                     sizeof(kv::kv_packet<kv::kv_completion>);
+            });
       }
     }
   };
@@ -179,10 +184,13 @@ static int lcore_closed_fn(void *arg) {
 
   auto stats = kv.con->get_stats();
   kv.close();
-FILE *f = fopen(("latency.hgrm" + std::to_string(rte_lcore_id())).c_str(), "w");
+  FILE *f =
+      fopen(("latency.hgrm" + std::to_string(rte_lcore_id())).c_str(), "w");
   hdr_percentiles_print(kv.con->get_hist(), f, 5, 1.0, CLASSIC);
   fclose(f);
-  std::cout << static_cast<double>(rpcs_finished) / (static_cast<double>(adapter->duration) / rte_get_timer_hz()) << std::endl;
+  std::cout << static_cast<double>(rpcs_finished) /
+                   (static_cast<double>(adapter->duration) / rte_get_timer_hz())
+            << std::endl;
   std::cout << hdr_value_at_percentile(hist, 99.0) << std::endl;
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   return 0;
@@ -195,7 +203,7 @@ static int lcore_open_fn(void *arg) {
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
-  kv_proxy kv(&cif);
+  kv_proxy kv(&cif, slot_wnd);
   kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
 
@@ -216,12 +224,17 @@ static int lcore_open_fn(void *arg) {
       if (rcvd <= 0)
         break;
       for (auto &seg : rsgl) {
-        auto *resp = seg.data<kv::kv_packet<kv::kv_completion>>();
-        auto [t, k] = reqs.front();
-        ensure(resp->payload.key == k);
-        hdr_record_value(hist, (rte_get_timer_cycles() - t) / get_ticks_us());
-        reqs.pop_front();
-        --inflight;
+        parse_mbuf<kv::kv_packet<kv::kv_completion>>(
+            seg, [&](kv::kv_packet<kv::kv_completion> *resp) {
+              auto [t, k] = reqs.front();
+              ensure(resp->payload.key == k);
+              hdr_record_value(hist,
+                               (rte_get_timer_cycles() - t) / get_ticks_us());
+              reqs.pop_front();
+              --inflight;
+              return resp->payload.data_len +
+                     sizeof(kv::kv_packet<kv::kv_completion>);
+            });
       }
     }
   };

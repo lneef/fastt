@@ -3,6 +3,7 @@
 #include "client.h"
 #include "connection.h"
 #include "sgl.h"
+#include "slab_allocator.h"
 #include "util.h"
 #include <cstddef>
 #include <cstdint>
@@ -38,7 +39,7 @@ struct kv_slot_store {
 
 class kv_proxy {
 public:
-  kv_proxy(client_iface *ifc) : ifc(ifc), slots(128) {}
+  kv_proxy(client_iface *ifc, unsigned slot_n) : ifc(ifc), slots(slot_n) {}
 
   int connect(const con_config &target, rte_ether_addr &dmac) {
     con = ifc->open(target, dmac);
@@ -79,4 +80,29 @@ private:
 
 public:
   connection *con;
+};
+
+
+struct batch{
+    batch(mbuf_ptr& buf): buf(std::move(buf)), off(0){}
+    batch(): buf(mbuf_take_owner_ship(nullptr)){}
+
+    template<typename T>
+    T* next(uint32_t len){
+        if(len + off > buf->data_room)
+            return nullptr;
+        return reinterpret_cast<T*>(buf->data<T>(off));
+    }
+
+    void finalize(uint32_t len){
+        off += len;
+    }
+
+    mbuf_ptr&& release() &&{
+        buf->data_len = off;
+        return std::move(buf);
+    }
+
+    mbuf_ptr buf;
+    uint32_t off;
 };

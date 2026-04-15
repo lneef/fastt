@@ -2,6 +2,7 @@
 #include "connection.h"
 #include "dpdk/allocator.h"
 #include "iface.h"
+#include "kv.h"
 #include "kv_protocol.h"
 #include "server.h"
 #include "sgl.h"
@@ -39,29 +40,41 @@ struct lcore_server_adapter {
 static bench::storage store;
 static unsigned len = 8;
 
-static void serve(sgl &resp_sgl, slab_allocator &alloc,
+template <typename T>
+static T *alloc_or_get(sgl &rsgl, slab_allocator &alloc, uint32_t len,
+                       batch &btch) {
+  auto *completion = btch.next<T>(len);
+  if (!completion) {
+    rsgl.add_segment_safe(std::move(btch).release());
+    auto seg = alloc.alloc_default_safe(0);
+    btch = batch(seg);
+    completion = btch.next<T>(len);
+  }
+  return completion;
+}
+
+static void serve(batch &btch, sgl &resp_sgl, slab_allocator &alloc,
                   kv::kv_packet<kv::kv_request> *packet) {
   kv::kv_packet<kv::kv_completion> *completion;
   auto key = packet->payload.key;
   auto it = store.find(key);
   if (it == store.end()) {
-    auto seg = alloc.alloc_default_safe(sizeof(*completion));
-    completion = seg->data<kv::kv_packet<kv::kv_completion>>();
+    completion = alloc_or_get<kv::kv_packet<kv::kv_completion>>(
+        resp_sgl, alloc, sizeof(*completion), btch);
     completion->payload.reponse = kv::response_t::FAILURE;
     completion->payload.data_len = 0;
-    resp_sgl.add_segment_safe(std::move(seg));
   } else {
-    auto seg =
-        alloc.alloc_default_safe(sizeof(*completion) + it->second.size());
-    completion = seg->data<kv::kv_packet<kv::kv_completion>>();
+    completion = alloc_or_get<kv::kv_packet<kv::kv_completion>>(
+        resp_sgl, alloc, sizeof(*completion) + it->second.size(), btch);
     completion->payload.reponse = kv::response_t::SUCCESS;
     std::memcpy(completion->payload.data, it->second.data(), it->second.size());
     completion->payload.data_len = it->second.size();
-    resp_sgl.add_segment_safe(std::move(seg));
   }
   completion->id = packet->id;
   completion->pt = packet->pt;
   completion->payload.key = packet->payload.key;
+  btch.finalize(completion->payload.data_len +
+                sizeof(kv::kv_packet<kv::kv_completion>));
 }
 
 static netconfig parse_cmdline(int argc, char *argv[]) {
@@ -102,14 +115,19 @@ int lcore_server_fun(void *arg) {
         while (true) {
           sgl rsgl{};
           auto sz = co_await recv(iface.get_scheduler(), con, rsgl);
-          if (sz == 0) 
+          if (sz == 0)
             co_return;
-          
+          auto seg = slab.alloc_default_safe(0);
+          batch btch(seg);
           assert(ssgl.empty());
           for (auto &seg : rsgl) {
-            assert(seg.data_len == sizeof(kv::kv_packet<kv::kv_request>));
-            serve(ssgl, slab, seg.data<kv::kv_packet<kv::kv_request>>());
+            parse_mbuf<kv::kv_packet<kv::kv_request>>(
+                seg, [&](kv::kv_packet<kv::kv_request> *req) {
+                  serve(btch, ssgl, slab, req);
+                  return sizeof(kv::kv_packet<kv::kv_request>);
+                });
           }
+          ssgl.add_segment_safe(std::move(btch).release());
           ssize_t to_send = ssgl.size;
           auto sent =
               co_await send(iface.get_scheduler(), con, std::move(ssgl));
@@ -145,7 +163,8 @@ int run(netconfig &conf) {
     lcore_ids.push_back(lcore_id);
     ++i;
   }
-  auto ifc = iface::configure_port(0, nthreads, nthreads, allocators, lcore_ids);
+  auto ifc =
+      iface::configure_port(0, nthreads, nthreads, allocators, lcore_ids);
   if (!ifc)
     return -1;
 

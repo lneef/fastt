@@ -130,7 +130,7 @@ public:
     auto iova = pkt->sb->get_iova(pkt, sizeof(protocol::ft_header));
     assert(iova != RTE_BAD_IOVA);
     assert(pkt->size_class == 1);
-    assert(pkt->size == slab_allocator::kDefaultJumboSize);
+    assert(pkt->data_room == slab_allocator::kMaxJumboDataLen);
     assert(
         (reinterpret_cast<uintptr_t>(data) & (slab_allocator::kSlabSize - 1)) ==
         (iova & (slab_allocator::kSlabSize - 1)));

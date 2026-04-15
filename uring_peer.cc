@@ -2,6 +2,7 @@
 #include <bits/getopt_core.h>
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
@@ -13,6 +14,7 @@
 #include <netinet/udp.h>
 #include <pthread.h>
 #include <random>
+#include <ranges>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -359,7 +361,7 @@ static int server_fun(uint16_t id, unsigned sz, int port_arg, in_addr_t addr) {
 }
 
 int main(int argc, char *argv[]) {
-  uint16_t port_arg = 0;
+  std::vector<uint16_t> ports;
   init_tsc();
   int opt, nt = 1;
   bool is_client = false;
@@ -374,7 +376,9 @@ int main(int argc, char *argv[]) {
   while ((opt = getopt(argc, argv, "p:ca:t:d:r:os:")) != -1) {
     switch (opt) {
     case 'p':
-      port_arg = std::atoi(optarg);
+      for (auto part : std::string_view(optarg) | std::views::split(':'))
+        ports.push_back(static_cast<uint16_t>(
+            std::atoi(std::string(part.begin(), part.end()).c_str())));
       break;
     case 'c':
       is_client = true;
@@ -404,24 +408,37 @@ int main(int argc, char *argv[]) {
     }
   }
   threads.reserve(nt);
-  uint16_t pidx = 0;
+  if (ports.empty()) {
+    fprintf(stderr, "no ports specified\n");
+    return -1;
+  }
+
+  if(!is_client && threads.size() < ports.size()){
+      fprintf(stderr, "%lu server threads, but only %lu port specified\n", threads.size(), ports.size());
+      return -1;
+  }
+
+  if(is_open)
+      std::printf("Running Open Loop with rate %f\n", rate);
+  
   for (uint16_t i = 0; i < nt; ++i) {
+    auto port = ports[i % ports.size()];
     if (is_client && is_open) {
       threads.emplace_back(client_fun_open, i,
                            sockaddr_in{.sin_family = AF_INET,
-                                       .sin_port = htons(port_arg),
+                                       .sin_port = htons(port),
                                        .sin_addr = {ip_addr},
                                        .sin_zero = {}},
                            duration, rate);
     } else if (is_client) {
       threads.emplace_back(client_fun_closed, i,
                            sockaddr_in{.sin_family = AF_INET,
-                                       .sin_port = htons(port_arg),
+                                       .sin_port = htons(port),
                                        .sin_addr = {ip_addr},
                                        .sin_zero = {}},
                            duration);
     } else {
-      threads.emplace_back(server_fun, i, sz, port_arg + pidx++,
+      threads.emplace_back(server_fun, i, sz, port,
                            did_init_addr ? ip_addr.s_addr : INADDR_ANY);
     }
   }

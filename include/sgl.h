@@ -2,6 +2,7 @@
 
 #include "slab_allocator.h"
 #include <cstdint>
+#include <rte_memcpy.h>
 struct sgl{
     mbuf_ptr head;
     mbuf* tail;
@@ -18,6 +19,31 @@ struct sgl{
     sgl& operator=(sgl&& other){
         new (this) sgl(std::move(other));
         return *this;
+    }
+
+    void coalesce(){
+        if(!head)
+            return;
+        auto *m = head.get();
+        auto *next = head->next;
+        auto droom = m->data_room;
+        for(; next;){
+            if(next->data_len + m->data_len >= droom){
+                m->next = next;
+                m = next;
+                droom = m->data_room;
+                next = m->next;
+            }else{
+                rte_memcpy(m->data<void>(m->data_len), next->data<void>(), next->data_len);
+                m->data_len += next->data_len;
+                auto *to_del = next;
+                next = next->next;
+                m->next = next;
+                mbuf_free(to_del);
+                --segs;
+            }
+        }
+        tail = m;
     }
 
     struct iterator {
