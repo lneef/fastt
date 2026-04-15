@@ -24,12 +24,14 @@
 #include <hdr/hdr_histogram_log.h>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <ranges>
 #include <rte_lcore.h>
 #include <sys/types.h>
 #include <vector>
 
+std::mutex mtx;
 alignas(RTE_CACHE_LINE_MIN_SIZE) std::atomic<double> lat = 0;
 
 static std::atomic<unsigned> slot_wnd = 8;
@@ -271,10 +273,7 @@ static int lcore_open_fn(void *arg) {
   }
 
   auto stats = kv.con->get_stats();
-  kv.close();
-  FILE *f = fopen("latency.hgrm", "w");
-  hdr_percentiles_print(hist, f, 5, 1.0, CLASSIC);
-  fclose(f);
+  std::lock_guard lg(mtx);
   std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   std::cerr << hdr_value_at_percentile(hist, 99.0) << std::endl;
   auto end = rte_get_timer_cycles();
