@@ -9,9 +9,11 @@
 #include <kv_protocol.h>
 #include <liburing.h>
 #include <liburing/io_uring.h>
+#include <mutex>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
+#include <print>
 #include <pthread.h>
 #include <random>
 #include <ranges>
@@ -256,6 +258,8 @@ static int client_fun_closed(uint16_t id, struct sockaddr_in addr, uint64_t dura
   return 0;
 }
 
+
+std::mutex mtx;
 static int client_fun_open(uint16_t id, struct sockaddr_in addr,
                            uint64_t duration, double rate) {
   std::random_device dev;
@@ -300,10 +304,8 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
   }
   while (inflight > 0)
     process_completions(iface, rx_cb);
-
-  FILE *f = fopen("latency.uring.hgrm", "w");
-  hdr_percentiles_print(hist, f, 5, 1.0, CLASSIC);
-  fclose(f);
+  std::lock_guard lg(mtx);
+  std::printf("%lu\n", hdr_value_at_percentile(hist, 99.0)); 
   return 0;
 }
 
