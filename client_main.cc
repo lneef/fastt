@@ -270,6 +270,8 @@ static int lcore_open_fn(void *arg) {
     rx_fn(kv);
   }
 
+  kv.close();
+
   std::lock_guard lg(mtx);
   std::cerr << hdr_value_at_percentile(hist, 99.0) << std::endl;
   return 0;
