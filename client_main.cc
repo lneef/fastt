@@ -208,7 +208,7 @@ static int lcore_open_fn(void *arg) {
   kv_proxy kv(&cif, slot_wnd);
   kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
-
+  size_t rpcs = 0, rpcs_done = 0;
   std::exponential_distribution<double> exp(adapter->rate);
   auto start_time = rte_get_timer_cycles() + 10 * rte_get_timer_hz();
   auto ticks_per_sec = rte_get_timer_hz();
@@ -234,6 +234,7 @@ static int lcore_open_fn(void *arg) {
                                (rte_get_timer_cycles() - t) / get_ticks_us());
               reqs.pop_front();
               --inflight;
+              ++rpcs;
               return resp->payload.data_len +
                      sizeof(kv::kv_packet<kv::kv_completion>);
             });
@@ -264,7 +265,7 @@ static int lcore_open_fn(void *arg) {
     ++inflight;
     next += exp(rng) * rte_get_timer_hz();
   }
-
+  rpcs_done = rpcs;
   while (inflight > 0) {
     cif.poll();
     rx_fn(kv);
@@ -274,6 +275,7 @@ static int lcore_open_fn(void *arg) {
 
   std::lock_guard lg(mtx);
   std::cerr << hdr_value_at_percentile(hist, 99.0) << std::endl;
+  std::cerr << rpcs_done << std::endl;
   return 0;
 }
 
