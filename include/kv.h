@@ -99,6 +99,7 @@ struct batch{
     }
 
     mbuf_ptr&& release() &&{
+        assert(off < buf->data_room);
         buf->data_len = off;
         return std::move(buf);
     }

@@ -260,12 +260,13 @@ public:
   void flush_out_buffer() { qp->flush(); }
 
   mbuf *strip_header_and_copy(rte_mbuf *msg, flow_tuple &ft) {
+    static constexpr unsigned kDefaultLen = slab_allocator::kMaxDataLen + sizeof(protocol::ft_header);  
     strip_ether_ip(msg, ft);
     strip_udp(msg, ft);
     auto pkt_len = msg->pkt_len - protocol::defs::kftOffset;
     mbuf *head = nullptr;
     auto off = protocol::defs::kftOffset;
-    if (likely(pkt_len <= sb->kMaxDataLen)) {
+    if (likely(pkt_len <= kDefaultLen)) {
       // fast path for small packets
       head = sb->alloc_default(pkt_len);
       auto *src = rte_pktmbuf_read(msg, off, pkt_len, head->data<void>());
