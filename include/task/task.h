@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sgl.h"
+#include <concepts>
 #include <coroutine>
 #include <deque>
 #include <optional>
@@ -147,11 +148,12 @@ public:
 
   void schedule(task_handle handle) { tasks.push_back(handle); }
 
-  void run() {
-    run([]() { return false; });
+  template<typename N>
+  void run(N&& nf) {
+    run([]() { return false; }, nf);
   }
 
-  template <typename F> void run(F &&cb) {
+  template <typename F> void run(F &&cb, auto&& nf) {
     auto task_num = tasks.size();
     for (auto i = 0u; i < task_num; ++i) {
       auto t = tasks.front();
@@ -162,6 +164,8 @@ public:
 
       if (cb())
         return;
+
+      nf();
     }
   }
 
