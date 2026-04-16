@@ -12,7 +12,6 @@
 #include <rte_ethdev.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <rte_dev.h>
 class slab_allocator;
 
 struct mbuf {
@@ -174,6 +173,9 @@ inline void mbuf_free(mbuf *buf);
 using mbuf_ptr = std::unique_ptr<mbuf, decltype(&mbuf_free)>;
 class slab_allocator {
   static constexpr unsigned kSizeClassCnt = 2;
+  static constexpr unsigned kDefaultPrefill = 4;
+  static constexpr unsigned kLargePrefill = 1;
+  static constexpr unsigned kPageCacheSize = 4;
 
 public:
   static constexpr size_t kDefaultHeadroom = 20;
@@ -186,14 +188,21 @@ public:
       9001 - protocol::defs::kHeaderMTUlen;
   static constexpr size_t kDefaultJumboSize =
       kMaxJumboDataLen + kJumboHeadroom + sizeof(mbuf) + 7;
-
   static_assert(kDefaultJumboSize % 64 == 0, "");
-  using dma_map_t = int(*)(void*, size_t, unsigned, uint64_t, size_t);
-  using dma_unmap_t = int(*)(void*, uint64_t, size_t);
+  using dma_map_t = int (*)(void *, size_t, unsigned, uint64_t, size_t);
+  using dma_unmap_t = int (*)(void *, uint64_t, size_t);
 
 public:
-  slab_allocator(dma_map_t map = nullptr, dma_unmap_t unmap = nullptr)
-      : caches{slab_cache(kDefaultSize), slab_cache(kDefaultJumboSize)}, map(map), unmap(unmap) {}
+  slab_allocator(dma_map_t map = nullptr, dma_unmap_t unmap = nullptr,
+                 unsigned default_prefill_thres = kDefaultPrefill,
+                 unsigned large_prefill_thres = kLargePrefill)
+      : caches{slab_cache(kDefaultSize), slab_cache(kDefaultJumboSize)},
+        map(map), unmap(unmap) {
+    for (unsigned i = 0; i < default_prefill_thres; ++i)
+      alloc_new_slab(caches[0]);
+    for (unsigned i = 0; i < large_prefill_thres; ++i)
+      alloc_new_slab(caches[1]);
+  }
 
   template <unsigned cl, size_t mbuf_size, size_t hdroom, bool iova>
   mbuf *alloc(uint16_t data_len) {
@@ -206,11 +215,13 @@ public:
         alloc_new_slab<iova>(cache);
       auto *s = cache.partial.front();
       obj = s->freelist;
+      assert(obj);
       s->freelist = obj->next;
       ++s->inuse;
       if (!s->freelist) {
         slab::list_remove(s);
         cache.full.list_push(s);
+        assert(cache.partial.front() != s);
       }
     }
     return new (obj) mbuf{this, nullptr, mbuf_size, cl, data_len, hdroom};
@@ -252,16 +263,15 @@ public:
   }
 
   template <bool iova = false> void alloc_new_slab(slab_cache &c) {
-    auto *region =
-        mmap(nullptr, kSlabSize, PROT_READ | PROT_WRITE,
-             MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);
-    assert(region != MAP_FAILED);
+    if (pcache.top == 0)
+      fill_cache();
+    auto *region = pcache.pages[--pcache.top];
     auto *s = new (region) slab();
     if constexpr (iova) {
       // prefault, MAP_POPULATE may fail
       s->iova = virt_to_phys(region);
       assert(s->iova != RTE_BAD_IOVA);
-      if(map)
+      if (map)
         map(region, kSlabSize, 1, s->iova, kSlabSize);
     }
 
@@ -332,8 +342,8 @@ public:
       auto *s = list.head.next;
       while (s != &list.tail) {
         auto *next = s->next;
-        if(s->iova && unmap)
-            unmap(s, s->iova, kSlabSize);
+        if (s->iova && unmap)
+          unmap(s, s->iova, kSlabSize);
         munmap(s, kSlabSize);
         s = next;
       }
@@ -345,7 +355,23 @@ public:
   }
 
 private:
+  void fill_cache() {
+    auto *pre = static_cast<uint8_t *>(
+        mmap(nullptr, kSlabSize * (kPageCacheSize - pcache.top), PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0));
+    assert(pre != MAP_FAILED);
+    for (unsigned i = pcache.top; i < kPageCacheSize; ++i) {
+      pcache.pages[pcache.top++] = pre;
+      pre += kSlabSize;
+      assert((reinterpret_cast<uintptr_t>(pcache.pages[pcache.top - 1]) & (kSlabSize - 1)) ==
+             0);
+    }
+  }
   std::array<slab_cache, kSizeClassCnt> caches;
+  struct {
+    std::array<void *, kPageCacheSize> pages;
+    size_t top = 0;
+  } pcache;
   const dma_map_t map;
   const dma_unmap_t unmap;
 };
