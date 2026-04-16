@@ -22,6 +22,7 @@ struct mbuf {
   uint16_t data_len;
   uint16_t headroom : 10;
   uint16_t refcnt : 6;
+  uint64_t ts;
 
   mbuf() = default;
   mbuf(slab_allocator *sb, mbuf *next, uint32_t data_room, uint32_t size_class,
@@ -183,7 +184,7 @@ public:
   static constexpr size_t kDefaultSize =
       kMaxDataLen + kDefaultHeadroom + sizeof(mbuf);
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
-  static constexpr size_t kJumboHeadroom = 104;
+  static constexpr size_t kJumboHeadroom = 96;
   static constexpr size_t kMaxJumboDataLen =
       9001 - protocol::defs::kHeaderMTUlen;
   static constexpr size_t kDefaultJumboSize =
