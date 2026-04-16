@@ -53,6 +53,33 @@ static T *alloc_or_get(sgl &rsgl, slab_allocator &alloc, uint32_t len,
   return completion;
 }
 
+#ifdef NBATCH
+static void serve(sgl &resp_sgl, slab_allocator &alloc,
+                  kv::kv_packet<kv::kv_request> *packet) {
+  kv::kv_packet<kv::kv_completion> *completion;
+  auto key = packet->payload.key;
+  auto it = store.find(key);
+  if (it == store.end()) {
+    auto seg = alloc.alloc_default_safe(sizeof(*completion));
+    completion = seg->data<kv::kv_packet<kv::kv_completion>>();
+    completion->payload.reponse = kv::response_t::FAILURE;
+    completion->payload.data_len = 0;
+    resp_sgl.add_segment_safe(std::move(seg));
+  } else {
+    auto seg =
+        alloc.alloc_default_safe(sizeof(*completion) + it->second.size());
+    completion = seg->data<kv::kv_packet<kv::kv_completion>>();
+    completion->payload.reponse = kv::response_t::SUCCESS;
+    std::memcpy(completion->payload.data, it->second.data(), it->second.size());
+    completion->payload.data_len = it->second.size();
+    resp_sgl.add_segment_safe(std::move(seg));
+  }
+  completion->id = packet->id;
+  completion->pt = packet->pt;
+  completion->payload.key = packet->payload.key;
+}
+#else
+
 static void serve(batch &btch, sgl &resp_sgl, slab_allocator &alloc,
                   kv::kv_packet<kv::kv_request> *packet) {
   kv::kv_packet<kv::kv_completion> *completion;
@@ -76,6 +103,7 @@ static void serve(batch &btch, sgl &resp_sgl, slab_allocator &alloc,
   btch.finalize(completion->payload.data_len +
                 sizeof(kv::kv_packet<kv::kv_completion>));
 }
+#endif
 
 static netconfig parse_cmdline(int argc, char *argv[]) {
   int opt, option_index;
@@ -109,6 +137,42 @@ static void handler(int sig) {
   terminate = 1;
 }
 
+#ifdef NBATCH
+int lcore_server_fun(void *arg) {
+  auto myid = rte_lcore_index(rte_lcore_id());
+  auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
+  auto *server = adapters[myid].iface.get();
+  server->register_service(
+      2, [](server_iface &iface, connection &con) -> concurrency::task {
+        sgl ssgl;
+        auto &slab = *iface.get_alloc();
+        while (true) {
+          sgl rsgl{};
+          auto sz = co_await recv(iface.get_scheduler(), con, rsgl);
+          if (sz == 0) 
+            co_return;
+          
+          assert(ssgl.empty());
+          for (auto &seg : rsgl) {
+            assert(seg.data_len == sizeof(kv::kv_packet<kv::kv_request>));
+            serve(ssgl, slab, seg.data<kv::kv_packet<kv::kv_request>>());
+          }
+          ssize_t to_send = ssgl.size;
+          auto sent =
+              co_await send(iface.get_scheduler(), con, std::move(ssgl));
+          if (sent == 0)
+            co_return;
+          assert(sent == to_send);
+        }
+      });
+
+  while (!terminate)
+    server->run();
+  server->complete();
+
+  return 0;
+}
+#else
 int lcore_server_fun(void *arg) {
   auto myid = rte_lcore_index(rte_lcore_id());
   auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
@@ -148,6 +212,7 @@ int lcore_server_fun(void *arg) {
 
   return 0;
 }
+#endif
 
 int run(netconfig &conf) {
   bench::prepare(store, len, store_size);
