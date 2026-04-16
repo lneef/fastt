@@ -26,14 +26,14 @@ inline std::string random_string(std::size_t length) {
     return s;
 }
 
-inline void prepare(storage& store, size_t sz) {
-  uint32_t size = kStoreSize;
+inline void prepare(storage& store, size_t record, size_t size) {
   for (auto [k, v] :
        std::ranges::views::iota(0u, size) | std::views::transform([&](size_t k) {
-         return std::make_pair(k, random_string(sz));
+         return std::make_pair(k, random_string(record));
        })) {
     store[k] = v;
   }
+  assert(store.size() == size);
 }
 
 };

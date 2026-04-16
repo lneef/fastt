@@ -25,7 +25,6 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <utility>
-
 #include <tlx/container/btree_map.hpp>
 
 struct netconfig {
@@ -39,6 +38,7 @@ struct lcore_server_adapter {
 
 static bench::storage store;
 static unsigned len = 8;
+static unsigned store_size = bench::kStoreSize;
 
 template <typename T>
 static T *alloc_or_get(sgl &rsgl, slab_allocator &alloc, uint32_t len,
@@ -80,9 +80,11 @@ static void serve(batch &btch, sgl &resp_sgl, slab_allocator &alloc,
 static netconfig parse_cmdline(int argc, char *argv[]) {
   int opt, option_index;
   netconfig conf{};
-  static const struct option long_options[] = {{"sip", required_argument, 0, 0},
-                                               {"len", required_argument, 0, 0},
-                                               {0, 0, 0, 0}};
+  static const struct option long_options[] = {
+      {"sip", required_argument, 0, 0},
+      {"len", required_argument, 0, 0},
+      {"size", required_argument, 0, 0},
+      {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
     switch (option_index) {
@@ -91,6 +93,9 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
       break;
     case 1:
       len = atoi(optarg);
+      break;
+    case 2:
+      store_size = std::stol(optarg);
       break;
     }
   }
@@ -145,8 +150,7 @@ int lcore_server_fun(void *arg) {
 }
 
 int run(netconfig &conf) {
-  bench::prepare(store, len);
-
+  bench::prepare(store, len, store_size);
   if (fastt::init())
     return -1;
 
