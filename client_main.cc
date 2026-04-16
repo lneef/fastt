@@ -244,11 +244,10 @@ static int lcore_open_fn(void *arg) {
     }
   };
   while (next < end_time) {
-    if (rte_get_timer_cycles() < next) {
-      cif.poll();
-      rx_fn(kv);
+    cif.poll();
+    rx_fn(kv);  
+    if (rte_get_timer_cycles() < next)
       continue;
-    }
     int64_t key = dist(rng);
     reqs.emplace_back(next, key);
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
