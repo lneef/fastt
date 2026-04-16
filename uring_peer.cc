@@ -32,6 +32,8 @@
 #include "uring/iface.h"
 #include "util.h"
 #include <tlx/container/btree_map.hpp>
+
+std::mutex mtx;
 static bench::storage store;
 static unsigned store_size = bench::kStoreSize;
 struct slot_store {
@@ -211,7 +213,7 @@ static int client_setup(uring::client_iface &iface, uint16_t id,
 }
 
 static int client_fun_closed(uint16_t id, struct sockaddr_in addr,
-                             uint64_t duration) {
+                             uint64_t duration, unsigned slot_sz) {
   std::random_device dev;
   std::mt19937 rng(dev());
   std::uniform_int_distribution<int64_t> dist(0, store_size);
@@ -221,7 +223,7 @@ static int client_fun_closed(uint16_t id, struct sockaddr_in addr,
     return ret;
   uint64_t inflight = 0;
   uint64_t rpcs = 0;
-  slot_store st(128);
+  slot_store st(slot_sz);
   hdr_histogram *hist;
   hdr_init(1, 500000, 3, &hist);
   auto start = rdtsc_precise();
@@ -251,13 +253,12 @@ static int client_fun_closed(uint16_t id, struct sockaddr_in addr,
   auto rpcs_finished = rpcs;
   while (inflight)
     process_completions(iface, rx_cb);
-  printf("%lu\n", st.free_slots.size());
-  printf("RPCs: %f\n", static_cast<double>(rpcs_finished) / duration);
-  printf("P99 %ld\n", hdr_value_at_percentile(hist, 99.0));
+  std::lock_guard lg(mtx);
+  printf("%f\n", static_cast<double>(rpcs_finished) / duration);
+  printf("%ld\n", hdr_value_at_percentile(hist, 99.0));
   return 0;
 }
 
-std::mutex mtx;
 static int client_fun_open(uint16_t id, struct sockaddr_in addr,
                            uint64_t duration, double rate) {
   std::random_device dev;
@@ -372,10 +373,11 @@ int main(int argc, char *argv[]) {
   uint64_t duration = 5;
   double rate = 100000;
   size_t sz = 8;
+  unsigned wnd = 8;
   struct in_addr ip_addr;
   std::vector<std::thread> threads;
 
-  while ((opt = getopt(argc, argv, "p:ca:t:d:r:os:k:")) != -1) {
+  while ((opt = getopt(argc, argv, "p:ca:t:d:r:os:k:w:")) != -1) {
     switch (opt) {
     case 'p':
       for (auto part : std::string_view(optarg) | std::views::split(':'))
@@ -406,6 +408,9 @@ int main(int argc, char *argv[]) {
       break;
     case 'k':
       store_size = std::stol(optarg);
+      break;
+    case 'w':
+      wnd = atoi(optarg);
       break;
     default:
       exit(-1);
@@ -444,7 +449,7 @@ int main(int argc, char *argv[]) {
                                        .sin_port = htons(port),
                                        .sin_addr = {ip_addr},
                                        .sin_zero = {}},
-                           duration);
+                           duration, wnd);
     } else {
       threads.emplace_back(server_fun, i, port,
                            did_init_addr ? ip_addr.s_addr : INADDR_ANY);
