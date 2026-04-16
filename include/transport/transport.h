@@ -34,6 +34,7 @@ class transport {
   friend M;
 
 public:
+  static constexpr unsigned kBurstSize = 32;
   struct {
     uint64_t sent = 0;
     uint64_t retransmissions = 0;
@@ -330,13 +331,15 @@ public:
   ssize_t send_sgl(sgl &msgl) {
     if (connection_state::ESTABLISHED != cstate)
       return 0;
+    unsigned burst = 0;
     ssize_t sent = 0;
-    for (; !msgl.empty();) {
+    for (; !msgl.empty() && burst < kBurstSize;) {
       auto retval = send_single_seg(msgl);
       if (retval < 0) {
         sent = sent == 0 ? retval : sent;
         break;
       }
+      ++burst;
       sent += retval;
     }
     FASTT_LOG_DEBUG("send len=%lu total=%zd\n", msgl.size, sent);
