@@ -268,7 +268,7 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
   int ret = client_setup(iface, id, &addr);
   if (ret < 0)
     return ret;
-  size_t rpcs = 0, rpcs_done = 0;
+  size_t rpcs = 0;
   std::exponential_distribution<> exp(rate);
   auto start_time = rdtsc_precise() + 1 * get_tsc_freq();
   uint64_t ticks_per_sec = get_tsc_freq();
@@ -290,10 +290,9 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
   };
 
   while (next < end_time) {
-    if (rdtsc() < next) {
-      process_completions(iface, rx_cb);
+    process_completions(iface, rx_cb);
+    if (rdtsc() < next) 
       continue;
-    }
 
     int64_t key;
     while (!request_single(iface.slt, key, rng, dist, id))
@@ -302,12 +301,10 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
     reqs.emplace_back(next, key);
     next += ticks_per_sec * exp(rng);
   }
-  rpcs_done = rpcs;
   while (inflight > 0)
     process_completions(iface, rx_cb);
   std::lock_guard lg(mtx);
   printf("%lu\n", hdr_value_at_percentile(hist, 99.0));
-  printf("%lu\n", rpcs_done);
   return 0;
 }
 
