@@ -10,6 +10,7 @@
 #include "util.h"
 #include <arpa/inet.h>
 #include <atomic>
+#include <bits/getopt_core.h>
 #include <cassert>
 #include <cerrno>
 #include <charconv>
@@ -35,6 +36,7 @@ std::mutex mtx;
 alignas(RTE_CACHE_LINE_MIN_SIZE) std::atomic<double> lat = 0;
 
 static std::atomic<unsigned> slot_wnd = 8;
+static size_t keySpace = bench::kStoreSize;
 
 struct netconfig {
   rte_ether_addr dmac;
@@ -67,7 +69,8 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
       {"dmac", required_argument, 0, 0},  {"sport", required_argument, 0, 0},
       {"dport", required_argument, 0, 0}, {"duration", required_argument, 0, 0},
       {"rate", required_argument, 0, 0},  {"open", no_argument, 0, 0},
-      {"wnd", required_argument, 0, 0},   {0, 0, 0, 0}};
+      {"wnd", required_argument, 0, 0},   {"kspace", required_argument, 0, 0}, 
+      {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
     switch (option_index) {
@@ -103,6 +106,10 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
       break;
     case 8:
       slot_wnd = atoi(optarg);
+      break;
+    case 9:
+      keySpace = std::stol(optarg);
+      break;
     default:
       break;
     }
@@ -113,7 +120,7 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 static int lcore_closed_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
+  std::uniform_int_distribution<int64_t> dist(0, keySpace);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
@@ -184,7 +191,6 @@ static int lcore_closed_fn(void *arg) {
     rx_fn();
   }
 
-  auto stats = kv.con->get_stats();
   kv.close();
   std::lock_guard lg(mtx);
   std::cout << static_cast<double>(rpcs_finished) /
@@ -197,7 +203,7 @@ static int lcore_closed_fn(void *arg) {
 static int lcore_open_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(0, 1024 * 1024);
+  std::uniform_int_distribution<int64_t> dist(0, keySpace);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
