@@ -9,7 +9,7 @@ namespace bench {
 using req_desc_t = std::pair<uint64_t, int64_t>;
 using storage = tlx::btree_map<int64_t, std::string>;
 
-static constexpr size_t kStoreSize = 1000 * 1000 * 50;
+static constexpr size_t kStoreSize = 1000 * 1000 * 10;
 static constexpr size_t kMaxBurstLimit = 32;
 static constexpr size_t kPipelineDepth = 8;
 
