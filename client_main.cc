@@ -113,7 +113,7 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 static int lcore_closed_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(0, 1024 * 1024);
+  std::uniform_int_distribution<int64_t> dist(0, bench::kStoreSize);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
@@ -186,15 +186,11 @@ static int lcore_closed_fn(void *arg) {
 
   auto stats = kv.con->get_stats();
   kv.close();
-  FILE *f =
-      fopen(("latency.hgrm" + std::to_string(rte_lcore_id())).c_str(), "w");
-  hdr_percentiles_print(kv.con->get_hist(), f, 5, 1.0, CLASSIC);
-  fclose(f);
+  std::lock_guard lg(mtx);
   std::cout << static_cast<double>(rpcs_finished) /
                    (static_cast<double>(adapter->duration) / rte_get_timer_hz())
             << std::endl;
   std::cout << hdr_value_at_percentile(hist, 99.0) << std::endl;
-  std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
   return 0;
 }
 
