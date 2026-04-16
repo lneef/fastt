@@ -60,6 +60,7 @@ void connection_manager::run_loop_head(concurrency::scheduler& scheduler){
       if (con.acknowledge())
         ack_outstanding.push_back(con);
     }
+    flush();
 }
 
 void connection_manager::run(concurrency::scheduler &scheduler) {
@@ -90,7 +91,6 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
   }
 
   assert(ready.empty());
-  assert(ack_outstanding.empty());
 
   scheduler.run([&](){ run_loop_head(scheduler); });
   check_timeouts();
