@@ -176,7 +176,7 @@ class slab_allocator {
   static constexpr unsigned kSizeClassCnt = 2;
   static constexpr unsigned kDefaultPrefill = 4;
   static constexpr unsigned kLargePrefill = 1;
-  static constexpr unsigned kPageCacheSize = 4;
+  static constexpr unsigned kPageCacheSize = 8;
 
 public:
   static constexpr size_t kDefaultHeadroom = 20;
