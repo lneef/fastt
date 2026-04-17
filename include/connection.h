@@ -140,7 +140,7 @@ public:
     }
   }
 
-  void run_loop_head(concurrency::scheduler& scheduler); 
+  uint64_t run_loop_head(concurrency::scheduler& scheduler); 
 
   std::pair<connection *, bool> add_connection(flow_tuple &tuple, mbuf *pkt) {
     transport_config cfg;

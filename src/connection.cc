@@ -42,7 +42,7 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
   return it->second.get();
 }
 
-void connection_manager::run_loop_head(concurrency::scheduler& scheduler){
+uint64_t connection_manager::run_loop_head(concurrency::scheduler& scheduler){
     update_current_timer_cycles();
     fetch_from_qpair();
     accept_connections([&](connection *con) {
@@ -61,6 +61,7 @@ void connection_manager::run_loop_head(concurrency::scheduler& scheduler){
         ack_outstanding.push_back(con);
     }
     flush();
+    return r_ts;
 }
 
 void connection_manager::run(concurrency::scheduler &scheduler) {
