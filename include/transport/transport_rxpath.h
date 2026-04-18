@@ -111,12 +111,12 @@ struct transport_rxpath {
 
   void put_dgram(mbuf_ptr &&pkt) {
     auto *hdr = pkt->data<protocol::ft_header>();
+    dgram_ts = std::max(pkt->ts, dgram_ts);
     // control frames are freed
     if (hdr->type != protocol::pkt_type::FT_MSG) {
       seen_done = hdr->type == protocol::pkt_type::FT_DONE;
       return;
     }
-    dgram_ts = std::max(pkt->ts, dgram_ts);
     pkt->adj(sizeof(protocol::ft_header));
     out.emplace_back(std::move(pkt));
   }

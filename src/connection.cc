@@ -76,6 +76,7 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
     scheduler.schedule(service_handler(*server_parent, *con).handle);
   });
 
+  update_current_timer_cycles();
   for (size_t i = 0u, end = ack_outstanding.size(); i < end; ++i) {
     auto &con = ack_outstanding.front();
     ack_outstanding.pop_front();
