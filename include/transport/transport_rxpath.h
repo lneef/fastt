@@ -81,6 +81,7 @@ struct reorder_buffer {
 
 struct transport_rxpath {
   // reserve some headroom
+  static constexpr unsigned kBurstLen = 32;
   static constexpr unsigned kMaxGrantSize = 256;
   static constexpr unsigned kMaxBitMapSize = 2 * kMaxGrantSize;
   transport_rxpath(seq_t max_rx_in_window = {~0u}, seq_t next_seq = {0})
@@ -182,7 +183,7 @@ struct transport_rxpath {
     if (out.empty()) 
       return -EAGAIN;
     ssize_t rx = 0;
-    while (!out.empty()) {
+    while (!out.empty() && rx < kBurstLen) {
       auto &buffered = out.front();
       msgl.add_segment_safe(std::move(buffered)); 
       ++crds.crds_returned;
