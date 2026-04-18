@@ -66,7 +66,7 @@ struct qp {
 
 struct rx_poll {
   static constexpr unsigned kFreeThres = 256;
-  static constexpr unsigned kBurstSize = 32;
+  static constexpr unsigned kBurstSize = 128;
   using poll_ctx = std::pair<std::shared_ptr<qp>, uint16_t>;
 
   std::vector<poll_ctx> rx;

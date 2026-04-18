@@ -248,7 +248,7 @@ int run(netconfig &conf) {
     ++i;
   }
   std::shared_ptr<dpdk_allocator> rx_allocator =
-      dpdk_allocator::create("rx", (nthreads - 1) * 2048 - 1);
+      dpdk_allocator::create("rx", nthreads * 2048 - 1);
   auto ifc =
       iface::configure_port(0, nthreads, nthreads, rx_allocator, lcore_ids);
 

@@ -156,9 +156,7 @@ public:
 
   template <typename F> void run(F &&cb, auto &&nf) {
     auto task_num = tasks.size();
-    auto last = rte_get_timer_cycles();
     for (auto i = 0u; i < task_num; ++i) {
-      auto round = rte_get_timer_cycles();
       auto t = tasks.front();
       tasks.pop_front();
       t.resume();
@@ -167,16 +165,12 @@ public:
 
       if (cb())
         return;
-      if (last + round_duration < round) {
-        nf();
-        last = round;
-      }
+
     }
   }
 
 private:
   std::deque<task_handle> tasks;
-  const uint64_t round_duration = get_ticks_us() * kRoundDurationUs;
 };
 
 using coro_handle = std::coroutine_handle<task::promise_type>;
