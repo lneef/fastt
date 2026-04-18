@@ -138,7 +138,7 @@ public:
       if (!check_pkt(msg, hdr->seq))
         return false;
       if (hdr->ackframe)
-        ttx.acknowledge(hdr->ack, ts);
+        ttx.acknowledge(hdr->ack, ts, hdr->ts);
       if (hdr->crd)
         ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
@@ -146,7 +146,7 @@ public:
     }
     case protocol::pkt_type::FT_ACK: {
       FASTT_LOG_DEBUG("Got ACK ack=%u sack=%u\n", hdr->ack.v, hdr->sack);
-      ttx.acknowledge(hdr->ack, ts);
+      ttx.acknowledge(hdr->ack, ts, hdr->ts);
       if (hdr->sack) {
         auto *sack_payload =
             msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));
@@ -177,7 +177,7 @@ public:
                       hdr->ack.v, hdr->crd);
       if (!check_pkt(msg, hdr->seq))
         return false;
-      ttx.acknowledge(hdr->ack, ts);
+      ttx.acknowledge(hdr->ack, ts, hdr->ts);
       assert(hdr->crd > 0);
       ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
@@ -189,7 +189,7 @@ public:
       if (!check_pkt(msg, hdr->seq))
         return false;
       if (hdr->ackframe)
-        ttx.acknowledge(hdr->ack, ts);
+        ttx.acknowledge(hdr->ack, ts, hdr->ts);
       ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
       break;
@@ -205,7 +205,7 @@ public:
         mbuf_free(msg);
         return false;
       }
-      ttx.acknowledge(hdr->ack, ts);
+      ttx.acknowledge(hdr->ack, ts, hdr->ts);
       // if the connection is done and only the last packet if missing proceed
       // otherwise drop
       assert(ttx.all_acked());
