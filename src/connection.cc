@@ -10,12 +10,11 @@
 #include <netinet/in.h>
 #include <random>
 
-static std::mt19937 rng;
-static std::uniform_int_distribution<uint16_t> dist{0, UINT16_MAX};
-
 connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
                                                 const uint32_t sip,
                                                 const uint32_t dip) {
+  std::mt19937 rng;
+  std::uniform_int_distribution<uint16_t> dist{0, UINT16_MAX};  
   uint16_t rx_flow_sport, rx_flow_dport;
   transport_config cfg;
   cfg.ip = dip;
