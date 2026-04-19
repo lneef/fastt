@@ -143,7 +143,7 @@ static void handler(int sig) {
 int lcore_server_fun(void *arg) {
   auto myid = rte_lcore_index(rte_lcore_id()) - 1;
   auto &adapters = *static_cast<std::vector<lcore_server_adapter> *>(arg);
-  auto *server = adapters[myid - 1].iface.get();
+  auto *server = adapters[myid].iface.get();
   server->register_service(
       2, [](server_iface &iface, connection &con) -> concurrency::task {
         sgl ssgl;
