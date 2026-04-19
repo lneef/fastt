@@ -19,23 +19,9 @@ fastt_lib = static_library('fastt', sources, include_directories: include_direct
   dependencies: [dpdk_dep, hdr_histogram_dep], link_args: ['-lcap', '-Wl,--allow-multiple-definition', '-Wl,--whole-archive'])
 
 
-executable('client', 'client_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep, tlx_dep, hdr_histogram_dep], link_with: fastt_lib, link_args: ['-lcap'])
-executable('server', 'server_main.cc', include_directories: include_directories('include'), dependencies: [dpdk_dep, tlx_dep, hdr_histogram_dep], link_with: fastt_lib, link_args: ['-lcap'])
-executable('uring', 'uring_peer.cc', include_directories: include_directories('include'), dependencies: [tlx_dep, dpdk_dep, hdr_histogram_dep], link_args: ['-luring', '-lcap'])
-
-# testing
-gtest_dep = dependency('gtest', required: true)
-gtest_main_dep = dependency('gtest_main', required: true)
-test_inc = include_directories('include', 'tests')
-
-test_srcs = files('tests/test.cc',
-  'tests/transport_input_test.cc',
-  'tests/transport_output_test.cc',
-  )
-unit_tests = executable('unit_tests',
-  test_srcs,
-  include_directories: test_inc,
-  dependencies: [dpdk_dep, gtest_dep, gtest_main_dep, hdr_histogram_dep],
-  link_with: fastt_lib,
-  link_args: ['-lcap'])
-test('unit_tests', unit_tests, protocol: 'gtest')
+executable('client', 'client_main.cc', include_directories: include_directories('include'), 
+  dependencies: [dpdk_dep, tlx_dep, hdr_histogram_dep], link_with: fastt_lib, link_args: ['-lcap'])
+executable('server', 'server_main.cc', include_directories: include_directories('include'), 
+  dependencies: [dpdk_dep, tlx_dep, hdr_histogram_dep], link_with: fastt_lib, link_args: ['-lcap'])
+executable('uring', 'uring_peer.cc', include_directories: include_directories('include'), 
+  dependencies: [tlx_dep, dpdk_dep, hdr_histogram_dep], link_args: ['-luring', '-lcap'])

@@ -6,12 +6,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
-#include <generic/rte_prefetch.h>
 #include <memory>
-#include <rte_dev.h>
-#include <rte_ethdev.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <array>
 class slab_allocator;
 
 struct mbuf {
@@ -149,14 +147,14 @@ struct slab_cache {
 
     slab *front() { return head.next; }
   };
-  slab_list partial;
-  slab_list full;
+  slab_list free_list;
+  slab_list full_list;
   size_t obj_size;
   unsigned top = 0;
   unsigned color = 0;
   std::array<obj_header *, kDefaultCacheSize> local_cache;
 
-  slab_cache(size_t obj_size) : partial(), full(), obj_size(obj_size) {}
+  slab_cache(size_t obj_size) : free_list(), full_list(), obj_size(obj_size) {}
 };
 
 template <typename B> B *get_new_backend_data(mbuf *data) {
@@ -212,17 +210,17 @@ public:
     if (cache.top) {
       obj = cache.local_cache[--cache.top];
     } else {
-      if (cache.partial.empty())
+      if (cache.free_list.empty())
         alloc_new_slab<iova>(cache);
-      auto *s = cache.partial.front();
+      auto *s = cache.free_list.front();
       obj = s->freelist;
       assert(obj);
       s->freelist = obj->next;
       ++s->inuse;
       if (!s->freelist) {
         slab::list_remove(s);
-        cache.full.list_push(s);
-        assert(cache.partial.front() != s);
+        cache.full_list.list_push(s);
+        assert(cache.free_list.front() != s);
       }
     }
     return new (obj) mbuf{this, nullptr, mbuf_size, cl, data_len, hdroom};
@@ -288,7 +286,7 @@ public:
     auto *obj = reinterpret_cast<obj_header *>(base + off);
     obj->next = nullptr;
     c.color = (c.color + 64) & 1023;
-    c.partial.list_push(s);
+    c.free_list.list_push(s);
   }
 
   uintptr_t get_iova(mbuf *obj, unsigned off) const {
@@ -308,13 +306,13 @@ public:
       cache.local_cache[cache.top++] = hdr;
     } else {
       auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
-      bool was_full = !slb->freelist;
+      bool was_full_list = !slb->freelist;
       hdr->next = slb->freelist;
       slb->freelist = hdr;
       --slb->inuse;
-      if (was_full) {
+      if (was_full_list) {
         slab::list_remove(slb);
-        cache.partial.list_push(slb);
+        cache.free_list.list_push(slb);
       }
     }
   }
@@ -350,8 +348,8 @@ public:
       }
     };
     for (auto &cache : caches) {
-      free_slabs(cache.partial);
-      free_slabs(cache.full);
+      free_slabs(cache.free_list);
+      free_slabs(cache.full_list);
     }
   }
 
