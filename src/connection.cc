@@ -84,11 +84,12 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
   }
 
   flush();
-  while (!ready.empty()) {
+  auto ready_num = ready.size();
+  for (unsigned i = 0; i < ready_num; ++i) {
     auto &con = ready.front();
+    ready.pop_front();
     con.perform_recovery();
     concurrency::make_progress(con);
-    ready.pop_front();
   }
 
   assert(ready.empty());

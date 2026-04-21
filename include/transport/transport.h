@@ -333,15 +333,20 @@ public:
       return 0;
     unsigned burst = 0;
     ssize_t sent = 0;
+    ssize_t retval = 0;
     for (; !msgl.empty() && burst < kBurstSize;) {
-      auto retval = send_single_seg(msgl);
+      retval = send_single_seg(msgl);
       if (retval < 0) {
         sent = sent == 0 ? retval : sent;
-        break;
+        goto done;
       }
       ++burst;
       sent += retval;
     }
+
+    if(burst == kBurstSize && !msgl.empty())
+        manager->link_ready(*this);
+done: 
     FASTT_LOG_DEBUG("send len=%lu total=%zd\n", msgl.size, sent);
     return sent;
   }
