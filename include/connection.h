@@ -32,9 +32,7 @@ struct statistics {
 };
 
 class connection_manager {
-  static constexpr uint16_t kdefaultBurstSize = 64;
   friend connection;
-
 public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
@@ -70,6 +68,13 @@ public:
         mbuf_free(pkt);
       }
     }
+  }
+
+  void link_ready(connection& con){
+      if(is_client)
+          return;
+      if(!con.ready.is_linked())
+        ready.push_back(con);
   }
 
   void check_timeouts() {

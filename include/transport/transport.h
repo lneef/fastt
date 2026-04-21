@@ -138,7 +138,7 @@ public:
       if (!check_pkt(msg, hdr->seq))
         return false;
       if (hdr->ackframe)
-        ttx.acknowledge(hdr->ack, ts);
+        ttx.acknowledge(hdr->ack, ts, hdr->ts);
       if (hdr->crd)
         ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
@@ -177,7 +177,7 @@ public:
                       hdr->ack.v, hdr->crd);
       if (!check_pkt(msg, hdr->seq))
         return false;
-      ttx.acknowledge(hdr->ack, ts);
+      ttx.acknowledge(hdr->ack, ts, hdr->ts);
       assert(hdr->crd > 0);
       ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
@@ -189,7 +189,7 @@ public:
       if (!check_pkt(msg, hdr->seq))
         return false;
       if (hdr->ackframe)
-        ttx.acknowledge(hdr->ack, ts);
+        ttx.acknowledge(hdr->ack, ts, hdr->ts);
       ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
       break;
@@ -205,7 +205,7 @@ public:
         mbuf_free(msg);
         return false;
       }
-      ttx.acknowledge(hdr->ack, ts);
+      ttx.acknowledge(hdr->ack, ts, hdr->ts);
       // if the connection is done and only the last packet if missing proceed
       // otherwise drop
       assert(ttx.all_acked());
@@ -333,15 +333,20 @@ public:
       return 0;
     unsigned burst = 0;
     ssize_t sent = 0;
+    ssize_t retval = 0;
     for (; !msgl.empty() && burst < kBurstSize;) {
-      auto retval = send_single_seg(msgl);
+      retval = send_single_seg(msgl);
       if (retval < 0) {
         sent = sent == 0 ? retval : sent;
-        break;
+        goto done;
       }
       ++burst;
       sent += retval;
     }
+
+    if(burst == kBurstSize && !msgl.empty())
+        manager->link_ready(*this);
+done: 
     FASTT_LOG_DEBUG("send len=%lu total=%zd\n", msgl.size, sent);
     return sent;
   }

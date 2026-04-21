@@ -219,10 +219,9 @@ public:
     if (cumulative_rtt != ~0ull) {
       update_srtt(cumulative_rtt);
       rck.rtt = cumulative_rtt;
+      cc.on_ack(acked, ts, rtt, cumulative_rtt - app_delay);
     }
-
     assert(budget <= transport_rxpath::kMaxGrantSize);
-    cc.on_ack(acked, ts, rtt, rck.rtt - app_delay);
   }
 
   template <typename F>

@@ -224,7 +224,6 @@ int run_rx_lcore(void *arg) {
 }
 
 int run(netconfig &conf) {
-  bench::prepare(store, len, store_size);
   if (fastt::init())
     return -1;
 
@@ -254,6 +253,8 @@ int run(netconfig &conf) {
 
   if (!ifc)
     return -1;
+  bench::prepare(store, len, store_size);
+  printf("Setup complete\n");
 
   std::vector<lcore_server_adapter> adapters(nthreads);
   rx_poll rp{0};
