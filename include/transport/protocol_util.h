@@ -73,7 +73,7 @@ struct builder {
   }
 
   inline void prepare_init_ack_header(mbuf *msg, seq_t seq, seq_t ack,
-                                      uint16_t wnd, bool is_ack_frame) {
+                                      uint16_t wnd, bool is_ack_frame, uint64_t ts) {
     auto *ft = msg->data<protocol::ft_header>();
     ft->sport = sport;
     ft->dport = dport;
@@ -82,7 +82,7 @@ struct builder {
     ft->seq = seq;
     ft->ackframe = is_ack_frame;
     ft->sack = 0;
-    ft->ts = 0;
+    ft->ts = ts;
     ft->type = protocol::pkt_type::FT_SYN_ACK;
     ft->ts = 0;
   }

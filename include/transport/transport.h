@@ -108,8 +108,9 @@ public:
     }
     if (trx.seen_done)
       cstate = connection_state::DISCONNECTED;
-    builder.prepare_ack_pkt(msg.get(), ack, is_sack,
-                            (manager->get_current_timer_cycles() - trx.dgram_ts) / get_ticks_us());
+    builder.prepare_ack_pkt(
+        msg.get(), ack, is_sack,
+        (manager->get_current_timer_cycles() - trx.dgram_ts) / get_ticks_us());
     pkt_if->consume_pkt_mbuf(msg.get(), cfg);
     return acb.pending_dup_acks;
   }
@@ -138,7 +139,7 @@ public:
       if (!check_pkt(msg, hdr->seq))
         return false;
       if (hdr->ackframe)
-        ttx.acknowledge(hdr->ack, ts, hdr->ts);
+        ttx.acknowledge(hdr->ack, msg->ts, hdr->ts);
       if (hdr->crd)
         ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
@@ -146,11 +147,11 @@ public:
     }
     case protocol::pkt_type::FT_ACK: {
       FASTT_LOG_DEBUG("Got ACK ack=%u sack=%u\n", hdr->ack.v, hdr->sack);
-      ttx.acknowledge(hdr->ack, ts, hdr->ts);
+      ttx.acknowledge(hdr->ack, msg->ts, hdr->ts);
       if (hdr->sack) {
         auto *sack_payload =
             msg->data<protocol::ft_sack_payload>(sizeof(protocol::ft_header));
-        ttx.acknowledge_sack(sack_payload, hdr->ack, ts);
+        ttx.acknowledge_sack(sack_payload, hdr->ack, msg->ts);
         ttx.detect_loss(ts);
       }
       if (cstate == connection_state::DISCONNECTING && ttx.all_acked())
@@ -177,7 +178,7 @@ public:
                       hdr->ack.v, hdr->crd);
       if (!check_pkt(msg, hdr->seq))
         return false;
-      ttx.acknowledge(hdr->ack, ts, hdr->ts);
+      ttx.acknowledge(hdr->ack, msg->ts, hdr->ts);
       assert(hdr->crd > 0);
       ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
@@ -189,7 +190,7 @@ public:
       if (!check_pkt(msg, hdr->seq))
         return false;
       if (hdr->ackframe)
-        ttx.acknowledge(hdr->ack, ts, hdr->ts);
+        ttx.acknowledge(hdr->ack, msg->ts, hdr->ts);
       ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, msg, acb);
       break;
@@ -205,7 +206,7 @@ public:
         mbuf_free(msg);
         return false;
       }
-      ttx.acknowledge(hdr->ack, ts, hdr->ts);
+      ttx.acknowledge(hdr->ack, msg->ts, hdr->ts);
       // if the connection is done and only the last packet if missing proceed
       // otherwise drop
       assert(ttx.all_acked());
@@ -276,7 +277,10 @@ public:
           auto ackframe = acb.has_unacked_pkts();
           if (ackframe)
             acb.mark_as_acked(ack);
-          builder.prepare_init_ack_header(msg, seq, ack, budget, ackframe);
+          assert(trx.dgram_ts != 0);  
+          builder.prepare_init_ack_header(msg, seq, ack, budget, ackframe,
+                                          (now - trx.dgram_ts) /
+                                              get_ticks_us());
         },
         now);
     ttx.rearm(now);
@@ -296,9 +300,7 @@ public:
 
   bool can_send() { return (ttx.get_current_wnd() > 0); }
 
-  hdr_histogram* get_hist() const{
-      return cc.get_hist();
-  }
+  hdr_histogram *get_hist() const { return cc.get_hist(); }
 
   ssize_t send_single_seg(sgl &msgl) {
     if (!ttx.can_transmit())
@@ -344,9 +346,9 @@ public:
       sent += retval;
     }
 
-    if(burst == kBurstSize && !msgl.empty())
-        manager->link_ready(*this);
-done: 
+    if (burst == kBurstSize && !msgl.empty())
+      manager->link_ready(*this);
+  done:
     FASTT_LOG_DEBUG("send len=%lu total=%zd\n", msgl.size, sent);
     return sent;
   }
