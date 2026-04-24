@@ -10,6 +10,7 @@
 #include "util.h"
 #include <arpa/inet.h>
 #include <atomic>
+#include <barrier>
 #include <bits/getopt_core.h>
 #include <cassert>
 #include <cerrno>
@@ -49,15 +50,19 @@ struct netconfig {
 };
 
 struct lcore_adapter {
-  std::vector<std::unique_ptr<client_iface>> cifs;
+  std::vector<std::tuple<uint16_t, uint16_t, uint16_t>> cifs;
   std::vector<std::shared_ptr<dpdk_allocator>> allocator;
   con_config cfg;
+  netconfig nef_cfg;
   rte_ether_addr dmac;
   uint64_t duration;
   double rate;
+  unsigned nthreads = 0;
 
-  lcore_adapter(std::size_t n, con_config cfg)
-      : cifs(n), allocator(n, nullptr), cfg(cfg) {}
+  std::barrier<> barrier;
+
+  lcore_adapter(std::size_t n, con_config cfg, netconfig &nef_cfg, unsigned nthreads)
+      : cifs(n), allocator(n, nullptr), cfg(cfg), nef_cfg(nef_cfg), nthreads(nthreads), barrier(nthreads) {}
 };
 
 static netconfig parse_cmdline(int argc, char *argv[]) {
@@ -65,11 +70,16 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 
   netconfig conf;
   static const struct option long_options[] = {
-      {"dip", required_argument, 0, 0},   {"sip", required_argument, 0, 0},
-      {"dmac", required_argument, 0, 0},  {"sport", required_argument, 0, 0},
-      {"dport", required_argument, 0, 0}, {"duration", required_argument, 0, 0},
-      {"rate", required_argument, 0, 0},  {"open", no_argument, 0, 0},
-      {"wnd", required_argument, 0, 0},   {"kspace", required_argument, 0, 0}, 
+      {"dip", required_argument, 0, 0},
+      {"sip", required_argument, 0, 0},
+      {"dmac", required_argument, 0, 0},
+      {"sport", required_argument, 0, 0},
+      {"dport", required_argument, 0, 0},
+      {"duration", required_argument, 0, 0},
+      {"rate", required_argument, 0, 0},
+      {"open", no_argument, 0, 0},
+      {"wnd", required_argument, 0, 0},
+      {"kspace", required_argument, 0, 0},
       {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
@@ -123,10 +133,16 @@ static int lcore_closed_fn(void *arg) {
   std::uniform_int_distribution<int64_t> dist(0, keySpace);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
-  auto &cif = *adapter->cifs[me];
-  kv_proxy kv(&cif, slot_wnd);
+  auto [port, txq, rxq] = adapter->cifs[me];
+  auto cif = std::make_unique<client_iface>(
+      port, txq, rxq, adapter->allocator[me],
+      con_config{adapter->nef_cfg.sip, adapter->nef_cfg.sports[me]},
+      adapter->nthreads);
+
+  adapter->barrier.arrive_and_wait();
+  kv_proxy kv(cif.get(), slot_wnd);
   kv.connect(adapter->cfg, adapter->dmac);
-  auto *sb = cif.manager.get_allocator();
+  auto *sb = cif->manager.get_allocator();
   hdr_histogram *hist;
   hdr_init(1, 500'000, 3, &hist);
 
@@ -160,7 +176,7 @@ static int lcore_closed_fn(void *arg) {
   auto end = start + adapter->duration;
 
   while (start < end) {
-    cif.poll();
+    cif->poll();
     rx_fn();
     auto *tx = kv.start();
     if (!tx)
@@ -176,7 +192,7 @@ static int lcore_closed_fn(void *arg) {
     while (sent < sizeof(kv::kv_packet<kv::kv_request>)) {
       auto retval = kv.send(ssgl);
       if (retval == -EAGAIN) {
-        cif.poll();
+        cif->poll();
         rx_fn();
       } else
         sent += retval;
@@ -187,7 +203,7 @@ static int lcore_closed_fn(void *arg) {
   }
   rpcs_finished = rpcs_cnt;
   while (inflight) {
-    cif.poll();
+    cif->poll();
     rx_fn();
   }
 
@@ -206,11 +222,17 @@ static int lcore_open_fn(void *arg) {
   std::uniform_int_distribution<int64_t> dist(0, keySpace);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
-  auto &cif = *adapter->cifs[me];
-  kv_proxy kv(&cif, slot_wnd);
+  auto [port, txq, rxq] = adapter->cifs[me];
+  auto cif = std::make_unique<client_iface>(
+      port, txq, rxq, adapter->allocator[me],
+      con_config{adapter->nef_cfg.sip, adapter->nef_cfg.sports[me]},
+      adapter->nthreads);
+
+  adapter->barrier.arrive_and_wait();
+  kv_proxy kv(cif.get(), slot_wnd);
   kv.connect(adapter->cfg, adapter->dmac);
-  auto *sb = cif.manager.get_allocator();
-  size_t rpcs = 0, rpcs_done = 0;
+  auto *sb = cif->manager.get_allocator();
+  size_t rpcs = 0;
   std::exponential_distribution<double> exp(adapter->rate);
   auto start_time = rte_get_timer_cycles() + 10 * rte_get_timer_hz();
   auto ticks_per_sec = rte_get_timer_hz();
@@ -244,8 +266,8 @@ static int lcore_open_fn(void *arg) {
     }
   };
   while (next < end_time) {
-    cif.poll();
-    rx_fn(kv);  
+    cif->poll();
+    rx_fn(kv);
     if (rte_get_timer_cycles() < next)
       continue;
     int64_t key = dist(rng);
@@ -258,7 +280,7 @@ static int lcore_open_fn(void *arg) {
     while (sent < sizeof(kv::kv_packet<kv::kv_request>)) {
       auto retval = kv.send(ssgl);
       if (retval == -EAGAIN) {
-        cif.poll();
+        cif->poll();
         rx_fn(kv);
       } else
         sent += retval;
@@ -266,9 +288,8 @@ static int lcore_open_fn(void *arg) {
     ++inflight;
     next += exp(rng) * rte_get_timer_hz();
   }
-  rpcs_done = rpcs;
   while (inflight > 0) {
-    cif.poll();
+    cif->poll();
     rx_fn(kv);
   }
 
@@ -306,7 +327,7 @@ static void run(lcore_function_t *f, void *args) {
   if (!ifc)
     return -1;
 
-  lcore_adapter adapter(nthreads, {conf.dip, conf.dport});
+  lcore_adapter adapter(nthreads, {conf.dip, conf.dport}, conf, nthreads);
   adapter.dmac = conf.dmac;
   adapter.duration = conf.duration;
   adapter.rate = conf.rate;
@@ -314,9 +335,7 @@ static void run(lcore_function_t *f, void *args) {
   RTE_LCORE_FOREACH(lcore_id) {
     auto [port, txq, rxq] = ifc->get_slice(i);
     adapter.allocator[i] = std::move(allocators[i]);
-    adapter.cifs[i] = std::make_unique<client_iface>(
-        port, txq, rxq, adapter.allocator[i],
-        con_config{conf.sip, conf.sports[i]}, rte_lcore_count());
+    adapter.cifs.emplace_back(port, txq, rxq);
     ++i;
   }
   if (conf.open)
