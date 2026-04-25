@@ -9,13 +9,13 @@ struct dpdk_allocator {
   using backend_data = rte_mbuf_ext_shared_info;
   static constexpr uint16_t kJumboFrameSize = 9001 + sizeof(rte_ether_hdr);
 
-  static std::shared_ptr<dpdk_allocator> create(const char *name, unsigned n) {
+  static std::shared_ptr<dpdk_allocator> create(const char *name, unsigned n, unsigned socket_id = SOCKET_ID_ANY) {
     auto *pool = rte_pktmbuf_pool_create(
-        name, n, 0, 0, RTE_MBUF_DEFAULT_BUF_SIZE, SOCKET_ID_ANY);
+        name, n, 0, 0, RTE_MBUF_DEFAULT_BUF_SIZE, socket_id);
     assert(pool);
 
     auto *small = rte_pktmbuf_pool_create((std::string(name) + "small").c_str(),
-                                          n, 0, 0, 128, SOCKET_ID_ANY);
+                                          n, 0, 0, 128, socket_id);
     return std::make_shared<dpdk_allocator>(pool, small);
   }
 
