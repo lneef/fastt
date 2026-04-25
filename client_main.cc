@@ -61,8 +61,10 @@ struct lcore_adapter {
 
   std::barrier<> barrier;
 
-  lcore_adapter(std::size_t n, con_config cfg, netconfig &nef_cfg, unsigned nthreads)
-      : cifs(n), allocator(n, nullptr), cfg(cfg), nef_cfg(nef_cfg), nthreads(nthreads), barrier(nthreads) {}
+  lcore_adapter(std::size_t n, con_config cfg, netconfig &nef_cfg)
+      : allocator(n, nullptr), cfg(cfg), nef_cfg(nef_cfg), nthreads(n), barrier(n) {
+          cifs.resize(n);
+      }
 };
 
 static netconfig parse_cmdline(int argc, char *argv[]) {
@@ -133,6 +135,7 @@ static int lcore_closed_fn(void *arg) {
   std::uniform_int_distribution<int64_t> dist(0, keySpace);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
+  assert(adapter->cifs.size() == adapter->nthreads);
   auto [port, txq, rxq] = adapter->cifs[me];
   auto cif = std::make_unique<client_iface>(
       port, txq, rxq, adapter->allocator[me],
@@ -327,7 +330,7 @@ static void run(lcore_function_t *f, void *args) {
   if (!ifc)
     return -1;
 
-  lcore_adapter adapter(nthreads, {conf.dip, conf.dport}, conf, nthreads);
+  lcore_adapter adapter(nthreads, {conf.dip, conf.dport}, conf);
   adapter.dmac = conf.dmac;
   adapter.duration = conf.duration;
   adapter.rate = conf.rate;
