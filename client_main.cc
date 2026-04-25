@@ -63,7 +63,7 @@ struct lcore_adapter {
 
   lcore_adapter(std::size_t n, con_config cfg, netconfig &nef_cfg)
       : allocator(n, nullptr), cfg(cfg), nef_cfg(nef_cfg), nthreads(n), barrier(n) {
-          cifs.resize(n);
+          cifs.reserve(n);
       }
 };
 
