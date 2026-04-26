@@ -116,15 +116,13 @@ struct alignas(64) slab {
   slab *prev;
   uintptr_t iova;
   obj_header *freelist;
-  uint32_t inuse;
-  uint32_t padding;
 
   static void list_remove(slab *s) {
     s->prev->next = s->next;
     s->next->prev = s->prev;
   }
 
-  slab() : next(nullptr), prev(nullptr), iova(0), freelist(nullptr), inuse() {}
+  slab() : next(nullptr), prev(nullptr), iova(0), freelist(nullptr) {}
 };
 
 struct slab_cache {
@@ -216,7 +214,6 @@ public:
       obj = s->freelist;
       assert(obj);
       s->freelist = obj->next;
-      ++s->inuse;
       if (!s->freelist) {
         slab::list_remove(s);
         cache.full_list.list_push(s);
@@ -235,11 +232,14 @@ public:
     return alloc<1, kMaxJumboDataLen, kJumboHeadroom, true>(kMaxJumboDataLen);
   }
 
+  /*
+   * See: https://github.com/DPDK/dpdk/blob/7baf81674a011ab8a2fe329566b6d43d7377244c/lib/eal/linux/eal_memory.c#L105
+   */
   static uintptr_t virt_to_phys(void *vaddr) {
     const size_t PAGE_SIZE = sysconf(_SC_PAGESIZE);
     int fd;
     uint64_t entry;
-    uintptr_t va = (uintptr_t)vaddr;
+    uintptr_t va = std::bit_cast<uintptr_t>(vaddr);
     off_t offset = (va / PAGE_SIZE) * sizeof(uint64_t);
 
     fd = open("/proc/self/pagemap", O_RDONLY);
@@ -251,9 +251,6 @@ public:
       return RTE_BAD_IOVA;
     }
     close(fd);
-
-    if (!(entry & (1ULL << 63)))
-      return RTE_BAD_IOVA;
 
     uint64_t pfn = entry & ((1ULL << 55) - 1);
     if (pfn == 0)
@@ -309,7 +306,6 @@ public:
       bool was_full_list = !slb->freelist;
       hdr->next = slb->freelist;
       slb->freelist = hdr;
-      --slb->inuse;
       if (was_full_list) {
         slab::list_remove(slb);
         cache.free_list.list_push(slb);

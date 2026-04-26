@@ -62,9 +62,10 @@ struct lcore_adapter {
   std::barrier<> barrier;
 
   lcore_adapter(std::size_t n, con_config cfg, netconfig &nef_cfg)
-      : allocator(n, nullptr), cfg(cfg), nef_cfg(nef_cfg), nthreads(n), barrier(n) {
-          cifs.reserve(n);
-      }
+      : allocator(n, nullptr), cfg(cfg), nef_cfg(nef_cfg), nthreads(n),
+        barrier(n) {
+    cifs.reserve(n);
+  }
 };
 
 static netconfig parse_cmdline(int argc, char *argv[]) {
@@ -321,7 +322,8 @@ static void run(lcore_function_t *f, void *args) {
   lcore_ids.reserve(nthreads);
   RTE_LCORE_FOREACH(lcore_id) {
     allocators.emplace_back(
-        dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095));
+        dpdk_allocator::create(("mpool" + std::to_string(i)).c_str(), 4095,
+                               rte_lcore_to_socket_id(lcore_id)));
     lcore_ids.emplace_back(lcore_id);
     ++i;
   }
