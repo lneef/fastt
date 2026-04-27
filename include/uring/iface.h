@@ -430,8 +430,9 @@ struct server_iface : iface_base {
     return 0;
   }
 
-  int handle_accept(struct io_uring_cqe *cqe) {
+  int handle_accept(struct io_uring_cqe *cqe) {  
     if (cqe->res > 0) {
+      assert(!free_slots.empty());  
       auto idx = free_slots.front();
       free_slots.pop_front();
       clients[idx] = cqe->res;
