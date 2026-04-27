@@ -291,7 +291,7 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
 
   while (next < end_time) {
     process_completions(iface, rx_cb);
-    if (rdtsc() < next) 
+    if (rdtsc() < next)
       continue;
 
     int64_t key;
@@ -428,12 +428,15 @@ int main(int argc, char *argv[]) {
   if (is_open)
     std::printf("Running Open Loop with rate %f\n", rate);
 
-  if (!is_client) 
+  if (!is_client)
     bench::prepare(store, sz, store_size);
+  std::random_device dev;
+  std::mt19937 rng(dev());
+  std::uniform_int_distribution<int64_t> dist(0, ports.size() - 1);
 
   for (uint16_t i = 0; i < nt; ++i) {
-    auto port = ports[i % ports.size()];
     if (is_client && is_open) {
+      auto port = ports[dist(rng)];
       threads.emplace_back(client_fun_open, i,
                            sockaddr_in{.sin_family = AF_INET,
                                        .sin_port = htons(port),
@@ -441,6 +444,7 @@ int main(int argc, char *argv[]) {
                                        .sin_zero = {}},
                            duration, rate);
     } else if (is_client) {
+      auto port = ports[dist(rng)];
       threads.emplace_back(client_fun_closed, i,
                            sockaddr_in{.sin_family = AF_INET,
                                        .sin_port = htons(port),
@@ -448,6 +452,7 @@ int main(int argc, char *argv[]) {
                                        .sin_zero = {}},
                            duration, wnd);
     } else {
+      auto port = ports[i % ports.size()];
       threads.emplace_back(server_fun, i, port,
                            did_init_addr ? ip_addr.s_addr : INADDR_ANY);
     }
