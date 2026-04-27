@@ -422,8 +422,7 @@ struct server_iface : iface_base {
     return 0;
   }
 
-  int handle_close(unsigned idx) {
-    printf("closing\n");  
+  int handle_close(unsigned idx) {  
     auto &slt = con_state[idx];
     release_incoming(slt);
     free_slots.push_front(slt.idx);
