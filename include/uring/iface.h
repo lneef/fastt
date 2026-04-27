@@ -412,7 +412,6 @@ struct server_iface : iface_base {
 
   int submit_close(unsigned idx) {
     auto &slt = slot_at(idx);
-    printf("%u\n", slt.recv_scheduled);
     if (slt.recv_scheduled || slt.tx_inflight)
       return -1;
     slt.ctrl.unlink();
@@ -458,8 +457,6 @@ struct server_iface : iface_base {
     case kGetSockTCPInfoTag:
       return 0;
     case kCancelTag: {
-      auto idx = cqe->user_data >> 32;
-      printf("canceling %llu\n", idx);
       return 0;
     }
     case kCloseTag: {
@@ -548,7 +545,6 @@ int process_cqe_recv(T *st, struct io_uring_cqe *cqe, int fd, unsigned sidx,
     return 0;
 
   if (!(cqe->flags & IORING_CQE_F_BUFFER) || cqe->res <= 0) {
-    printf("canceling\n");  
     if (cqe->res == 0)
       st->cancel(sidx);
     return cqe->res;
