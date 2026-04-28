@@ -123,7 +123,7 @@ public:
   void fetch_from_qpair() {
     std::array<flow_tuple, packet_if::kDefaultInBurstSize> fts;
     packet_vector<mbuf *, packet_if::kDefaultInBurstSize> mbufs;
-    pkt_if.fetch_from_qpair(fts, mbufs);
+    pkt_if.fetch_from_qpair(fts, mbufs, r_ts);
     uint16_t i = 0;
     for (auto *pkt : mbufs) {
       auto &ft = fts[i++];

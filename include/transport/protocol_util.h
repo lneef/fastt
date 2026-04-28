@@ -1,6 +1,8 @@
 #pragma once
 #include "protocol.h"
 #include "slab_allocator.h"
+#include "util.h"
+#include <cstdint>
 namespace protocol {
 
 inline void extract_ports(flow_tuple &ft, mbuf *pkt) {
@@ -13,6 +15,7 @@ struct msg_frame_desc {
   seq_t seq, ack;
   uint16_t crd;
   bool ack_frame, sack;
+  uint64_t ts;
 };
 
 struct builder {
@@ -27,18 +30,18 @@ struct builder {
     ft->crd = desc.crd;
     ft->ackframe = desc.ack_frame;
     ft->sack = desc.sack;
-    ft->ts = 0;
+    ft->ts = desc.ts;
     ft->type = protocol::pkt_type::FT_MSG;
   }
 
-  inline void prepare_ack_pkt(mbuf *msg, seq_t ack, bool is_sack) {
+  inline void prepare_ack_pkt(mbuf *msg, seq_t ack, bool is_sack, uint32_t ts = 0) {
     auto *ft = msg->data<protocol::ft_header>();
     ft->sport = sport;
     ft->dport = dport;
     ft->ack = ack;
     ft->sack = is_sack;
     ft->crd = 0;
-    ft->ts = 0;
+    ft->ts = ts;
     ft->type = protocol::pkt_type::FT_ACK;
   }
 

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cerrno>
 #include <cstdint>
+#include <generic/rte_cycles.h>
 #include <sys/types.h>
 
 #include "debug.h"
@@ -108,8 +109,7 @@ public:
     }
     if (trx.seen_done)
       cstate = connection_state::DISCONNECTED;
-
-    builder.prepare_ack_pkt(msg.get(), ack, is_sack);
+    builder.prepare_ack_pkt(msg.get(), ack, is_sack, (rte_get_timer_cycles() - trx.get_ts()) / get_ticks_us());
     pkt_if->consume_pkt_mbuf(msg.get(), cfg);
     return acb.pending_dup_acks;
   }
@@ -314,6 +314,7 @@ public:
           .crd = trx.prepare_return_stalled_crds(),
           .ack_frame = acb.has_unacked_pkts() && !trx.has_holes(),
           .sack = false,
+          .ts = (rte_get_timer_cycles() - trx.get_ts()) / get_ticks_us()
       };
       if (desc.ack_frame)
         acb.mark_as_acked(desc.ack);

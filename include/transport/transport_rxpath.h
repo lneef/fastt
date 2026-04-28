@@ -110,6 +110,7 @@ struct transport_rxpath {
 
   void put_dgram(mbuf_ptr &&pkt) {
     auto *hdr = pkt->data<protocol::ft_header>();
+    ts = std::max(ts, pkt->ts);
     // control frames are freed
     if (hdr->type != protocol::pkt_type::FT_MSG) {
       seen_done = hdr->type == protocol::pkt_type::FT_DONE;
@@ -203,6 +204,10 @@ struct transport_rxpath {
     return crds_returned;
   }
 
+  uint64_t get_ts() const{
+      return ts;
+  }
+
   ~transport_rxpath() = default;
 
   struct {
@@ -211,6 +216,7 @@ struct transport_rxpath {
 
   reorder_buffer rb;
   std::deque<mbuf_ptr> out;
+  uint64_t ts = 0;
 
   // connection state
   std::bitset<kMaxBitMapSize> wnd;
