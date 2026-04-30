@@ -247,7 +247,6 @@ public:
     ++xmitted;
     unacked.emplace_back(std::move(pkt), now, seq++, false);
     xmit_list.push_back(unacked.back());
-    assert(timeout >= now);
     return true;
   }
 
