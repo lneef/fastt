@@ -216,7 +216,7 @@ static int client_fun_closed(uint16_t id, struct sockaddr_in addr,
                              uint64_t duration, unsigned slot_sz) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(0, store_size);
+  std::uniform_int_distribution<int64_t> dist(0, store_size - 1);
   uring::client_iface iface{};
   int ret = client_setup(iface, id, &addr);
   if (ret < 0)
@@ -263,7 +263,7 @@ static int client_fun_open(uint16_t id, struct sockaddr_in addr,
                            uint64_t duration, double rate) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(0, store_size);
+  std::uniform_int_distribution<int64_t> dist(0, store_size - 1);
   uring::client_iface iface{};
   int ret = client_setup(iface, id, &addr);
   if (ret < 0)

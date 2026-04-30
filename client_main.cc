@@ -120,7 +120,7 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 static int lcore_closed_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(0, keySpace);
+  std::uniform_int_distribution<int64_t> dist(0, keySpace - 1);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
@@ -203,7 +203,7 @@ static int lcore_closed_fn(void *arg) {
 static int lcore_open_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(0, keySpace);
+  std::uniform_int_distribution<int64_t> dist(0, keySpace - 1);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
