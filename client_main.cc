@@ -192,11 +192,13 @@ static int lcore_closed_fn(void *arg) {
   }
 
   kv.close();
+  //auto *cc = kv.con->get_hist();
   std::lock_guard lg(mtx);
   std::cout << static_cast<double>(rpcs_finished) /
                    (static_cast<double>(adapter->duration) / rte_get_timer_hz())
             << std::endl;
   std::cout << hdr_value_at_percentile(hist, 99.0) << std::endl;
+  //hdr_percentiles_print(cc, stdout, 5, 1.0, CLASSIC);
   return 0;
 }
 

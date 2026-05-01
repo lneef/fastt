@@ -53,7 +53,7 @@ struct swift {
     else
       delay =
           filter::exp_filter<uint64_t>(delay, delay_measured);
-    hdr_record_value(hist, delay / get_ticks_us());
+    hdr_record_value(hist, delay_measured / get_ticks_us());
 
     // Skip hop delay
     auto target_delay =
