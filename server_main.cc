@@ -52,7 +52,7 @@ static T *alloc_or_get(sgl &rsgl, slab_allocator &alloc, uint32_t len,
   }
   return completion;
 }
-
+#define NBATCH
 #ifdef NBATCH
 static void serve(sgl &resp_sgl, slab_allocator &alloc,
                   kv::kv_packet<kv::kv_request> *packet) {
