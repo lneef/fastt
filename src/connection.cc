@@ -94,8 +94,6 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
     concurrency::make_progress(con);
   }
 
-  assert(ready.empty());
-
-  scheduler.run([&]{});
+  scheduler.run([&]{ run_loop_head(scheduler); });
   check_timeouts();
 }
