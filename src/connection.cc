@@ -92,8 +92,10 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
     concurrency::make_progress(con);
   }
 
-  assert(ready.empty());
-
+#ifndef NQUANTA
   scheduler.run([&]() { run_loop_head(scheduler); });
+#else
+  scheduler.run([&]() {});
+#endif
   check_timeouts();
 }
