@@ -327,7 +327,7 @@ static int server_fun(uint16_t id, int port_arg, in_addr_t addr) {
     return ret;
   }
   while (true) {
-    ret = iface.uring_submit_and_wait();
+    ret = iface.uring_submit_and_get_events();
     if (ret < 0) {
       fprintf(stderr, "submission failed %s\n", strerror(-ret));
       return ret;
