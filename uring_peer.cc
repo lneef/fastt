@@ -196,21 +196,11 @@ static uint64_t process_completions(uring::client_iface &iface, F &&cb) {
 }
 
 static int client_setup(uring::client_iface &iface, uint16_t id,
-                        struct sockaddr_in *addr,  struct in_addr maddr, unsigned nt) {
+                        struct sockaddr_in *addr) {
   struct io_uring_cqe *cqe;
   set_thread_affinity(pthread_self(), id);
-  ena::ena nic;
-  uint16_t sport = 0;
   iface.slt.idx = id;
   iface.setup(0);
-  struct sockaddr_in baddr{};
-  baddr.sin_addr = maddr;
-  nic.find_one(baddr.sin_addr.s_addr, addr->sin_addr.s_addr, sport,
-               addr->sin_port, id, nt);
-  baddr.sin_port = sport;
-  int ret =
-      bind(iface.fd, reinterpret_cast<const sockaddr *>(&baddr), sizeof(baddr));
-  ensure(ret == 0);
   iface.uring_connect(addr);
   iface.uring_submit_and_wait();
   io_uring_peek_cqe(&iface.ctx->ring, &cqe);
@@ -224,12 +214,12 @@ static int client_setup(uring::client_iface &iface, uint16_t id,
 }
 
 static int client_fun_closed(uint16_t id, struct sockaddr_in addr,
-                             uint64_t duration, unsigned slot_sz, unsigned nt, struct in_addr maddr) {
+                             uint64_t duration, unsigned slot_sz) {
   std::random_device dev;
   std::mt19937 rng(dev());
   std::uniform_int_distribution<int64_t> dist(0, store_size - 1);
   uring::client_iface iface{};
-  int ret = client_setup(iface, id, &addr, maddr, nt);
+  int ret = client_setup(iface, id, &addr);
   if (ret < 0)
     return ret;
   uint64_t inflight = 0;
@@ -271,12 +261,12 @@ static int client_fun_closed(uint16_t id, struct sockaddr_in addr,
 }
 
 static int client_fun_open(uint16_t id, struct sockaddr_in addr,
-                           uint64_t duration, double rate, unsigned nt, struct in_addr m_addr) {
+                           uint64_t duration, double rate) {
   std::random_device dev;
   std::mt19937 rng(dev());
   std::uniform_int_distribution<int64_t> dist(0, store_size - 1);
   uring::client_iface iface{};
-  int ret = client_setup(iface, id, &addr, m_addr, nt);
+  int ret = client_setup(iface, id, &addr);
   if (ret < 0)
     return ret;
   size_t rpcs = 0;
@@ -383,7 +373,6 @@ int main(int argc, char *argv[]) {
   size_t sz = 8;
   unsigned wnd = 8;
   struct in_addr ip_addr;
-  struct in_addr m_addr{};
   std::vector<std::thread> threads;
 
   while ((opt = getopt(argc, argv, "p:ca:t:d:r:os:k:w:m:")) != -1) {
@@ -421,9 +410,6 @@ int main(int argc, char *argv[]) {
     case 'w':
       wnd = atoi(optarg);
       break;
-    case 'm':
-      inet_aton(optarg, &m_addr);
-      break;
     default:
       exit(-1);
     }
@@ -457,7 +443,7 @@ int main(int argc, char *argv[]) {
                                        .sin_port = htons(port),
                                        .sin_addr = {ip_addr},
                                        .sin_zero = {}},
-                           duration, rate, nt, m_addr);
+                           duration, rate);
     } else if (is_client) {
       auto port = ports[dist(rng)];
       threads.emplace_back(client_fun_closed, i,
@@ -465,7 +451,7 @@ int main(int argc, char *argv[]) {
                                        .sin_port = htons(port),
                                        .sin_addr = {ip_addr},
                                        .sin_zero = {}},
-                           duration, wnd, nt, m_addr);
+                           duration, wnd);
     } else {
       auto port = ports[i % ports.size()];
       threads.emplace_back(server_fun, i, port,
