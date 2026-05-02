@@ -386,7 +386,7 @@ int main(int argc, char *argv[]) {
   struct in_addr m_addr{};
   std::vector<std::thread> threads;
 
-  while ((opt = getopt(argc, argv, "p:ca:t:d:r:os:k:w:")) != -1) {
+  while ((opt = getopt(argc, argv, "p:ca:t:d:r:os:k:w:m:")) != -1) {
     switch (opt) {
     case 'p':
       for (auto part : std::string_view(optarg) | std::views::split(':'))
