@@ -26,7 +26,7 @@ toeplitz_hash(uint32_t src_ip, uint32_t dst_ip, uint16_t src_port,
               uint16_t dst_port,
               const std::array<uint8_t, kENAKeyLen> &key = RSS_DEFAULT_KEY,
               uint32_t initial = 0) {
-  static constexpr unsigned kInputLen = 12;  
+  static constexpr unsigned kInputLen = 12;
   std::array<uint8_t, kInputLen> input;
   std::memcpy(&input[0], &src_ip, 4);
   std::memcpy(&input[4], &dst_ip, 4);
@@ -69,6 +69,17 @@ struct ena : public nic {
           dport = htons(d);
           return;
         }
+      }
+    }
+  }
+
+  void find_one(uint32_t sip, uint32_t dip, uint16_t &sport, uint16_t dport,
+                uint16_t rtid, uint16_t cores) {
+    for (uint16_t s = 0; s < UINT16_MAX; ++s) {
+      auto hash = calc_rss_hash(sip, dip, htons(s), dport);
+      if ((hash % kRetaSize) % cores == rtid) {
+        sport = htons(s);
+        return;
       }
     }
   }

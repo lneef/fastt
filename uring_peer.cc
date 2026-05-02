@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <utility>
 
+#include "arch/ena.h"
 #include "bench.h"
 #include "uring/cpu.h"
 #include "uring/iface.h"
@@ -195,11 +196,25 @@ static uint64_t process_completions(uring::client_iface &iface, F &&cb) {
 }
 
 static int client_setup(uring::client_iface &iface, uint16_t id,
-                        struct sockaddr_in *addr) {
+                        struct sockaddr_in *addr, unsigned nt) {
   struct io_uring_cqe *cqe;
   set_thread_affinity(pthread_self(), id);
+  ena::ena nic;
+  uint16_t sport = 0;
   iface.slt.idx = id;
   iface.setup(0);
+  struct sockaddr_in baddr{};
+  struct sockaddr_in local;
+  socklen_t len = sizeof(local);
+  int ret = getsockname(iface.fd, (struct sockaddr *)&local, &len);
+  ensure(ret == 0);
+  nic.find_one(addr->sin_addr.s_addr, local.sin_addr.s_addr, sport,
+               addr->sin_port, id, nt);
+  baddr.sin_addr = local.sin_addr;
+  baddr.sin_port = sport;
+  ret =
+      bind(iface.fd, reinterpret_cast<const sockaddr *>(&baddr), sizeof(baddr));
+  ensure(ret == 0);
   iface.uring_connect(addr);
   iface.uring_submit_and_wait();
   io_uring_peek_cqe(&iface.ctx->ring, &cqe);
@@ -213,12 +228,12 @@ static int client_setup(uring::client_iface &iface, uint16_t id,
 }
 
 static int client_fun_closed(uint16_t id, struct sockaddr_in addr,
-                             uint64_t duration, unsigned slot_sz) {
+                             uint64_t duration, unsigned slot_sz, unsigned nt) {
   std::random_device dev;
   std::mt19937 rng(dev());
   std::uniform_int_distribution<int64_t> dist(0, store_size - 1);
   uring::client_iface iface{};
-  int ret = client_setup(iface, id, &addr);
+  int ret = client_setup(iface, id, &addr, nt);
   if (ret < 0)
     return ret;
   uint64_t inflight = 0;
@@ -260,12 +275,12 @@ static int client_fun_closed(uint16_t id, struct sockaddr_in addr,
 }
 
 static int client_fun_open(uint16_t id, struct sockaddr_in addr,
-                           uint64_t duration, double rate) {
+                           uint64_t duration, double rate, unsigned nt) {
   std::random_device dev;
   std::mt19937 rng(dev());
   std::uniform_int_distribution<int64_t> dist(0, store_size - 1);
   uring::client_iface iface{};
-  int ret = client_setup(iface, id, &addr);
+  int ret = client_setup(iface, id, &addr, nt);
   if (ret < 0)
     return ret;
   size_t rpcs = 0;
@@ -442,7 +457,7 @@ int main(int argc, char *argv[]) {
                                        .sin_port = htons(port),
                                        .sin_addr = {ip_addr},
                                        .sin_zero = {}},
-                           duration, rate);
+                           duration, rate, nt);
     } else if (is_client) {
       auto port = ports[dist(rng)];
       threads.emplace_back(client_fun_closed, i,
@@ -450,7 +465,7 @@ int main(int argc, char *argv[]) {
                                        .sin_port = htons(port),
                                        .sin_addr = {ip_addr},
                                        .sin_zero = {}},
-                           duration, wnd);
+                           duration, wnd, nt);
     } else {
       auto port = ports[i % ports.size()];
       threads.emplace_back(server_fun, i, port,
