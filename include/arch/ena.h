@@ -75,7 +75,7 @@ struct ena : public nic {
 
   void find_one(uint32_t sip, uint32_t dip, uint16_t &sport, uint16_t dport,
                 uint16_t rtid, uint16_t cores) {
-    for (uint16_t s = 0; s < UINT16_MAX; ++s) {
+    for (uint16_t s = 32768; s < UINT16_MAX; ++s) {
       auto hash = calc_rss_hash(sip, dip, htons(s), dport);
       if ((hash % kRetaSize) % cores == rtid) {
         sport = htons(s);
