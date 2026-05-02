@@ -208,7 +208,7 @@ static int client_setup(uring::client_iface &iface, uint16_t id,
   socklen_t len = sizeof(local);
   int ret = getsockname(iface.fd, (struct sockaddr *)&local, &len);
   ensure(ret == 0);
-  nic.find_one(addr->sin_addr.s_addr, local.sin_addr.s_addr, sport,
+  nic.find_one(local.sin_addr.s_addr, addr->sin_addr.s_addr, sport,
                addr->sin_port, id, nt);
   baddr.sin_addr = local.sin_addr;
   baddr.sin_port = sport;
