@@ -11,4 +11,3 @@ for IRQ in $IRQS; do
     # Cycle through available CPUs
     CPU=$(( (CPU + 1) % CPUS ))
 done
-~
