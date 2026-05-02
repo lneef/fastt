@@ -249,6 +249,13 @@ struct client_iface : iface_base {
       fprintf(stderr, "Setting up socket failed %s\n", strerror(-ret));
       return ret;
     }
+    int enable = 1;
+    ret = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enable,
+                         sizeof(enable));
+    if (ret < 0) {
+      fprintf(stderr, "Setting socket opt failed %s\n", strerror(-ret));
+      return ret;
+    }
     slt.fd = fd;
     tcp::disable_nagle(fd);
     tcp::change_congestion_control(fd, tcp::bbr_congestion);
