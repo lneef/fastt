@@ -426,9 +426,6 @@ int main(int argc, char *argv[]) {
     return -1;
   }
 
-  if (is_open)
-    std::printf("Running Open Loop with rate %f\n", rate);
-
   if (!is_client)
     bench::prepare(store, sz, store_size);
   std::random_device dev;
