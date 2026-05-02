@@ -457,7 +457,7 @@ int main(int argc, char *argv[]) {
                                        .sin_port = htons(port),
                                        .sin_addr = {ip_addr},
                                        .sin_zero = {}},
-                           duration, rate, nt, &m_addr);
+                           duration, rate, nt, m_addr);
     } else if (is_client) {
       auto port = ports[dist(rng)];
       threads.emplace_back(client_fun_closed, i,
@@ -465,7 +465,7 @@ int main(int argc, char *argv[]) {
                                        .sin_port = htons(port),
                                        .sin_addr = {ip_addr},
                                        .sin_zero = {}},
-                           duration, wnd, nt, &m_addr);
+                           duration, wnd, nt, m_addr);
     } else {
       auto port = ports[i % ports.size()];
       threads.emplace_back(server_fun, i, port,
