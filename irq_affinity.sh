@@ -1,6 +1,6 @@
 #!/bin/bash
 # adapted from https://oneuptime.com/blog/post/2026-03-02-how-to-configure-irq-affinity-for-network-performance-on-ubuntu/view
-NIC={$1:-ens2}
+NIC=${1:-ens2}
 CPUS=$(nproc)
 IRQS=$(grep "$NIC" /proc/interrupts | awk -F: '{print $1}' | tr -d ' ')
 
