@@ -27,7 +27,6 @@
 #include <unistd.h>
 #include <utility>
 
-#include "arch/ena.h"
 #include "bench.h"
 #include "uring/cpu.h"
 #include "uring/iface.h"
