@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <random>
 namespace ena {
 static constexpr unsigned kQueueByteOffset = 9;
 static constexpr unsigned kQueueByteStep = 2;
@@ -47,7 +48,7 @@ toeplitz_hash(uint32_t src_ip, uint32_t dst_ip, uint16_t src_port,
 
       uint8_t carry = (k[0] & 0x80) >> 7;
       for (unsigned j = 0; j < kENAKeyLen - 1; ++j)
-              k[j] = ((k[j] << 1) & 0xff) | ((k[j + 1] & 0x80) >> 7);
+        k[j] = ((k[j] << 1) & 0xff) | ((k[j + 1] & 0x80) >> 7);
       k[kENAKeyLen - 1] = ((k[kENAKeyLen - 1] << 1) & 0xff) | carry;
     }
   }
@@ -78,11 +79,15 @@ struct ena : public nic {
 
   void find_one(uint32_t sip, uint32_t dip, uint16_t &sport, uint16_t dport,
                 uint16_t rtid, uint16_t cores) {
-    static constexpr unsigned kDefaultInitialValue = 0xffffffffu; 
-    for (uint16_t s = 32768; s < UINT16_MAX; ++s) {
+    static constexpr unsigned kDefaultInitialValue = 0xffffffffu;
+    std::random_device rnd;
+    std::mt19937 rng(rnd());
+    std::uniform_int_distribution<uint16_t> dist{0, 8129};
+    for (uint16_t s = 32768 + dist(rng); s < UINT16_MAX; ++s) {
       auto rkey = RSS_DEFAULT_KEY;
       std::reverse(rkey.begin(), rkey.end());
-      auto hash = toeplitz_hash(dip, sip, dport, htons(s), rkey, kDefaultInitialValue);
+      auto hash =
+          toeplitz_hash(dip, sip, dport, htons(s), rkey, kDefaultInitialValue);
       if ((hash % kRetaSize) % cores == rtid) {
         sport = htons(s);
         return;
