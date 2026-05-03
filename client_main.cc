@@ -214,7 +214,7 @@ static int lcore_open_fn(void *arg) {
   auto *sb = cif.manager.get_allocator();
   size_t rpcs = 0, rpcs_done = 0;
   std::exponential_distribution<double> exp(adapter->rate);
-  auto start_time = rte_get_timer_cycles() + 10 * rte_get_timer_hz();
+  auto start_time = rte_get_timer_cycles() + 1 * rte_get_timer_hz();
   auto ticks_per_sec = rte_get_timer_hz();
   auto end_time = start_time + adapter->duration;
   auto next = start_time + ticks_per_sec * exp(rng);
