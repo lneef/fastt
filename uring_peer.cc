@@ -447,8 +447,10 @@ int main(int argc, char *argv[]) {
     return -1;
   }
 
-  if (!is_client)
+  if (!is_client){
     bench::prepare(store, sz, store_size);
+    printf("Setup complete\n");
+  }
   std::random_device dev;
   std::mt19937 rng(dev());
   std::uniform_int_distribution<int64_t> dist(0, ports.size() - 1);
