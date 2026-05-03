@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nic.h"
+#include <algorithm>
 #include <arpa/inet.h>
 #include <array>
 #include <cstdint>
@@ -26,7 +27,7 @@ toeplitz_hash(uint32_t src_ip, uint32_t dst_ip, uint16_t src_port,
               uint16_t dst_port,
               const std::array<uint8_t, kENAKeyLen> &key = RSS_DEFAULT_KEY,
               uint32_t initial = 0) {
-  static constexpr unsigned kInputLen = 12;  
+  static constexpr unsigned kInputLen = 12;
   std::array<uint8_t, kInputLen> input;
   std::memcpy(&input[0], &src_ip, 4);
   std::memcpy(&input[4], &dst_ip, 4);
@@ -44,8 +45,10 @@ toeplitz_hash(uint32_t src_ip, uint32_t dst_ip, uint16_t src_port,
                 (static_cast<uint32_t>(k[2]) << 8) |
                 static_cast<uint32_t>(k[3]);
 
-      for (unsigned j = 0; j < kENAKeyLen; ++j)
-        k[j] = ((k[j] << 1) & 0xff) | ((k[(j + 1) % kENAKeyLen] & 0x80) >> 7);
+      uint8_t carry = (k[0] & 0x80) >> 7;
+      for (unsigned j = 0; j < kENAKeyLen - 1; ++j)
+              k[j] = ((k[j] << 1) & 0xff) | ((k[j + 1] & 0x80) >> 7);
+      k[kENAKeyLen - 1] = ((k[kENAKeyLen - 1] << 1) & 0xff) | carry;
     }
   }
 
@@ -73,7 +76,22 @@ struct ena : public nic {
     }
   }
 
+  void find_one(uint32_t sip, uint32_t dip, uint16_t &sport, uint16_t dport,
+                uint16_t rtid, uint16_t cores) {
+    static constexpr unsigned kDefaultInitialValue = 0xffffffffu; 
+    for (uint16_t s = 32768; s < UINT16_MAX; ++s) {
+      auto rkey = RSS_DEFAULT_KEY;
+      std::reverse(rkey.begin(), rkey.end());
+      auto hash = toeplitz_hash(dip, sip, dport, htons(s), rkey, kDefaultInitialValue);
+      if ((hash % kRetaSize) % cores == rtid) {
+        sport = htons(s);
+        return;
+      }
+    }
+  }
+
   ~ena() override = default;
 };
 
 } // namespace ena
+
