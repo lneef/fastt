@@ -35,6 +35,7 @@ class transport {
   friend M;
 
 public:
+  static constexpr unsigned kBurstSize = 32;
   struct {
     uint64_t sent = 0;
     uint64_t retransmissions = 0;
@@ -138,7 +139,7 @@ public:
       if (!check_pkt(pkt, hdr->seq))
         return false;
       if (hdr->ackframe)
-        ttx.acknowledge(hdr->ack, ts);
+        ttx.acknowledge(hdr->ack, ts, hdr->ts);
       if (hdr->crd)
         ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, pkt, acb);
@@ -146,7 +147,7 @@ public:
     }
     case protocol::pkt_type::FT_ACK: {
       FASTT_LOG_DEBUG("Got ACK ack=%u sack=%u\n", hdr->ack.v, hdr->sack);
-      ttx.acknowledge(hdr->ack, ts);
+      ttx.acknowledge(hdr->ack, ts, hdr->ts);
       if (hdr->sack) {
         auto *sack_payload =
             protocol::mtod<protocol::ft_sack_payload>(pkt, sizeof(protocol::ft_header));
@@ -176,7 +177,7 @@ public:
                       hdr->ack.v, hdr->crd);
       if (!check_pkt(pkt, hdr->seq))
         return false;
-      ttx.acknowledge(hdr->ack, ts);
+      ttx.acknowledge(hdr->ack, ts, hdr->ts);
       assert(hdr->crd > 0);
       ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, pkt, acb);
@@ -188,7 +189,7 @@ public:
       if (!check_pkt(pkt, hdr->seq))
         return false;
       if (hdr->ackframe)
-        ttx.acknowledge(hdr->ack, ts);
+        ttx.acknowledge(hdr->ack, ts, hdr->ts);
       ttx.update_budget(hdr->crd);
       trx.insert(hdr->seq, pkt, acb);
       break;
@@ -204,7 +205,7 @@ public:
         rte_pktmbuf_free(pkt);
         return false;
       }
-      ttx.acknowledge(hdr->ack, ts);
+      ttx.acknowledge(hdr->ack, ts, hdr->ts);
       // if the connection is done and only the last packet if missing proceed
       // otherwise drop
       assert(ttx.all_acked());
@@ -330,15 +331,22 @@ public:
   ssize_t send_sgl(sgl &msgl) {
     if (connection_state::ESTABLISHED != cstate)
       return 0;
+    unsigned burst = 0;
     ssize_t sent = 0;
-    for (; !msgl.empty();) {
-      auto retval = send_single_seg(msgl);
+    ssize_t retval = 0;
+    for (; !msgl.empty() && burst < kBurstSize;) {
+      retval = send_single_seg(msgl);
       if (retval < 0) {
         sent = sent == 0 ? retval : sent;
-        break;
+        goto done;
       }
+      ++burst;
       sent += retval;
     }
+
+    if(burst == kBurstSize && !msgl.empty())
+        manager->link_ready(*this);
+done: 
     FASTT_LOG_DEBUG("send len=%lu total=%zd\n", msgl.size, sent);
     return sent;
   }

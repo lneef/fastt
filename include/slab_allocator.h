@@ -6,25 +6,26 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
-#include <generic/rte_prefetch.h>
 #include <memory>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <array>
 class slab_allocator;
 
 struct mbuf {
   slab_allocator *sb;
   mbuf *next;
-  uint32_t size : 28;
+  uint32_t data_room : 28;
   uint32_t size_class : 4;
   uint16_t data_len;
   uint16_t headroom : 10;
   uint16_t refcnt : 6;
+  uint64_t ts;
 
   mbuf() = default;
-  mbuf(slab_allocator *sb, mbuf *next, uint32_t size, uint32_t size_class,
+  mbuf(slab_allocator *sb, mbuf *next, uint32_t data_room, uint32_t size_class,
        uint16_t data_len, uint16_t headroom)
-      : sb(sb), next(next), size(size), size_class(size_class),
+      : sb(sb), next(next), data_room(data_room), size_class(size_class),
         data_len(data_len), headroom(headroom), refcnt(1) {}
 
   uint8_t *buf_start() {
@@ -99,6 +100,13 @@ struct mbuf {
   }
 };
 
+template <typename T, typename F>
+static void parse_mbuf(mbuf &dgram, F &&consumer) {
+  auto off = 0u;
+  while (off < dgram.data_len)
+    off += consumer(dgram.data<T>(off));
+}
+
 struct obj_header {
   obj_header *next;
 };
@@ -116,7 +124,7 @@ struct alignas(64) slab {
     s->next->prev = s->prev;
   }
 
-  slab() : next(nullptr), prev(nullptr), freelist(nullptr), inuse() {}
+  slab() : next(nullptr), prev(nullptr), iova(0), freelist(nullptr), inuse() {}
 };
 
 struct slab_cache {
@@ -139,14 +147,14 @@ struct slab_cache {
 
     slab *front() { return head.next; }
   };
-  slab_list partial;
-  slab_list full;
+  slab_list free_list;
+  slab_list full_list;
   size_t obj_size;
   unsigned top = 0;
   unsigned color = 0;
   std::array<obj_header *, kDefaultCacheSize> local_cache;
 
-  slab_cache(size_t obj_size) : partial(), full(), obj_size(obj_size) {}
+  slab_cache(size_t obj_size) : free_list(), full_list(), obj_size(obj_size) {}
 };
 
 template <typename B> B *get_new_backend_data(mbuf *data) {
@@ -164,6 +172,9 @@ inline void mbuf_free(mbuf *buf);
 using mbuf_ptr = std::unique_ptr<mbuf, decltype(&mbuf_free)>;
 class slab_allocator {
   static constexpr unsigned kSizeClassCnt = 2;
+  static constexpr unsigned kDefaultPrefill = 4;
+  static constexpr unsigned kLargePrefill = 1;
+  static constexpr unsigned kPageCacheSize = 8;
 
 public:
   static constexpr size_t kDefaultHeadroom = 20;
@@ -171,17 +182,26 @@ public:
   static constexpr size_t kDefaultSize =
       kMaxDataLen + kDefaultHeadroom + sizeof(mbuf);
   static constexpr size_t kSlabSize = 2 * 1024 * 1024;
-  static constexpr size_t kJumboHeadroom = 104;
+  static constexpr size_t kJumboHeadroom = 96;
   static constexpr size_t kMaxJumboDataLen =
       9001 - protocol::defs::kHeaderMTUlen;
   static constexpr size_t kDefaultJumboSize =
       kMaxJumboDataLen + kJumboHeadroom + sizeof(mbuf) + 7;
-
   static_assert(kDefaultJumboSize % 64 == 0, "");
+  using dma_map_t = int (*)(void *, uint64_t, unsigned, size_t, size_t);
+  using dma_unmap_t = int (*)(void *, uint64_t, size_t);
 
 public:
-  slab_allocator()
-      : caches{slab_cache(kDefaultSize), slab_cache(kDefaultJumboSize)} {}
+  slab_allocator(dma_map_t map = nullptr, dma_unmap_t unmap = nullptr,
+                 unsigned default_prefill_thres = kDefaultPrefill,
+                 unsigned large_prefill_thres = kLargePrefill)
+      : caches{slab_cache(kDefaultSize), slab_cache(kDefaultJumboSize)},
+        map(map), unmap(unmap) {
+    for (unsigned i = 0; i < default_prefill_thres; ++i)
+      alloc_new_slab<false>(caches[0]);
+    for (unsigned i = 0; i < large_prefill_thres; ++i)
+      alloc_new_slab<true>(caches[1]);
+  }
 
   template <unsigned cl, size_t mbuf_size, size_t hdroom, bool iova>
   mbuf *alloc(uint16_t data_len) {
@@ -190,15 +210,17 @@ public:
     if (cache.top) {
       obj = cache.local_cache[--cache.top];
     } else {
-      if (cache.partial.empty())
+      if (cache.free_list.empty())
         alloc_new_slab<iova>(cache);
-      auto *s = cache.partial.front();
+      auto *s = cache.free_list.front();
       obj = s->freelist;
+      assert(obj);
       s->freelist = obj->next;
       ++s->inuse;
       if (!s->freelist) {
         slab::list_remove(s);
-        cache.full.list_push(s);
+        cache.full_list.list_push(s);
+        assert(cache.free_list.front() != s);
       }
     }
     return new (obj) mbuf{this, nullptr, mbuf_size, cl, data_len, hdroom};
@@ -206,11 +228,11 @@ public:
 
   mbuf *alloc_default(uint16_t data_len) {
     assert(data_len <= kMaxDataLen);
-    return alloc<0, kDefaultSize, kDefaultHeadroom, false>(data_len);
+    return alloc<0, kMaxDataLen, kDefaultHeadroom, false>(data_len);
   }
 
   mbuf *alloc_large() {
-    return alloc<1, kDefaultJumboSize, kJumboHeadroom, true>(kMaxJumboDataLen);
+    return alloc<1, kMaxJumboDataLen, kJumboHeadroom, true>(kMaxJumboDataLen);
   }
 
   static uintptr_t virt_to_phys(void *vaddr) {
@@ -239,17 +261,17 @@ public:
     return (pfn * PAGE_SIZE + (va % PAGE_SIZE));
   }
 
-  template <bool iova = false> void alloc_new_slab(slab_cache &c) {
-    auto *region =
-        mmap(nullptr, kSlabSize, PROT_READ | PROT_WRITE,
-             MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);
-    assert(region != MAP_FAILED);
+  template <bool iova> void alloc_new_slab(slab_cache &c) {
+    if (pcache.top == 0)
+      fill_cache();
+    auto *region = pcache.pages[--pcache.top];
     auto *s = new (region) slab();
     if constexpr (iova) {
       // prefault, MAP_POPULATE may fail
-      *reinterpret_cast<volatile uint64_t *>(region) = 0;
       s->iova = virt_to_phys(region);
       assert(s->iova != RTE_BAD_IOVA);
+      if (map)
+        map(region, s->iova, 1, kSlabSize, kSlabSize);
     }
 
     size_t off = c.color;
@@ -264,7 +286,7 @@ public:
     auto *obj = reinterpret_cast<obj_header *>(base + off);
     obj->next = nullptr;
     c.color = (c.color + 64) & 1023;
-    c.partial.list_push(s);
+    c.free_list.list_push(s);
   }
 
   uintptr_t get_iova(mbuf *obj, unsigned off) const {
@@ -277,7 +299,6 @@ public:
   void free_single_mbuf(mbuf *obj) {
     assert(obj->size_class < kSizeClassCnt);
     auto &cache = caches[obj->size_class];
-    assert(cache.obj_size == obj->size);
     auto iptr = reinterpret_cast<intptr_t>(obj);
     auto *hdr = reinterpret_cast<obj_header *>(obj);
     if (cache.top < slab_cache::kDefaultCacheSize) {
@@ -285,13 +306,13 @@ public:
       cache.local_cache[cache.top++] = hdr;
     } else {
       auto *slb = reinterpret_cast<slab *>(iptr & ~(kSlabSize - 1));
-      bool was_full = !slb->freelist;
+      bool was_full_list = !slb->freelist;
       hdr->next = slb->freelist;
       slb->freelist = hdr;
       --slb->inuse;
-      if (was_full) {
+      if (was_full_list) {
         slab::list_remove(slb);
-        cache.partial.list_push(slb);
+        cache.free_list.list_push(slb);
       }
     }
   }
@@ -316,22 +337,42 @@ public:
   }
 
   ~slab_allocator() {
-    auto free_slabs = [](slab_cache::slab_list &list) {
+    auto free_slabs = [&](slab_cache::slab_list &list) {
       auto *s = list.head.next;
       while (s != &list.tail) {
         auto *next = s->next;
+        if (s->iova && unmap)
+          unmap(s, s->iova, kSlabSize);
         munmap(s, kSlabSize);
         s = next;
       }
     };
     for (auto &cache : caches) {
-      free_slabs(cache.partial);
-      free_slabs(cache.full);
+      free_slabs(cache.free_list);
+      free_slabs(cache.full_list);
     }
   }
 
 private:
+  void fill_cache() {
+    auto *pre = static_cast<uint8_t *>(
+        mmap(nullptr, kSlabSize * (kPageCacheSize - pcache.top), PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0));
+    assert(pre != MAP_FAILED);
+    for (unsigned i = pcache.top; i < kPageCacheSize; ++i) {
+      pcache.pages[pcache.top++] = pre;
+      pre += kSlabSize;
+      assert((reinterpret_cast<uintptr_t>(pcache.pages[pcache.top - 1]) & (kSlabSize - 1)) ==
+             0);
+    }
+  }
   std::array<slab_cache, kSizeClassCnt> caches;
+  struct {
+    std::array<void *, kPageCacheSize> pages;
+    size_t top = 0;
+  } pcache;
+  const dma_map_t map;
+  const dma_unmap_t unmap;
 };
 
 static constexpr int16_t sign_extend(uint16_t val) {

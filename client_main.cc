@@ -25,12 +25,18 @@
 #include <hdr/hdr_histogram_log.h>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <ranges>
+#include <rte_lcore.h>
 #include <sys/types.h>
 #include <vector>
 
+std::mutex mtx;
 alignas(RTE_CACHE_LINE_MIN_SIZE) std::atomic<double> lat = 0;
+
+static std::atomic<unsigned> slot_wnd = 8;
+static size_t keySpace = bench::kStoreSize;
 
 struct netconfig {
   rte_ether_addr dmac;
@@ -70,6 +76,7 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
       {"rate", required_argument, 0, 0},
       {"open", no_argument, 0, 0},
       {"server_cores", required_argument, 0, 0},
+
       {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
@@ -105,7 +112,11 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
       conf.open = true;
       break;
     case 8:
-      conf.server_cores = std::atoi(optarg);
+      slot_wnd = atoi(optarg);
+      break;
+    case 9:
+      keySpace = std::stol(optarg);
+      break;
     default:
       break;
     }
@@ -116,15 +127,12 @@ static netconfig parse_cmdline(int argc, char *argv[]) {
 static int lcore_closed_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(0, 1024 * 1024);
+  std::uniform_int_distribution<int64_t> dist(0, keySpace - 1);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
-  kv_proxy kv(&cif);
-  if (adapter->server_cores)
-    kv.connect(adapter->cfg, adapter->dmac, me % adapter->server_cores, adapter->server_cores);
-  else
-    kv.connect(adapter->cfg, adapter->dmac);
+  kv_proxy kv(&cif, slot_wnd);
+  kv.connect(adapter->cfg, adapter->dmac); 
   auto *sb = cif.manager.get_allocator();
   hdr_histogram *hist;
   hdr_init(1, 500'000, 3, &hist);
@@ -141,12 +149,16 @@ static int lcore_closed_fn(void *arg) {
         break;
       auto now = rte_get_timer_cycles();
       for (auto &seg : rsgl) {
-        auto *resp = seg.data<kv::kv_packet<kv::kv_completion>>();
-        assert(resp->payload.key == kv[resp->id].key);
-        kv.complete(resp->id);
-        hdr_record_value(hist, (now - kv[resp->id].ts) / get_ticks_us());
-        ++rpcs_cnt;
-        --inflight;
+        parse_mbuf<kv::kv_packet<kv::kv_completion>>(
+            seg, [&](kv::kv_packet<kv::kv_completion> *resp) {
+              assert(resp->payload.key == kv[resp->id].key);
+              kv.complete(resp->id);
+              hdr_record_value(hist, (now - kv[resp->id].ts) / get_ticks_us());
+              ++rpcs_cnt;
+              --inflight;
+              return resp->payload.data_len +
+                     sizeof(kv::kv_packet<kv::kv_completion>);
+            });
       }
     }
   };
@@ -186,29 +198,30 @@ static int lcore_closed_fn(void *arg) {
     rx_fn();
   }
 
-  auto stats = kv.con->get_stats();
   kv.close();
+  //auto *cc = kv.con->get_hist();
+  std::lock_guard lg(mtx);
   std::cout << static_cast<double>(rpcs_finished) /
                    (static_cast<double>(adapter->duration) / rte_get_timer_hz())
             << std::endl;
   std::cout << hdr_value_at_percentile(hist, 99.0) << std::endl;
-  std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
+  //hdr_percentiles_print(cc, stdout, 5, 1.0, CLASSIC);
   return 0;
 }
 
 static int lcore_open_fn(void *arg) {
   std::random_device dev;
   std::mt19937 rng(dev());
-  std::uniform_int_distribution<int64_t> dist(0, 1024 * 1024);
+  std::uniform_int_distribution<int64_t> dist(0, keySpace - 1);
   auto *adapter = static_cast<lcore_adapter *>(arg);
   auto me = rte_lcore_index(rte_lcore_id());
   auto &cif = *adapter->cifs[me];
-  kv_proxy kv(&cif);
+  kv_proxy kv(&cif, slot_wnd);
   kv.connect(adapter->cfg, adapter->dmac);
   auto *sb = cif.manager.get_allocator();
-
+  size_t rpcs = 0, rpcs_done = 0;
   std::exponential_distribution<double> exp(adapter->rate);
-  auto start_time = rte_get_timer_cycles() + 10 * rte_get_timer_hz();
+  auto start_time = rte_get_timer_cycles() + 1 * rte_get_timer_hz();
   auto ticks_per_sec = rte_get_timer_hz();
   auto end_time = start_time + adapter->duration;
   auto next = start_time + ticks_per_sec * exp(rng);
@@ -224,23 +237,26 @@ static int lcore_open_fn(void *arg) {
       if (rcvd <= 0)
         break;
       for (auto &seg : rsgl) {
-        auto *resp = seg.data<kv::kv_packet<kv::kv_completion>>();
-        auto [t, k] = reqs.front();
-        ensure(resp->payload.key == k);
-        hdr_record_value(hist, (rte_get_timer_cycles() - t) / get_ticks_us());
-        reqs.pop_front();
-        --inflight;
+        parse_mbuf<kv::kv_packet<kv::kv_completion>>(
+            seg, [&](kv::kv_packet<kv::kv_completion> *resp) {
+              auto [t, k] = reqs.front();
+              ensure(resp->payload.key == k);
+              hdr_record_value(hist,
+                               (rte_get_timer_cycles() - t) / get_ticks_us());
+              reqs.pop_front();
+              --inflight;
+              ++rpcs;
+              return resp->payload.data_len +
+                     sizeof(kv::kv_packet<kv::kv_completion>);
+            });
       }
     }
   };
-
-  auto now = rte_get_timer_cycles();
   while (next < end_time) {
-    if (rte_get_timer_cycles() < next) {
-      cif.poll();
-      rx_fn(kv);
+    cif.poll();
+    rx_fn(kv);  
+    if (rte_get_timer_cycles() < next)
       continue;
-    }
     int64_t key = dist(rng);
     reqs.emplace_back(next, key);
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
@@ -259,21 +275,16 @@ static int lcore_open_fn(void *arg) {
     ++inflight;
     next += exp(rng) * rte_get_timer_hz();
   }
-
+  rpcs_done = rpcs;
   while (inflight > 0) {
     cif.poll();
     rx_fn(kv);
   }
 
-  auto stats = kv.con->get_stats();
   kv.close();
-  FILE *f = fopen("latency.hgrm", "w");
-  hdr_percentiles_print(hist, f, 5, 1.0, CLASSIC);
-  fclose(f);
-  std::cerr << stats.rtt << ", " << stats.retransmissions << std::endl;
-  std::cerr << hdr_value_at_percentile(hist, 99.0) << std::endl;
-  auto end = rte_get_timer_cycles();
-  std::cerr << (end - now) / (rte_get_timer_hz() / 1e6) << std::endl;
+
+  std::lock_guard lg(mtx);
+  std::cout << hdr_value_at_percentile(hist, 99.0) << std::endl;
   return 0;
 }
 
@@ -322,6 +333,7 @@ static void run(lcore_function_t *f, void *args) {
     run(lcore_open_fn, &adapter);
   else
     run(lcore_closed_fn, &adapter);
+#ifdef PRINT_STATS
   {
     auto n = rte_eth_xstats_get_names(0, nullptr, 0);
     std::vector<rte_eth_xstat_name> names(n);
@@ -331,6 +343,7 @@ static void run(lcore_function_t *f, void *args) {
     for (auto &xstat : xstats)
       printf("%s: %lu\n", names[xstat.id].name, xstat.value);
   }
+#endif
   ifc->stop();
   std::cout << "avg: " << lat.load() / rte_lcore_count() << std::endl;
   return 0;

@@ -11,6 +11,7 @@
 #include "debug.h"
 #include "dev.h"
 #include "dpdk/allocator.h"
+#include "dpdk/dma_mapper.h"
 #include "packet_if.h"
 #include "slab_allocator.h"
 #include "task/task.h"
@@ -32,16 +33,16 @@ struct statistics {
 };
 
 class connection_manager {
-  static constexpr uint16_t kdefaultBurstSize = 64;
   friend connection;
-
 public:
   template <typename P>
   connection_manager(bool is_client, uint16_t port, uint16_t txq, uint16_t rxq,
                      uint32_t sip, std::shared_ptr<dpdk_allocator> allocator,
                      P *parent, uint16_t cores)
-      : dev(port, txq, rxq), pkt_if(&dev, allocator, sip, port), active(),
-        cores(cores), is_client(is_client) {
+
+      : dev(port, txq, rxq), sb(dpdk_dma_map, dpdk_dma_unmap),
+        pkt_if(&dev, allocator, sip, port), active(), cores(cores),
+        is_client(is_client) {
     if constexpr (std::is_same_v<client_iface, P>)
       client_parent = parent;
     else
@@ -71,6 +72,13 @@ public:
     }
   }
 
+  void link_ready(connection& con){
+      if(is_client)
+          return;
+      if(!con.ready.is_linked())
+        ready.push_back(con);
+  }
+
   void check_timeouts() {
     for (auto &con : active)
       con.check_timeout(r_ts);
@@ -90,10 +98,6 @@ public:
 
   connection *open_connection(uint16_t sport, uint16_t dport,
                               const uint32_t sip, const uint32_t dip);
-
-  connection *open_connection(uint16_t sport, uint16_t dport,
-                              const uint32_t sip, const uint32_t dip,
-                              uint16_t target, uint32_t server_cores);
 
   void poll_client() {
     update_current_timer_cycles();
@@ -142,6 +146,9 @@ public:
       }
     }
   }
+
+
+  uint64_t run_loop_head(concurrency::scheduler& scheduler); 
 
   std::pair<connection *, bool> add_connection(flow_tuple &tuple,
                                                rte_mbuf *pkt) {

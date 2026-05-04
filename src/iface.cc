@@ -66,8 +66,8 @@ iface::configure_port(uint16_t port_id, uint16_t ntx, uint16_t nrx,
   nb_rxd = kDefaultQueueSize;
   nb_txd = kDefaultQueueSize;
 
-  if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
-    port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+  if(dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MULTI_SEGS)
+      port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
   if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM)
     port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
   if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_CKSUM)
