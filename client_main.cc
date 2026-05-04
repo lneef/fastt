@@ -62,21 +62,17 @@ struct lcore_adapter {
       : cifs(n), allocator(n, nullptr), cfg(cfg), server_cores() {}
 };
 
+
 static netconfig parse_cmdline(int argc, char *argv[]) {
   int opt, option_index;
 
   netconfig conf;
   static const struct option long_options[] = {
-      {"dip", required_argument, 0, 0},
-      {"sip", required_argument, 0, 0},
-      {"dmac", required_argument, 0, 0},
-      {"sport", required_argument, 0, 0},
-      {"dport", required_argument, 0, 0},
-      {"duration", required_argument, 0, 0},
-      {"rate", required_argument, 0, 0},
-      {"open", no_argument, 0, 0},
-      {"server_cores", required_argument, 0, 0},
-
+      {"dip", required_argument, 0, 0},   {"sip", required_argument, 0, 0},
+      {"dmac", required_argument, 0, 0},  {"sport", required_argument, 0, 0},
+      {"dport", required_argument, 0, 0}, {"duration", required_argument, 0, 0},
+      {"rate", required_argument, 0, 0},  {"open", no_argument, 0, 0},
+      {"wnd", required_argument, 0, 0},   {"kspace", required_argument, 0, 0}, 
       {0, 0, 0, 0}};
   while ((opt = getopt_long(argc, argv, "", long_options, &option_index)) !=
          -1) {
