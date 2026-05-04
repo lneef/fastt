@@ -188,7 +188,7 @@ public:
   static constexpr size_t kDefaultJumboSize =
       kMaxJumboDataLen + kJumboHeadroom + sizeof(mbuf) + 7;
   static_assert(kDefaultJumboSize % 64 == 0, "");
-  using dma_map_t = int (*)(void *, size_t, unsigned, uint64_t, size_t);
+  using dma_map_t = int (*)(void *, uint64_t, unsigned, size_t, size_t);
   using dma_unmap_t = int (*)(void *, uint64_t, size_t);
 
 public:
@@ -198,9 +198,9 @@ public:
       : caches{slab_cache(kDefaultSize), slab_cache(kDefaultJumboSize)},
         map(map), unmap(unmap) {
     for (unsigned i = 0; i < default_prefill_thres; ++i)
-      alloc_new_slab(caches[0]);
+      alloc_new_slab<false>(caches[0]);
     for (unsigned i = 0; i < large_prefill_thres; ++i)
-      alloc_new_slab(caches[1]);
+      alloc_new_slab<true>(caches[1]);
   }
 
   template <unsigned cl, size_t mbuf_size, size_t hdroom, bool iova>
@@ -261,7 +261,7 @@ public:
     return (pfn * PAGE_SIZE + (va % PAGE_SIZE));
   }
 
-  template <bool iova = false> void alloc_new_slab(slab_cache &c) {
+  template <bool iova> void alloc_new_slab(slab_cache &c) {
     if (pcache.top == 0)
       fill_cache();
     auto *region = pcache.pages[--pcache.top];
