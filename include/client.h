@@ -25,19 +25,6 @@ public:
     return con;
   }
 
-  connection *open(const con_config &target, rte_ether_addr &dmac, uint16_t pid,
-                   uint32_t server_cores) {
-    manager.add_mac(target.ip, dmac);
-    auto *con = manager.open_connection(scon_config.port, target.port,
-                                   scon_config.ip, target.ip, pid,
-                                   server_cores);
-    if (!con)
-      return nullptr;
-    while (!con->up())
-      poll();
-    return con;
-  }
-
   void close(connection &con) {
     con.close_connection();
     while (!con.all_acked())
