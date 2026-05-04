@@ -271,7 +271,7 @@ public:
       s->iova = virt_to_phys(region);
       assert(s->iova != RTE_BAD_IOVA);
       if (map)
-        map(region, kSlabSize, 1, s->iova, kSlabSize);
+        map(region, s->iova, 1, kSlabSize, kSlabSize);
     }
 
     size_t off = c.color;
