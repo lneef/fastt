@@ -52,11 +52,12 @@ static T *alloc_or_get(sgl &rsgl, slab_allocator &alloc, uint32_t len,
   }
   return completion;
 }
-
+#define NBATCH
 #ifdef NBATCH
 static void serve(sgl &resp_sgl, slab_allocator &alloc,
                   kv::kv_packet<kv::kv_request> *packet) {
   kv::kv_packet<kv::kv_completion> *completion;
+#if 1
   auto key = packet->payload.key;
   auto it = store.find(key);
   if (it == store.end()) {
@@ -74,9 +75,16 @@ static void serve(sgl &resp_sgl, slab_allocator &alloc,
     completion->payload.data_len = it->second.size();
     resp_sgl.add_segment_safe(std::move(seg));
   }
+#else
+  auto seg = alloc.alloc_large_safe();
+  completion = seg->data<kv::kv_packet<kv::kv_completion>>();
+  completion->payload.data_len = seg->data_len - sizeof(*completion);
+  resp_sgl.add_segment_safe(std::move(seg));
+#endif
   completion->id = packet->id;
   completion->pt = packet->pt;
   completion->payload.key = packet->payload.key;
+
 }
 #else
 
