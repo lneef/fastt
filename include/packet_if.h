@@ -44,12 +44,13 @@ class packet_if {
   }
   static constexpr uint16_t kdefaultTTL = 64;
   static constexpr uint16_t kDefaultOutBurstSize = 32;
+  static constexpr uint16_t kDefaultCacheSize = 128;
 
 public:
   static constexpr uint16_t kDefaultInBurstSize = qpair::kDefaultInputBurstSize;
 
-  packet_if(qpair *qp, std::shared_ptr<dpdk_allocator> pool, 
-            uint32_t sip, uint16_t port)
+  packet_if(qpair *qp, std::shared_ptr<dpdk_allocator> pool, uint32_t sip,
+            uint16_t port)
       : arp_table(), pool(pool), qp(qp), sip(sip) {
     rte_eth_macaddr_get(port, &smac);
     sim.set_rate(0.0);
@@ -175,8 +176,8 @@ public:
   }
 
   void consume_pkt_mbuf_sc(mbuf *pkt, transport_config &cfg) {
-
     auto *dpdk_mbuf = rte_pktmbuf_alloc(pool->get());
+    assert(dpdk_mbuf != nullptr);
     dpdk_mbuf->data_len = pkt->data_len;
     dpdk_mbuf->pkt_len = pkt->data_len;
     std::memcpy(rte_pktmbuf_mtod_offset(dpdk_mbuf, uint8_t *,
@@ -284,7 +285,6 @@ public:
   uint32_t get_sip() const { return sip; }
 
 private:
-  packet_drop_sim sim;
   flow_table<uint32_t, rte_ether_addr> arp_table;
   rte_ether_addr smac;
   std::shared_ptr<dpdk_allocator> pool;
@@ -292,6 +292,7 @@ private:
   packet_vector<rte_mbuf *, kDefaultInBurstSize> vec;
   uint32_t sip;
   uint16_t reo_off;
+  packet_drop_sim sim;
 #ifdef TEST_REORDERING
   uint16_t should_reo = 0;
 #endif
