@@ -74,6 +74,13 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
     assert(!is_client);
     scheduler.schedule(service_handler(*server_parent, *con).handle);
   });
+  for (size_t i = 0u, end = ack_outstanding.size(); i < end; ++i) {
+    auto &con = ack_outstanding.front();
+    ack_outstanding.pop_front();
+    if (con.acknowledge())
+      ack_outstanding.push_back(con);
+  }
+  flush();
   auto ready_num = ready.size();
   for (unsigned i = 0; i < ready_num; ++i) {
     auto &con = ready.front();
@@ -88,6 +95,5 @@ void connection_manager::run(concurrency::scheduler &scheduler) {
   scheduler.run([&]() {});
 #endif
 
-  flush();
   check_timeouts();
 }
