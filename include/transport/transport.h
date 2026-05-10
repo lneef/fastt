@@ -99,7 +99,8 @@ public:
       FASTT_LOG_DEBUG("Sending SACK of size %u with contiguos ack until %u\n",
                       sack_payload->bit_map_len, ack.v);
     } else {
-      if (!acb.has_unacked_pkts())
+      bool delay = (manager->get_current_timer_cycles() - trx.dgram_ts) < get_ticks_ms();
+      if (!acb.has_unacked_pkts() || delay)
         return 0;
       msg = sb->alloc_default_safe(sizeof(protocol::ft_header));
       if (!msg)
@@ -317,7 +318,7 @@ public:
           .crd = trx.prepare_return_stalled_crds(),
           .ack_frame = carries_ack,
           .sack = false,
-          .ts = carries_ack ? (now - trx.dgram_ts) / get_ticks_us() : 0,
+          .ts = carries_ack ? static_cast<uint32_t>((now - trx.dgram_ts) / get_ticks_us()) : 0,
       };
       if (desc.ack_frame)
         acb.mark_as_acked(desc.ack);
