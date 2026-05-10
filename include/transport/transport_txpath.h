@@ -196,10 +196,12 @@ public:
   void cleanup_acked_pkts(seq_t seq, uint64_t ts, uint64_t app_delay) {
     uint64_t cumulative_rtt = ~0ull;
     uint64_t acked = 0;
+    bool retranmission = false;
     while (!unacked.empty() && unacked.front().seq <= seq) {
       auto &desc = unacked.front();
       assert(ts >= desc.xmit_ts);
       auto ack_rtt = ts - desc.xmit_ts;
+      retranmission |= desc.retransmitted;
       if (!desc.sacked) {
         if (rck.valid_rtt(ts, desc.xmit_ts, desc.retransmitted)) {
           rck.update(desc.xmit_ts, desc.seq);
@@ -220,7 +222,7 @@ public:
     if (cumulative_rtt != ~0ull) {
       update_srtt(cumulative_rtt);
       rck.rtt = cumulative_rtt;
-      if(cumulative_rtt > app_delay)
+      if(cumulative_rtt > app_delay && !retranmission)
         cc.on_ack(acked, ts, rtt, cumulative_rtt - app_delay);
     }
     assert(budget <= transport_rxpath::kMaxGrantSize);
