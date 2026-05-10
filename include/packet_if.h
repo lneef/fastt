@@ -287,7 +287,7 @@ public:
   }
 
   void fetch_from_qpair(std::array<flow_tuple, kDefaultInBurstSize> &fts,
-                        packet_vector<mbuf *, kDefaultInBurstSize> &mbufs) {
+                        packet_vector<mbuf *, kDefaultInBurstSize> &mbufs, uint64_t ts) {
     uint16_t valid = 0, out = 0;
     assert(vec.i == 0);
     qp->rx_burst(vec);
@@ -301,6 +301,7 @@ public:
     assert(out == 0);
     for (auto *msg : vec) {
       mbufs.pkts[out] = strip_header_and_copy(msg, fts[out]);
+      mbufs.pkts[out]->ts =ts; 
       ++out;
     }
     mbufs.i = out;
