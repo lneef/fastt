@@ -98,7 +98,6 @@ public:
                               const uint32_t sip, const uint32_t dip);
 
   void poll_client() {
-    update_current_timer_cycles();
     fetch_from_qpair();
     for (size_t i = 0u, end = ack_outstanding.size(); i < end; ++i) {
       auto &con = ack_outstanding.front();
@@ -124,6 +123,7 @@ public:
     std::array<flow_tuple, packet_if::kDefaultInBurstSize> fts;
     packet_vector<mbuf *, packet_if::kDefaultInBurstSize> mbufs;
     pkt_if.fetch_from_qpair(fts, mbufs);
+    update_current_timer_cycles();
     uint16_t i = 0;
     for (auto *pkt : mbufs) {
       auto &ft = fts[i++];
