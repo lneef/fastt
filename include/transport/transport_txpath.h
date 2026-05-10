@@ -14,7 +14,7 @@
 #include "util.h"
 
 struct rack {
-  static constexpr uint64_t kMinRTT = 400;
+  static constexpr uint64_t kMinRTT = 100;
   static constexpr uint64_t kDefaultReoMult = 1;
   static constexpr uint16_t kDupThresh = 3;
   static bool send_after(uint64_t t1, seq_t seq1, uint64_t t2, seq_t seq2) {
@@ -27,8 +27,9 @@ struct rack {
   }
 
   bool valid_rtt(uint64_t now, uint64_t seg_xmit_ts, bool retransmitted) {
+      (void)now, (void)seg_xmit_ts;
     if (retransmitted)
-      return now - seg_xmit_ts >= min_rtt;
+      return false;
     return true;
   }
 

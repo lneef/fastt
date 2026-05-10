@@ -291,13 +291,13 @@ public:
     uint16_t valid = 0, out = 0;
     assert(vec.i == 0);
     qp->rx_burst(vec);
-    auto ts = rte_get_timer_cycles();
     for (uint16_t i = 0; i < vec.i; ++i) {
       auto *pkt = consume_pkt(vec.pkts[i]);
       if (!pkt)
         continue;
       vec.pkts[valid++] = pkt;
     }
+    auto ts = rte_get_timer_cycles();
     vec.i = valid;
     assert(out == 0);
     for (auto *msg : vec) {
