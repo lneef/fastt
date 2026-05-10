@@ -110,7 +110,7 @@ public:
     }
     if (trx.seen_done)
       cstate = connection_state::DISCONNECTED;
-    auto us = (rte_get_timer_cycles() - trx.dgram_ts) / get_ticks_us();
+    auto us = (manager->get_current_timer_cycles()  - trx.dgram_ts) / get_ticks_us();
     builder.prepare_ack_pkt(msg.get(), ack, is_sack, us);
     pkt_if->consume_pkt_mbuf(msg.get(), cfg);
     return acb.pending_dup_acks;
