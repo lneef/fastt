@@ -277,7 +277,10 @@ public:
           auto ackframe = acb.has_unacked_pkts();
           if (ackframe)
             acb.mark_as_acked(ack);
-          builder.prepare_init_ack_header(msg, seq, ack, budget, ackframe);
+          assert(trx.ts > 0);
+          builder.prepare_init_ack_header(msg, seq, ack, budget, ackframe,
+                                          (rte_get_timer_cycles() - trx.ts) /
+                                              get_ticks_us());
         },
         now);
     ttx.rearm(now);
@@ -297,9 +300,7 @@ public:
 
   bool can_send() { return (ttx.get_current_wnd() > 0); }
 
-  hdr_histogram* get_hist() const{
-      return cc.get_hist();
-  }
+  hdr_histogram *get_hist() const { return cc.get_hist(); }
 
   ssize_t send_single_seg(sgl &msgl, uint32_t us) {
     if (!ttx.can_transmit())
@@ -347,9 +348,9 @@ public:
       sent += retval;
     }
 
-    if(burst == kBurstSize && !msgl.empty())
-        manager->link_ready(*this);
-done: 
+    if (burst == kBurstSize && !msgl.empty())
+      manager->link_ready(*this);
+  done:
     FASTT_LOG_DEBUG("send len=%lu total=%zd\n", msgl.size, sent);
     return sent;
   }
