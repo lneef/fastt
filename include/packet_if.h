@@ -287,10 +287,11 @@ public:
   }
 
   void fetch_from_qpair(std::array<flow_tuple, kDefaultInBurstSize> &fts,
-                        packet_vector<mbuf *, kDefaultInBurstSize> &mbufs, uint64_t ts) {
+                        packet_vector<mbuf *, kDefaultInBurstSize> &mbufs) {
     uint16_t valid = 0, out = 0;
     assert(vec.i == 0);
     qp->rx_burst(vec);
+    auto ts = rte_get_timer_cycles();
     for (uint16_t i = 0; i < vec.i; ++i) {
       auto *pkt = consume_pkt(vec.pkts[i]);
       if (!pkt)

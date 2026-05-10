@@ -43,7 +43,6 @@ connection *connection_manager::open_connection(uint16_t sport, uint16_t dport,
 }
 
 uint64_t connection_manager::run_loop_head(concurrency::scheduler &scheduler) {
-  update_current_timer_cycles();
   fetch_from_qpair();
   accept_connections([&](connection *con) {
     assert(server_parent->services.find(ntohs(con->get_flow_tuple().sport)) !=
@@ -64,7 +63,6 @@ uint64_t connection_manager::run_loop_head(concurrency::scheduler &scheduler) {
 }
 
 void connection_manager::run(concurrency::scheduler &scheduler) {
-  update_current_timer_cycles();
   fetch_from_qpair();
   accept_connections([&](connection *con) {
     assert(server_parent->services.find(ntohs(con->get_flow_tuple().sport)) !=
