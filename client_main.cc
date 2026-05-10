@@ -163,8 +163,10 @@ static int lcore_closed_fn(void *arg) {
     cif.poll();
     rx_fn();
     auto *tx = kv.start();
-    if (!tx)
+    if (!tx){
+      kv.con->acknowledge();  
       continue;
+    }
     int64_t key = dist(rng);
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
     kv::create_kv_request(m->data<uint8_t>(), tx->id, key);
@@ -189,6 +191,7 @@ static int lcore_closed_fn(void *arg) {
   while (inflight) {
     cif.poll();
     rx_fn();
+    kv.con->acknowledge();
   }
 
   kv.close();
@@ -248,8 +251,10 @@ static int lcore_open_fn(void *arg) {
   while (next < end_time) {
     cif.poll();
     rx_fn(kv);  
-    if (rte_get_timer_cycles() < next)
+    if (rte_get_timer_cycles() < next){
+      kv.con->acknowledge();  
       continue;
+    }
     int64_t key = dist(rng);
     reqs.emplace_back(next, key);
     auto *m = sb->alloc_default(sizeof(kv::kv_packet<kv::kv_request>));
@@ -272,6 +277,7 @@ static int lcore_open_fn(void *arg) {
   while (inflight > 0) {
     cif.poll();
     rx_fn(kv);
+    kv.con->acknowledge();
   }
 
   kv.close();
