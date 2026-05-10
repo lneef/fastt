@@ -109,7 +109,7 @@ public:
     }
     if (trx.seen_done)
       cstate = connection_state::DISCONNECTED;
-    auto us = (rte_get_timer_cycles() - trx.ts) / get_ticks_us();
+    auto us = (rte_get_timer_cycles() - trx.dgram_ts) / get_ticks_us();
     builder.prepare_ack_pkt(msg.get(), ack, is_sack, us);
     pkt_if->consume_pkt_mbuf(msg.get(), cfg);
     return acb.pending_dup_acks;
@@ -277,9 +277,9 @@ public:
           auto ackframe = acb.has_unacked_pkts();
           if (ackframe)
             acb.mark_as_acked(ack);
-          assert(trx.ts > 0);
+          assert(trx.dgram_ts > 0);
           builder.prepare_init_ack_header(msg, seq, ack, budget, ackframe,
-                                          (rte_get_timer_cycles() - trx.ts) /
+                                          (rte_get_timer_cycles() - trx.dgram_ts) /
                                               get_ticks_us());
         },
         now);
@@ -302,21 +302,22 @@ public:
 
   hdr_histogram *get_hist() const { return cc.get_hist(); }
 
-  ssize_t send_single_seg(sgl &msgl, uint32_t us) {
+  ssize_t send_single_seg(sgl &msgl) {
     if (!ttx.can_transmit())
       return -EAGAIN;
-    auto now = manager->get_current_timer_cycles();
+    auto now = rte_get_timer_cycles();
     auto pkt = std::move(msgl).take_head();
     auto send_size = pkt->data_len;
     auto ctor = [&](mbuf_ptr &pkt, seq_t seq) {
+      auto carries_ack =  acb.has_unacked_pkts() && !trx.has_holes();
       auto ack_seq = trx.get_last_rcvd_in_seq();
       protocol::msg_frame_desc desc{
           .seq = seq,
           .ack = ack_seq,
           .crd = trx.prepare_return_stalled_crds(),
-          .ack_frame = acb.has_unacked_pkts() && !trx.has_holes(),
+          .ack_frame = carries_ack,
           .sack = false,
-          .ts = us,
+          .ts = carries_ack ? (now - trx.dgram_ts) / get_ticks_us() : 0,
       };
       if (desc.ack_frame)
         acb.mark_as_acked(desc.ack);
@@ -334,12 +335,12 @@ public:
   ssize_t send_sgl(sgl &msgl) {
     if (connection_state::ESTABLISHED != cstate)
       return 0;
-    auto us = (rte_get_timer_cycles() - trx.ts) / get_ticks_us();
+
     unsigned burst = 0;
     ssize_t sent = 0;
     ssize_t retval = 0;
     for (; !msgl.empty() && burst < kBurstSize;) {
-      retval = send_single_seg(msgl, us);
+      retval = send_single_seg(msgl);
       if (retval < 0) {
         sent = sent == 0 ? retval : sent;
         goto done;

@@ -219,6 +219,8 @@ public:
     if (cumulative_rtt != ~0ull) {
       update_srtt(cumulative_rtt);
       rck.rtt = cumulative_rtt;
+      if(app_delay > cumulative_rtt)
+          printf("%u %u\n", app_delay, cumulative_rtt);
       assert(cumulative_rtt > app_delay);
       cc.on_ack(acked, ts, rtt, cumulative_rtt - app_delay);
     }
